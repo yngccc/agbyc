@@ -1,0 +1,27 @@
+camera:
+  position: [-4.99748182, 9.14561844, -25.9896851]
+  rotation: [16.5686302, 20.2273369, 0]
+  fov: 40
+player:
+  position: [0, 40, 0]
+  velocity: [0, 0, 0]
+  acceleration: [0, -1, 0]
+  cameraPosition: [-8.47337914, 7.98304319, -9.25561905]
+  cameraRotation: [33.0951385, 53.8108826, 0]
+skybox:
+  file: assets/skybox/industrial_sunset_02_puresky_4k.dds
+terrain:
+  file: assets/terrain/terrain.glb
+buildings:
+  - name: cube
+    file: assets/simpleGeometries/cube.glb
+    position: [0, 5, 0]
+    rotation: [0, 0, 0]
+  - name: sphere
+    file: assets/simpleGeometries/sphere.glb
+    position: [5, 5, -5]
+    rotation: [0, 0, 0]
+  - name: cone
+    file: assets/simpleGeometries/cone.glb
+    position: [-5, 5, 0]
+    rotation: [0, 0, 0]
