@@ -1,8 +1,8 @@
 camera:
-  position: [-22.399376,13.860727,2.176311]
-  rotation: [0.30799964,1.3999999,0]
+  position: [-3.1590188,7.805804,-0.020632358]
+  rotation: [0.23599952,1.6120006,0]
 player:
-  position: [0,22.433203,0]
+  position: [0,7.009788,0]
   velocity: [0,-1,0]
   acceleration: [0,0,0]
   cameraRotation: [-1.0146381,2.8936253,0]

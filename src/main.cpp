@@ -318,8 +318,6 @@ struct DisplayMode {
 	}
 };
 
-static const uint d3dBufferCount = 2;
-
 struct D3D {
 	IDXGIOutput6* dxgiOutput;
 	IDXGIAdapter4* dxgiAdapter;
@@ -327,14 +325,11 @@ struct D3D {
 	ID3D12Device5* device;
 	ID3D12Debug1* debugController;
 
-	uint bufferIndex;
-
 	ID3D12CommandQueue* graphicsQueue;
 	ID3D12Fence* graphicsQueueFence;
 	HANDLE graphicsQueueFenceEvent;
 	uint64 graphicsQueueFenceCounter;
-	uint64 graphicsQueueFenceValues[d3dBufferCount];
-	ID3D12CommandAllocator* graphicsCmdAllocators[d3dBufferCount];
+	ID3D12CommandAllocator* graphicsCmdAllocator;
 	ID3D12GraphicsCommandList4* graphicsCmdList;
 
 	ID3D12CommandQueue* transferQueue;
@@ -346,48 +341,48 @@ struct D3D {
 
 	IDXGISwapChain4* swapChain;
 	DXGI_FORMAT swapChainFormat;
-	ID3D12Resource* swapChainImages[d3dBufferCount];
-	D3D12_CPU_DESCRIPTOR_HANDLE swapChainImageRTVDescriptors[d3dBufferCount];
+	ID3D12Resource* swapChainImages[2];
+	D3D12_CPU_DESCRIPTOR_HANDLE swapChainImageRTVDescriptors[2];
 
 	ID3D12DescriptorHeap* rtvDescriptorHeap;
 	uint rtvDescriptorCount;
 	uint rtvDescriptorSize;
-	ID3D12DescriptorHeap* cbvSrvUavDescriptorHeaps[d3dBufferCount];
-	uint cbvSrvUavDescriptorCounts[d3dBufferCount];
+	ID3D12DescriptorHeap* cbvSrvUavDescriptorHeap;
+	uint cbvSrvUavDescriptorCount;
 	uint cbvSrvUavDescriptorSize;
 
 	D3D12MA::Allocator* allocator;
 
 	D3D12MA::Allocation* stagingBuffer;
 	char* stagingBufferPtr;
-	D3D12MA::Allocation* constantBuffers[d3dBufferCount];
-	char* constantBufferPtrs[d3dBufferCount];
+	D3D12MA::Allocation* constantBuffer;
+	char* constantBufferPtr;
 
-	D3D12MA::Allocation* readBackBufferUavs[d3dBufferCount];
-	D3D12MA::Allocation* readBackBuffers[d3dBufferCount];
-	char* readBackBufferPtrs[d3dBufferCount];
+	D3D12MA::Allocation* readBackBufferUav;
+	D3D12MA::Allocation* readBackBuffer;
+	char* readBackBufferPtr;
 
 	D3D12MA::Allocation* renderTexture;
 	D3D12MA::Allocation* accumulationRenderTexture;
 
 	D3D12MA::Allocation* imguiTexture;
-	D3D12MA::Allocation* imguiVertexBuffers[d3dBufferCount];
-	char* imguiVertexBufferPtrs[d3dBufferCount];
-	D3D12MA::Allocation* imguiIndexBuffers[d3dBufferCount];
-	char* imguiIndexBufferPtrs[d3dBufferCount];
+	D3D12MA::Allocation* imguiVertexBuffer;
+	char* imguiVertexBufferPtr;
+	D3D12MA::Allocation* imguiIndexBuffer;
+	char* imguiIndexBufferPtr;
 
-	D3D12MA::Allocation* tlasInstancesBuildInfos[d3dBufferCount];
-	char* tlasInstancesBuildInfosPtrs[d3dBufferCount];
-	D3D12MA::Allocation* tlasInstancesExtraInfos[d3dBufferCount];
-	char* tlasInstancesExtraInfosPtrs[d3dBufferCount];
-	D3D12MA::Allocation* tlas[d3dBufferCount];
-	D3D12MA::Allocation* tlasScratch[d3dBufferCount];
+	D3D12MA::Allocation* tlasInstancesBuildInfo;
+	char* tlasInstancesBuildInfosPtr;
+	D3D12MA::Allocation* tlasInstancesExtraInfo;
+	char* tlasInstancesExtraInfosPtr;
+	D3D12MA::Allocation* tlas;
+	D3D12MA::Allocation* tlasScratch;
 
-	D3D12MA::Allocation* collisionQueries[d3dBufferCount];
-	char* collisionQueriesPtrs[d3dBufferCount];
-	D3D12MA::Allocation* collisionQueryResultsUavs[d3dBufferCount];
-	D3D12MA::Allocation* collisionQueryResults[d3dBufferCount];
-	char* collisionQueryResultsPtrs[d3dBufferCount];
+	D3D12MA::Allocation* collisionQueries;
+	char* collisionQueriesPtr;
+	D3D12MA::Allocation* collisionQueryResultsUav;
+	D3D12MA::Allocation* collisionQueryResults;
+	char* collisionQueryResultsPtr;
 
 	ID3D12StateObject* renderSceneSO;
 	ID3D12StateObjectProperties* renderSceneSOProps;
@@ -420,35 +415,35 @@ struct D3DDescriptor {
 };
 
 D3DDescriptor d3dAppendDescriptorCBV(D3D12_CONSTANT_BUFFER_VIEW_DESC* constantBufferViewDesc) {
-	uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCounts[d3d.bufferIndex];
-	D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = { d3d.cbvSrvUavDescriptorHeaps[d3d.bufferIndex]->GetCPUDescriptorHandleForHeapStart().ptr + offset };
-	D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = { d3d.cbvSrvUavDescriptorHeaps[d3d.bufferIndex]->GetGPUDescriptorHandleForHeapStart().ptr + offset };
+	uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
+	D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = { d3d.cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset };
+	D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = { d3d.cbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + offset };
 	d3d.device->CreateConstantBufferView(constantBufferViewDesc, cpuHandle);
-	d3d.cbvSrvUavDescriptorCounts[d3d.bufferIndex] += 1;
+	d3d.cbvSrvUavDescriptorCount += 1;
 	return { cpuHandle, gpuHandle };
 }
 
 D3DDescriptor d3dAppendDescriptorSRV(D3D12_SHADER_RESOURCE_VIEW_DESC* resourceViewDesc, ID3D12Resource* resource) {
-	uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCounts[d3d.bufferIndex];
-	D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = { d3d.cbvSrvUavDescriptorHeaps[d3d.bufferIndex]->GetCPUDescriptorHandleForHeapStart().ptr + offset };
-	D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = { d3d.cbvSrvUavDescriptorHeaps[d3d.bufferIndex]->GetGPUDescriptorHandleForHeapStart().ptr + offset };
+	uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
+	D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = { d3d.cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset };
+	D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = { d3d.cbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + offset };
 	d3d.device->CreateShaderResourceView(resource, resourceViewDesc, cpuHandle);
-	d3d.cbvSrvUavDescriptorCounts[d3d.bufferIndex] += 1;
+	d3d.cbvSrvUavDescriptorCount += 1;
 	return { cpuHandle, gpuHandle };
 }
 
 D3DDescriptor d3dAppendDescriptorUAV(D3D12_UNORDERED_ACCESS_VIEW_DESC* unorderedAccessViewDesc, ID3D12Resource* resource) {
-	uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCounts[d3d.bufferIndex];
-	D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = { d3d.cbvSrvUavDescriptorHeaps[d3d.bufferIndex]->GetCPUDescriptorHandleForHeapStart().ptr + offset };
-	D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = { d3d.cbvSrvUavDescriptorHeaps[d3d.bufferIndex]->GetGPUDescriptorHandleForHeapStart().ptr + offset };
+	uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
+	D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = { d3d.cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset };
+	D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = { d3d.cbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + offset };
 	d3d.device->CreateUnorderedAccessView(resource, nullptr, unorderedAccessViewDesc, cpuHandle);
-	d3d.cbvSrvUavDescriptorCounts[d3d.bufferIndex] += 1;
+	d3d.cbvSrvUavDescriptorCount += 1;
 	return { cpuHandle, gpuHandle };
 }
 
 void d3dGraphicsQueueStartRecording() {
-	check(d3d.graphicsCmdAllocators[d3d.bufferIndex]->Reset());
-	check(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocators[d3d.bufferIndex], nullptr));
+	check(d3d.graphicsCmdAllocator->Reset());
+	check(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr));
 }
 
 void d3dGraphicsQueueSubmitRecording() {
@@ -458,24 +453,9 @@ void d3dGraphicsQueueSubmitRecording() {
 
 void d3dGraphicsQueueWait() {
 	d3d.graphicsQueueFenceCounter += 1;
-	check(d3d.graphicsQueue->Signal(d3d.graphicsQueueFence, d3d.graphicsQueueFenceCounter));
-	d3d.graphicsQueueFenceValues[d3d.bufferIndex] = d3d.graphicsQueueFenceCounter;
-	d3d.bufferIndex = (d3d.bufferIndex + 1) % d3dBufferCount;
-	uint64 fenceValue = d3d.graphicsQueueFenceValues[d3d.bufferIndex];
-	if (d3d.graphicsQueueFence->GetCompletedValue() < fenceValue) {
-		check(d3d.graphicsQueueFence->SetEventOnCompletion(fenceValue, d3d.graphicsQueueFenceEvent));
-		check(WaitForSingleObjectEx(d3d.graphicsQueueFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
-	}
-}
-
-void d3dGraphicsQueueFlush() {
-	d3d.graphicsQueueFenceCounter += 1;
 	d3d.graphicsQueue->Signal(d3d.graphicsQueueFence, d3d.graphicsQueueFenceCounter);
-	d3d.graphicsQueueFenceValues[d3d.bufferIndex] = d3d.graphicsQueueFenceCounter;
-	d3d.bufferIndex = (d3d.bufferIndex + 1) % d3dBufferCount;
-	uint64 fenceValue = d3d.graphicsQueueFenceCounter;
-	if (d3d.graphicsQueueFence->GetCompletedValue() < fenceValue) {
-		check(d3d.graphicsQueueFence->SetEventOnCompletion(fenceValue, d3d.graphicsQueueFenceEvent));
+	if (d3d.graphicsQueueFence->GetCompletedValue() < d3d.graphicsQueueFenceCounter) {
+		check(d3d.graphicsQueueFence->SetEventOnCompletion(d3d.graphicsQueueFenceCounter, d3d.graphicsQueueFenceEvent));
 		check(WaitForSingleObjectEx(d3d.graphicsQueueFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
 	}
 }
@@ -538,12 +518,10 @@ void d3dInit(bool debug) {
 		D3D12_COMMAND_QUEUE_DESC transferQueueDesc = { .Type = D3D12_COMMAND_LIST_TYPE_DIRECT, .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE };
 		check(d3d.device->CreateCommandQueue(&transferQueueDesc, IID_PPV_ARGS(&d3d.transferQueue)));
 
-		for (auto& allocator : d3d.graphicsCmdAllocators) {
-			check(d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)));
-		}
+		check(d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&d3d.graphicsCmdAllocator)));
 		check(d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&d3d.transferCmdAllocator)));
 
-		check(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.graphicsCmdAllocators[0], nullptr, IID_PPV_ARGS(&d3d.graphicsCmdList)));
+		check(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.graphicsCmdAllocator, nullptr, IID_PPV_ARGS(&d3d.graphicsCmdList)));
 		check(d3d.graphicsCmdList->Close());
 		check(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.transferCmdAllocator, nullptr, IID_PPV_ARGS(&d3d.transferCmdList)));
 		check(d3d.transferCmdList->Close());
@@ -576,7 +554,7 @@ void d3dInit(bool debug) {
 			.Width = (uint)settings.renderW, .Height = (uint)settings.renderH,
 			.Format = d3d.swapChainFormat, .SampleDesc = {.Count = 1 },
 			.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_BACK_BUFFER,
-			.BufferCount = d3dBufferCount,
+			.BufferCount = countof(d3d.swapChainImages),
 			.Scaling = DXGI_SCALING_NONE,
 			.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
 			.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH,
@@ -586,7 +564,7 @@ void d3dInit(bool debug) {
 		DXGI_COLOR_SPACE_TYPE colorSpace = settings.hdr ? DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
 		check(d3d.swapChain->SetColorSpace1(colorSpace));
 
-		for (int i = 0; auto & image : d3d.swapChainImages) {
+		for (int i = 0; auto& image : d3d.swapChainImages) {
 			check(d3d.swapChain->GetBuffer(i, IID_PPV_ARGS(&image)));
 			image->SetName(std::format(L"swapChain{}", i).c_str());
 			i += 1;
@@ -597,7 +575,7 @@ void d3dInit(bool debug) {
 		check(d3d.device->CreateDescriptorHeap(&rtvDescriptorHeapDesc, IID_PPV_ARGS(&d3d.rtvDescriptorHeap)));
 		d3d.rtvDescriptorCount = 0;
 		d3d.rtvDescriptorSize = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-		for (int i = 0; auto & image : d3d.swapChainImages) {
+		for (int i = 0; auto& image : d3d.swapChainImages) {
 			uint offset = d3d.rtvDescriptorSize * d3d.rtvDescriptorCount;
 			d3d.swapChainImageRTVDescriptors[i] = { d3d.rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset };
 			d3d.device->CreateRenderTargetView(image, nullptr, d3d.swapChainImageRTVDescriptors[i]);
@@ -606,9 +584,7 @@ void d3dInit(bool debug) {
 		}
 
 		D3D12_DESCRIPTOR_HEAP_DESC cbvSrvUavDescriptorHeapDesc = { .Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, .NumDescriptors = 1024, .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE };
-		for (auto& heap : d3d.cbvSrvUavDescriptorHeaps) {
-			check(d3d.device->CreateDescriptorHeap(&cbvSrvUavDescriptorHeapDesc, IID_PPV_ARGS(&heap)));
-		}
+		check(d3d.device->CreateDescriptorHeap(&cbvSrvUavDescriptorHeapDesc, IID_PPV_ARGS(&d3d.cbvSrvUavDescriptorHeap)));
 		d3d.cbvSrvUavDescriptorSize = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 	}
 	{
@@ -632,42 +608,18 @@ void d3dInit(bool debug) {
 			const wchar_t* name;
 		} descs[] = {
 			{ &d3d.stagingBuffer, &d3d.stagingBufferPtr, megabytes(256), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_SOURCE | D3D12_RESOURCE_STATE_GENERIC_READ, L"stagingBuffer" },
-			{ &d3d.constantBuffers[0], &d3d.constantBufferPtrs[0], megabytes(4), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer0" },
-			{ &d3d.constantBuffers[1], &d3d.constantBufferPtrs[1], megabytes(4), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer1" },
-			//{ &d3d.constantBuffers[2], &d3d.constantBufferPtrs[2], megabytes(4), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer2" },
-			{ &d3d.tlasInstancesBuildInfos[0], &d3d.tlasInstancesBuildInfosPtrs[0], megabytes(32), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesBuildInfos0" },
-			{ &d3d.tlasInstancesBuildInfos[1], &d3d.tlasInstancesBuildInfosPtrs[1], megabytes(32), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesBuildInfos1" },
-			//{ &d3d.tlasInstancesBuildInfos[2], &d3d.tlasInstancesBuildInfosPtrs[2], megabytes(32), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesBuildInfos2" },
-			{ &d3d.tlasInstancesExtraInfos[0], &d3d.tlasInstancesExtraInfosPtrs[0], megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesExtraInfos0" },
-			{ &d3d.tlasInstancesExtraInfos[1], &d3d.tlasInstancesExtraInfosPtrs[1], megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesExtraInfos1" },
-			//{ &d3d.tlasInstancesExtraInfos[2], &d3d.tlasInstancesExtraInfosPtrs[2], megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesExtraInfos2" },
-			{ &d3d.tlas[0], nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"tlas0" },
-			{ &d3d.tlas[1], nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"tlas1" },
-			//{ &d3d.tlas[2], nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"tlas2" },
-			{ &d3d.tlasScratch[0], nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"tlasScratch0" },
-			{ &d3d.tlasScratch[1], nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"tlasScratch1" },
-			//{ &d3d.tlasScratch[2], nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"tlasScratch2" },
-			{ &d3d.imguiVertexBuffers[0], &d3d.imguiVertexBufferPtrs[0], megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiVertexBuffer0" },
-			{ &d3d.imguiVertexBuffers[1], &d3d.imguiVertexBufferPtrs[1], megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiVertexBuffer1" },
-			//{ &d3d.imguiVertexBuffers[2], &d3d.imguiVertexBufferPtrs[2], megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiVertexBuffer2" },
-			{ &d3d.imguiIndexBuffers[0], &d3d.imguiIndexBufferPtrs[0], megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiIndexBuffer0" },
-			{ &d3d.imguiIndexBuffers[1], &d3d.imguiIndexBufferPtrs[1], megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiIndexBuffer1" },
-			//{ &d3d.imguiIndexBuffers[2], &d3d.imguiIndexBufferPtrs[2], megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiIndexBuffer2" },
-			{ &d3d.readBackBufferUavs[0], nullptr, megabytes(2), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"readBackBufferUav0"},
-			{ &d3d.readBackBufferUavs[1], nullptr, megabytes(2), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"readBackBufferUav1"},
-			//{ &d3d.readBackBufferUavs[2], nullptr, megabytes(2), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"readBackBufferUav2"},
-			{ &d3d.readBackBuffers[0], &d3d.readBackBufferPtrs[0], megabytes(2), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"readBackBuffer0"},
-			{ &d3d.readBackBuffers[1], &d3d.readBackBufferPtrs[1], megabytes(2), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"readBackBuffer1"},
-			//{ &d3d.readBackBuffers[2], &d3d.readBackBufferPtrs[2], megabytes(2), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"readBackBuffer2"},
-			{ &d3d.collisionQueries[0], &d3d.collisionQueriesPtrs[0], megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, L"collisionQueries0"},
-			{ &d3d.collisionQueries[1], &d3d.collisionQueriesPtrs[1], megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, L"collisionQueries1"},
-			//{ &d3d.collisionQueries[2], &d3d.collisionQueriesPtrs[2], megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, L"collisionQueries2"},
-			{ &d3d.collisionQueryResultsUavs[0], nullptr, megabytes(1), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"collisionQueryResultsUav0"},
-			{ &d3d.collisionQueryResultsUavs[1], nullptr, megabytes(1), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"collisionQueryResultsUav1"},
-			//{ &d3d.collisionQueryResultsUavs[2], nullptr, megabytes(1), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"collisionQueryResultsUav2"},
-			{ &d3d.collisionQueryResults[0], &d3d.collisionQueryResultsPtrs[0], megabytes(1), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"collisionQueryResults0"},
-			{ &d3d.collisionQueryResults[1], &d3d.collisionQueryResultsPtrs[1], megabytes(1), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"collisionQueryResults1"},
-			//{ &d3d.collisionQueryResults[2], &d3d.collisionQueryResultsPtrs[2], megabytes(1), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"collisionQueryResults2"},
+			{ &d3d.constantBuffer, &d3d.constantBufferPtr, megabytes(4), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer" },
+			{ &d3d.tlasInstancesBuildInfo, &d3d.tlasInstancesBuildInfosPtr, megabytes(32), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesBuildInfos" },
+			{ &d3d.tlasInstancesExtraInfo, &d3d.tlasInstancesExtraInfosPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesExtraInfos" },
+			{ &d3d.tlas, nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"tlas" },
+			{ &d3d.tlasScratch, nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"tlasScratch" },
+			{ &d3d.imguiVertexBuffer, &d3d.imguiVertexBufferPtr, megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiVertexBuffer" },
+			{ &d3d.imguiIndexBuffer, &d3d.imguiIndexBufferPtr, megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiIndexBuffer" },
+			{ &d3d.readBackBufferUav, nullptr, megabytes(2), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"readBackBufferUav"},
+			{ &d3d.readBackBuffer, &d3d.readBackBufferPtr, megabytes(2), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"readBackBuffer"},
+			{ &d3d.collisionQueries, &d3d.collisionQueriesPtr, megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, L"collisionQueries"},
+			{ &d3d.collisionQueryResultsUav, nullptr, megabytes(1), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"collisionQueryResultsUav"},
+			{ &d3d.collisionQueryResults, &d3d.collisionQueryResultsPtr, megabytes(1), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"collisionQueryResults"},
 		};
 		for (auto& desc : descs) {
 			D3D12_RESOURCE_DESC bufferDesc = {
@@ -879,7 +831,7 @@ void d3dCompilePipelines() {
 }
 
 void d3dResizeSwapChain(uint width, uint height) {
-	d3dGraphicsQueueFlush();
+	d3dGraphicsQueueWait();
 
 	for (auto& image : d3d.swapChainImages) {
 		image->Release();
@@ -1634,8 +1586,8 @@ void update() {
 	ImVec2 mouseDelta = mousePos - mousePosPrev;
 	mousePosPrev = mousePos;
 
-	if (d3d.graphicsQueueFenceValues[d3d.bufferIndex] > 0) {
-		ReadBackBuffer* readBackBuffer = (ReadBackBuffer*)d3d.readBackBufferPtrs[d3d.bufferIndex];
+	if (d3d.graphicsQueueFenceCounter > 0) {
+		ReadBackBuffer* readBackBuffer = (ReadBackBuffer*)d3d.readBackBufferPtr;
 		uint mouseSelectInstanceIndex = readBackBuffer->mouseSelectInstanceIndex;
 		if (mouseSelectInstanceIndex < sceneTLASInstancesExtraInfos.size()) {
 			TLASInstanceInfo& info = sceneTLASInstancesExtraInfos[mouseSelectInstanceIndex];
@@ -1810,29 +1762,27 @@ void render() {
 	};
 	d3d.graphicsCmdList->ResourceBarrier(1, &renderTextureTransition);
 
-	d3d.cbvSrvUavDescriptorCounts[d3d.bufferIndex] = 0;
-	d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeaps[d3d.bufferIndex]);
+	d3d.cbvSrvUavDescriptorCount = 0;
+	d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap);
 
-	D3D12MA::Allocation* constantBuffer = d3d.constantBuffers[d3d.bufferIndex];
-	char* constantBufferPtr = d3d.constantBufferPtrs[d3d.bufferIndex];
 	uint constantBufferOffset = 0;
 	{
 		D3D12_CONSTANT_BUFFER_VIEW_DESC renderInfoCBVDesc = {
-			.BufferLocation = constantBuffer->GetResource()->GetGPUVirtualAddress(),
+			.BufferLocation = d3d.constantBuffer->GetResource()->GetGPUVirtualAddress(),
 			.SizeInBytes = align((uint)sizeof(struct RenderInfo), (uint)D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT),
 		};
 
 		D3D12_SHADER_RESOURCE_VIEW_DESC tlasViewDesc = {
 			.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE,
 			.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-			.RaytracingAccelerationStructure = {.Location = d3d.tlas[d3d.bufferIndex]->GetResource()->GetGPUVirtualAddress() },
+			.RaytracingAccelerationStructure = {.Location = d3d.tlas->GetResource()->GetGPUVirtualAddress() },
 		};
 
 		D3D12_SHADER_RESOURCE_VIEW_DESC tlasInstancesInfosDesc = {
 			.ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
 			.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
 			.Buffer = {
-				.NumElements = (uint)(d3d.tlasInstancesExtraInfos[d3d.bufferIndex]->GetSize() / sizeof(struct TLASInstanceInfo)),
+				.NumElements = (uint)(d3d.tlasInstancesExtraInfo->GetSize() / sizeof(struct TLASInstanceInfo)),
 				.StructureByteStride = (uint)sizeof(struct TLASInstanceInfo),
 			},
 		};
@@ -1857,12 +1807,12 @@ void render() {
 		D3DDescriptor accumulationTextureDescriptor = d3dAppendDescriptorSRV(nullptr, d3d.accumulationRenderTexture->GetResource());
 		D3DDescriptor renderInfoDescriptor = d3dAppendDescriptorCBV(&renderInfoCBVDesc);
 		D3DDescriptor tlasDescriptor = d3dAppendDescriptorSRV(&tlasViewDesc, nullptr);
-		D3DDescriptor tlasInstancesInfosDescriptor = d3dAppendDescriptorSRV(&tlasInstancesInfosDesc, d3d.tlasInstancesExtraInfos[d3d.bufferIndex]->GetResource());
+		D3DDescriptor tlasInstancesInfosDescriptor = d3dAppendDescriptorSRV(&tlasInstancesInfosDesc, d3d.tlasInstancesExtraInfo->GetResource());
 		D3DDescriptor skyboxTextureDescriptor = d3dAppendDescriptorSRV(nullptr, scene.skybox.hdriTexture->GetResource());
-		D3DDescriptor readBackBufferDescriptor = d3dAppendDescriptorUAV(&readBackBufferDesc, d3d.readBackBufferUavs[d3d.bufferIndex]->GetResource());
+		D3DDescriptor readBackBufferDescriptor = d3dAppendDescriptorUAV(&readBackBufferDesc, d3d.readBackBufferUav->GetResource());
 		D3DDescriptor imguiTextureDescriptor = d3dAppendDescriptorSRV(nullptr, d3d.imguiTexture->GetResource());
-		D3DDescriptor collisionQueriesDescriptor = d3dAppendDescriptorSRV(&collisionQueriesDesc, d3d.collisionQueries[d3d.bufferIndex]->GetResource());
-		D3DDescriptor collisionQueryResultsDescriptor = d3dAppendDescriptorUAV(&collisionQueryResultsDesc, d3d.collisionQueryResultsUavs[d3d.bufferIndex]->GetResource());
+		D3DDescriptor collisionQueriesDescriptor = d3dAppendDescriptorSRV(&collisionQueriesDesc, d3d.collisionQueries->GetResource());
+		D3DDescriptor collisionQueryResultsDescriptor = d3dAppendDescriptorUAV(&collisionQueryResultsDesc, d3d.collisionQueryResultsUav->GetResource());
 	}
 	{
 		float3 cameraPosition;
@@ -1886,7 +1836,7 @@ void render() {
 			.playerVelocity = scene.player.velocity,
 			.playerAcceleration = scene.player.acceleration,
 		};
-		memcpy(constantBufferPtr + constantBufferOffset, &renderInfo, sizeof(renderInfo));
+		memcpy(d3d.constantBufferPtr + constantBufferOffset, &renderInfo, sizeof(renderInfo));
 		constantBufferOffset += sizeof(renderInfo);
 
 		sceneTLASInstancesBuildInfos.resize(0);
@@ -1898,7 +1848,7 @@ void render() {
 				sceneTLASInstancesExtraInfos.push_back(info);
 				D3D12_RAYTRACING_INSTANCE_DESC& instanceDesc = sceneTLASInstancesBuildInfos.emplace_back();
 				instanceDesc = {
-					.InstanceID = d3d.cbvSrvUavDescriptorCounts[d3d.bufferIndex],
+					.InstanceID = d3d.cbvSrvUavDescriptorCount,
 					.InstanceMask = 0xff,
 					.AccelerationStructure = mesh.blas->GetResource()->GetGPUVirtualAddress(),
 				};
@@ -1921,48 +1871,48 @@ void render() {
 		}
 		addTlasInstance(scene.player.modelIndex, XMMatrixTranslationFromVector(scene.player.position), { SceneObjectTypePlayer, 0, mouseSelectedObjectType == SceneObjectTypePlayer });
 
-		check(vectorSizeof(sceneTLASInstancesBuildInfos) < d3d.tlasInstancesBuildInfos[0]->GetSize());
-		check(vectorSizeof(sceneTLASInstancesExtraInfos) < d3d.tlasInstancesExtraInfos[0]->GetSize());
-		memcpy(d3d.tlasInstancesBuildInfosPtrs[d3d.bufferIndex], sceneTLASInstancesBuildInfos.data(), vectorSizeof(sceneTLASInstancesBuildInfos));
-		memcpy(d3d.tlasInstancesExtraInfosPtrs[d3d.bufferIndex], sceneTLASInstancesExtraInfos.data(), vectorSizeof(sceneTLASInstancesExtraInfos));
+		check(vectorSizeof(sceneTLASInstancesBuildInfos) < d3d.tlasInstancesBuildInfo->GetSize());
+		check(vectorSizeof(sceneTLASInstancesExtraInfos) < d3d.tlasInstancesExtraInfo->GetSize());
+		memcpy(d3d.tlasInstancesBuildInfosPtr, sceneTLASInstancesBuildInfos.data(), vectorSizeof(sceneTLASInstancesBuildInfos));
+		memcpy(d3d.tlasInstancesExtraInfosPtr, sceneTLASInstancesExtraInfos.data(), vectorSizeof(sceneTLASInstancesExtraInfos));
 
 		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {
 			.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL,
 			.NumDescs = (uint)sceneTLASInstancesBuildInfos.size(),
 			.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY,
-			.InstanceDescs = d3d.tlasInstancesBuildInfos[d3d.bufferIndex]->GetResource()->GetGPUVirtualAddress(),
+			.InstanceDescs = d3d.tlasInstancesBuildInfo->GetResource()->GetGPUVirtualAddress(),
 		};
 		D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
 		d3d.device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
-		check(prebuildInfo.ResultDataMaxSizeInBytes < d3d.tlas[d3d.bufferIndex]->GetSize());
-		check(prebuildInfo.ScratchDataSizeInBytes < d3d.tlasScratch[d3d.bufferIndex]->GetSize());
+		check(prebuildInfo.ResultDataMaxSizeInBytes < d3d.tlas->GetSize());
+		check(prebuildInfo.ScratchDataSizeInBytes < d3d.tlasScratch->GetSize());
 
 		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {
-			.DestAccelerationStructureData = d3d.tlas[d3d.bufferIndex]->GetResource()->GetGPUVirtualAddress(),
+			.DestAccelerationStructureData = d3d.tlas->GetResource()->GetGPUVirtualAddress(),
 			.Inputs = inputs,
-			.ScratchAccelerationStructureData = d3d.tlasScratch[d3d.bufferIndex]->GetResource()->GetGPUVirtualAddress(),
+			.ScratchAccelerationStructureData = d3d.tlasScratch->GetResource()->GetGPUVirtualAddress(),
 		};
 		d3d.graphicsCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
 		D3D12_RESOURCE_BARRIER tlasBarrier = {
 			.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV,
-			.UAV = {.pResource = d3d.tlas[d3d.bufferIndex]->GetResource() },
+			.UAV = {.pResource = d3d.tlas->GetResource() },
 		};
 		d3d.graphicsCmdList->ResourceBarrier(1, &tlasBarrier);
 
 		D3D12_DISPATCH_RAYS_DESC dispatchRaysDesc = { .Width = settings.renderW, .Height = settings.renderH, .Depth = 1, };
 		constantBufferOffset = align(constantBufferOffset, (uint)D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
-		memcpy(constantBufferPtr + constantBufferOffset, d3d.renderSceneRayGenID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		dispatchRaysDesc.RayGenerationShaderRecord = { constantBuffer->GetResource()->GetGPUVirtualAddress() + constantBufferOffset, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES };
+		memcpy(d3d.constantBufferPtr + constantBufferOffset, d3d.renderSceneRayGenID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+		dispatchRaysDesc.RayGenerationShaderRecord = { d3d.constantBuffer->GetResource()->GetGPUVirtualAddress() + constantBufferOffset, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES };
 		constantBufferOffset = align(constantBufferOffset + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, (uint)D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
-		memcpy(constantBufferPtr + constantBufferOffset, d3d.renderScenePrimaryRayMissID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		memcpy(constantBufferPtr + constantBufferOffset + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, d3d.renderSceneSecondaryRayMissID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		dispatchRaysDesc.MissShaderTable = { constantBuffer->GetResource()->GetGPUVirtualAddress() + constantBufferOffset, 2 * D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES };
+		memcpy(d3d.constantBufferPtr + constantBufferOffset, d3d.renderScenePrimaryRayMissID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+		memcpy(d3d.constantBufferPtr + constantBufferOffset + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, d3d.renderSceneSecondaryRayMissID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+		dispatchRaysDesc.MissShaderTable = { d3d.constantBuffer->GetResource()->GetGPUVirtualAddress() + constantBufferOffset, 2 * D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES };
 		constantBufferOffset = align(constantBufferOffset + 2 * D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, (uint)D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
-		memcpy(constantBufferPtr + constantBufferOffset, d3d.renderScenePrimaryRayHitGroupID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		memcpy(constantBufferPtr + constantBufferOffset + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, d3d.renderSceneSecondaryRayHitGroupID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		dispatchRaysDesc.HitGroupTable = { constantBuffer->GetResource()->GetGPUVirtualAddress() + constantBufferOffset, 2 * D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES };
+		memcpy(d3d.constantBufferPtr + constantBufferOffset, d3d.renderScenePrimaryRayHitGroupID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+		memcpy(d3d.constantBufferPtr + constantBufferOffset + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, d3d.renderSceneSecondaryRayHitGroupID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+		dispatchRaysDesc.HitGroupTable = { d3d.constantBuffer->GetResource()->GetGPUVirtualAddress() + constantBufferOffset, 2 * D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES };
 		constantBufferOffset += 2 * D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
-		check(constantBufferOffset < d3d.constantBuffers[d3d.bufferIndex]->GetSize());
+		check(constantBufferOffset < d3d.constantBuffer->GetSize());
 
 		d3d.graphicsCmdList->SetPipelineState1(d3d.renderSceneSO);
 		d3d.graphicsCmdList->SetComputeRootSignature(d3d.renderSceneRootSig);
@@ -1972,14 +1922,14 @@ void render() {
 		D3D12_RESOURCE_BARRIER readBackBufferTransition = {
 			.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
 			.Transition = {
-				.pResource = d3d.readBackBufferUavs[d3d.bufferIndex]->GetResource(),
+				.pResource = d3d.readBackBufferUav->GetResource(),
 				.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
 			}
 		};
 		D3D12_RESOURCE_BARRIER collisionQueryResultsTransition = {
 			.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
 			.Transition = {
-				.pResource = d3d.collisionQueryResultsUavs[d3d.bufferIndex]->GetResource(),
+				.pResource = d3d.collisionQueryResultsUav->GetResource(),
 				.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
 			}
 		};
@@ -1988,16 +1938,16 @@ void render() {
 
 		D3D12_DISPATCH_RAYS_DESC dispatchRaysDesc = { .Width = 1, .Height = 1, .Depth = 1, };
 		constantBufferOffset = align(constantBufferOffset, (uint)D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
-		memcpy(constantBufferPtr + constantBufferOffset, d3d.collisionDetectionRayGenID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		dispatchRaysDesc.RayGenerationShaderRecord = { constantBuffer->GetResource()->GetGPUVirtualAddress() + constantBufferOffset, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES };
+		memcpy(d3d.constantBufferPtr + constantBufferOffset, d3d.collisionDetectionRayGenID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+		dispatchRaysDesc.RayGenerationShaderRecord = { d3d.constantBuffer->GetResource()->GetGPUVirtualAddress() + constantBufferOffset, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES };
 		constantBufferOffset = align(constantBufferOffset + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, (uint)D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
-		memcpy(constantBufferPtr + constantBufferOffset, d3d.collisionDetectionMissID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		dispatchRaysDesc.MissShaderTable = { constantBuffer->GetResource()->GetGPUVirtualAddress() + constantBufferOffset, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES };
+		memcpy(d3d.constantBufferPtr + constantBufferOffset, d3d.collisionDetectionMissID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+		dispatchRaysDesc.MissShaderTable = { d3d.constantBuffer->GetResource()->GetGPUVirtualAddress() + constantBufferOffset, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES };
 		constantBufferOffset = align(constantBufferOffset + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, (uint)D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
-		memcpy(constantBufferPtr + constantBufferOffset, d3d.collisionDetectionHitGroupID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		dispatchRaysDesc.HitGroupTable = { constantBuffer->GetResource()->GetGPUVirtualAddress() + constantBufferOffset, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES };
+		memcpy(d3d.constantBufferPtr + constantBufferOffset, d3d.collisionDetectionHitGroupID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+		dispatchRaysDesc.HitGroupTable = { d3d.constantBuffer->GetResource()->GetGPUVirtualAddress() + constantBufferOffset, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES };
 		constantBufferOffset += D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
-		check(constantBufferOffset < d3d.constantBuffers[d3d.bufferIndex]->GetSize());
+		check(constantBufferOffset < d3d.constantBuffer->GetSize());
 
 		d3d.graphicsCmdList->SetPipelineState1(d3d.collisionDetection);
 		d3d.graphicsCmdList->SetComputeRootSignature(d3d.collisionDetectionRootSig);
@@ -2008,8 +1958,8 @@ void render() {
 		d3d.graphicsCmdList->ResourceBarrier(1, &readBackBufferTransition);
 		d3d.graphicsCmdList->ResourceBarrier(1, &collisionQueryResultsTransition);
 
-		d3d.graphicsCmdList->CopyBufferRegion(d3d.readBackBuffers[d3d.bufferIndex]->GetResource(), 0, d3d.readBackBufferUavs[d3d.bufferIndex]->GetResource(), 0, sizeof(struct ReadBackBuffer));
-		d3d.graphicsCmdList->CopyBufferRegion(d3d.collisionQueryResults[d3d.bufferIndex]->GetResource(), 0, d3d.collisionQueryResultsUavs[d3d.bufferIndex]->GetResource(), 0, d3d.collisionQueryResults[d3d.bufferIndex]->GetSize());
+		d3d.graphicsCmdList->CopyBufferRegion(d3d.readBackBuffer->GetResource(), 0, d3d.readBackBufferUav->GetResource(), 0, sizeof(struct ReadBackBuffer));
+		d3d.graphicsCmdList->CopyBufferRegion(d3d.collisionQueryResults->GetResource(), 0, d3d.collisionQueryResultsUav->GetResource(), 0, d3d.collisionQueryResults->GetSize());
 	}
 	{
 		uint swapChainBackBufferIndex = d3d.swapChain->GetCurrentBackBufferIndex();
@@ -2042,14 +1992,10 @@ void render() {
 			d3d.graphicsCmdList->OMSetBlendFactor(blendFactor);
 			d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.imguiRootSig);
 
-			D3D12MA::Allocation* vertBuffer = d3d.imguiVertexBuffers[d3d.bufferIndex];
-			D3D12MA::Allocation* indexBuffer = d3d.imguiIndexBuffers[d3d.bufferIndex];
-			char* vertBufferPtr = d3d.imguiVertexBufferPtrs[d3d.bufferIndex];
-			char* indexBufferPtr = d3d.imguiIndexBufferPtrs[d3d.bufferIndex];
-			D3D12_VERTEX_BUFFER_VIEW vertBufferView = { vertBuffer->GetResource()->GetGPUVirtualAddress(), (uint)vertBuffer->GetSize(), sizeof(ImDrawVert) };
-			D3D12_INDEX_BUFFER_VIEW indexBufferView = { indexBuffer->GetResource()->GetGPUVirtualAddress(), (uint)indexBuffer->GetSize(), DXGI_FORMAT_R16_UINT };
-			check(vertBuffer->GetResource()->Map(0, nullptr, (void**)&vertBufferPtr));
-			check(indexBuffer->GetResource()->Map(0, nullptr, (void**)&indexBufferPtr));
+			D3D12_VERTEX_BUFFER_VIEW vertBufferView = { d3d.imguiVertexBuffer->GetResource()->GetGPUVirtualAddress(), (uint)d3d.imguiVertexBuffer->GetSize(), sizeof(ImDrawVert) };
+			D3D12_INDEX_BUFFER_VIEW indexBufferView = { d3d.imguiIndexBuffer->GetResource()->GetGPUVirtualAddress(), (uint)d3d.imguiIndexBuffer->GetSize(), DXGI_FORMAT_R16_UINT };
+			check(d3d.imguiVertexBuffer->GetResource()->Map(0, nullptr, (void**)&d3d.imguiVertexBufferPtr));
+			check(d3d.imguiIndexBuffer->GetResource()->Map(0, nullptr, (void**)&d3d.imguiIndexBufferPtr));
 			d3d.graphicsCmdList->IASetVertexBuffers(0, 1, &vertBufferView);
 			d3d.graphicsCmdList->IASetIndexBuffer(&indexBufferView);
 			d3d.graphicsCmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -2060,8 +2006,8 @@ void render() {
 				const ImDrawList* dlist = drawData->CmdLists[i];
 				uint verticesSize = dlist->VtxBuffer.Size * sizeof(ImDrawVert);
 				uint indicesSize = dlist->IdxBuffer.Size * sizeof(ImDrawIdx);
-				memcpy(vertBufferPtr + vertBufferOffset, dlist->VtxBuffer.Data, verticesSize);
-				memcpy(indexBufferPtr + indexBufferOffset, dlist->IdxBuffer.Data, indicesSize);
+				memcpy(d3d.imguiVertexBufferPtr + vertBufferOffset, dlist->VtxBuffer.Data, verticesSize);
+				memcpy(d3d.imguiIndexBufferPtr + indexBufferOffset, dlist->IdxBuffer.Data, indicesSize);
 				uint vertexIndex = vertBufferOffset / sizeof(ImDrawVert);
 				uint indiceIndex = indexBufferOffset / sizeof(ImDrawIdx);
 				for (int i = 0; i < dlist->CmdBuffer.Size; i++) {
@@ -2073,8 +2019,8 @@ void render() {
 				}
 				vertBufferOffset = vertBufferOffset + align(verticesSize, (uint)sizeof(ImDrawVert));
 				indexBufferOffset = indexBufferOffset + align(indicesSize, (uint)sizeof(ImDrawIdx));
-				check(vertBufferOffset < vertBuffer->GetSize());
-				check(indexBufferOffset < indexBuffer->GetSize());
+				check(vertBufferOffset < d3d.imguiVertexBuffer->GetSize());
+				check(indexBufferOffset < d3d.imguiIndexBuffer->GetSize());
 			}
 		}
 		std::swap(swapChainImageTransition.Transition.StateBefore, swapChainImageTransition.Transition.StateAfter);
