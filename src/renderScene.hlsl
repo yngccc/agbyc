@@ -18,7 +18,7 @@ TriangleHitGroup secondaryRayHitGroup = { "", "secondaryRayClosestHit" };
 
 struct RayPayload {
     bool edge;
-    float3 position;
+    float3 translate;
     float3 normal;
     float3 diffuse;
     float3 emissive;
@@ -30,17 +30,16 @@ void rayGen() {
     uint2 pixelIndex = DispatchRaysIndex().xy;
     float2 pixelCoord = ((float2(pixelIndex) + 0.5) / resolution) * 2.0 - 1.0;
 
-    RWTexture2D<float3> renderTexture = RENDER_TEXTURE_DESCRIPTOR;
-    RWTexture2D<float3> accumulationRenderTexture = ACCUMULATION_RENDER_TEXTURE_DESCRIPTOR;
-    ConstantBuffer<RenderInfo> renderInfo = RENDER_INFO_DESCRIPTOR;
-    RaytracingAccelerationStructure BVH = BVH_DESCRIPTOR;
-    StructuredBuffer<TLASInstanceInfo> instanceInfos = TLAS_INSTANCE_INFOS_DESCRIPTOR;
-    Texture2D<float3> skyboxTexture = SKYBOX_TEXTURE_DESCRIPTOR;
+    RENDER_TEXTURE_UAV_DESCRIPTOR(renderTexture);
+    RENDER_INFO_DESCRIPTOR(renderInfo);
+    BVH_DESCRIPTOR(bvh);
+    TLAS_INSTANCE_INFOS_DESCRIPTOR(instanceInfos);
+    SKYBOX_TEXTURE_DESCRIPTOR(skyboxTexture);
 
     float aspectRatio = renderInfo.cameraProjMat[1][1] / renderInfo.cameraProjMat[0][0];
     float tanHalfFovY = 1.0 / renderInfo.cameraProjMat[1][1];
 
-    RayPayload rayPayload = (RayPayload)0;
+    RayPayload rayPayload = (RayPayload) 0;
     RayDesc primaryRayDesc;
     primaryRayDesc.Origin = renderInfo.cameraViewMat[3].xyz;
     primaryRayDesc.TMin = 0;
@@ -50,18 +49,18 @@ void rayGen() {
 		(pixelCoord.y * renderInfo.cameraViewMat[1].xyz * tanHalfFovY) +
 		renderInfo.cameraViewMat[2].xyz
 	);
-    TraceRay(BVH, RAY_FLAG_NONE, 0xff, 0, 0, 0, primaryRayDesc, rayPayload);
+    TraceRay(bvh, RAY_FLAG_NONE, 0xff, 0, 0, 0, primaryRayDesc, rayPayload);
 
-    if (rayPayload.position.x == -FLT_MAX) {
+    if (rayPayload.translate.x == -FLT_MAX) {
         float3 viewDir = primaryRayDesc.Direction;
         float theta = atan2(viewDir.z, viewDir.x);
         float phi = acos(viewDir.y);
         float3 skyboxColor = skyboxTexture.SampleLevel(bilinearSampler, float2((theta + PI) / (2.0 * PI), phi / PI), 0);
-        renderTexture[pixelIndex] = skyboxColor / 10;
+        renderTexture[pixelIndex].xyz = skyboxColor / 10;
     }
     else {
         if (rayPayload.edge) {
-            renderTexture[pixelIndex] = float3(0, 1, 0);
+            renderTexture[pixelIndex].xyz = float3(0, 1, 0);
         }
         else {
             float3 lightDir = normalize(float3(1, 1, 1));
@@ -89,7 +88,7 @@ void rayGen() {
 
 [shader("miss")]
 void primaryRayMiss(inout RayPayload payload) {
-    payload.position.x = -FLT_MAX;
+    payload.translate.x = -FLT_MAX;
 }
 
 [shader("closesthit")]
@@ -103,32 +102,24 @@ void primaryRayClosestHit(inout RayPayload payload, in BuiltInTriangleIntersecti
     Vertex vertex2 = vertices[indices[NonUniformResourceIndex(triangleIndex + 2)]];
     float3x4 transform = ObjectToWorld3x4();
     float3x3 normalTransform = float3x3(transform[0].xyz, transform[1].xyz, transform[2].xyz);
-    payload.position = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+    payload.translate = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     payload.normal = barycentricsLerp(trigAttribs.barycentrics, vertex0.normal, vertex1.normal, vertex2.normal);
     payload.normal = normalize(mul(normalTransform, payload.normal));
     payload.edge = false;
     
-    StructuredBuffer<TLASInstanceInfo> instanceInfoss = ResourceDescriptorHeap[4];
-    TLASInstanceInfo instanceInfo = instanceInfoss[InstanceIndex()];
+    TLAS_INSTANCE_INFOS_DESCRIPTOR(instanceInfos);
+    TLASInstanceInfo instanceInfo = instanceInfos[InstanceIndex()];
     if (instanceInfo.selected) {
-        if (trigAttribs.barycentrics.x < 0.02) {
-            payload.edge = true;
-        }
-        else if (trigAttribs.barycentrics.y < 0.02) {
-            payload.edge = true;
-        }
-        else if ((1 - trigAttribs.barycentrics.x - trigAttribs.barycentrics.y) < 0.02) {
-            payload.edge = true;
-        }
+        payload.edge = barycentricsOnEdge(trigAttribs.barycentrics, 0.02);
     }
 }
 
 [shader("miss")]
 void secondaryRayMiss(inout RayPayload payload) {
-    payload.position.x = -FLT_MAX;
+    payload.translate.x = -FLT_MAX;
 }
 
 [shader("closesthit")]
 void secondaryRayClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
-    payload.position.x = 0;
+    payload.translate.x = 0;
 }

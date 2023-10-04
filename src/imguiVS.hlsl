@@ -8,18 +8,18 @@
 sampler textureSampler : register(s0);
 
 struct VSOutput {
-	float4 position : SV_POSITION;
+	float4 translate : SV_POSITION;
 	float2 texCoord : TEXCOORD;
 	float4 color : COLOR;
 };
 
 [RootSignature(rootSig)]
-VSOutput vertexShader(float2 position : POSITION, float2 texCoord : TEXCOORD, float4 color : COLOR) {
-	ConstantBuffer<RenderInfo> renderInfo = RENDER_INFO_DESCRIPTOR;
+VSOutput vertexShader(float2 translate : POSITION, float2 texCoord : TEXCOORD, float4 color : COLOR) {
+    RENDER_INFO_DESCRIPTOR(renderInfo);
 	VSOutput output;
-	output.position.x = (position.x / renderInfo.resolution.x) * 2 - 1;
-	output.position.y = -((position.y / renderInfo.resolution.y) * 2 - 1);
-	output.position.zw = float2(0, 1);
+	output.translate.x = (translate.x / renderInfo.resolution.x) * 2 - 1;
+	output.translate.y = -((translate.y / renderInfo.resolution.y) * 2 - 1);
+	output.translate.zw = float2(0, 1);
 	output.texCoord = texCoord;
 	output.color = color;
 	return output;
@@ -27,13 +27,13 @@ VSOutput vertexShader(float2 position : POSITION, float2 texCoord : TEXCOORD, fl
 
 [RootSignature(rootSig)]
 float4 pixelShader(VSOutput vsOutput) : SV_TARGET {
-	ConstantBuffer<RenderInfo> renderInfo = RENDER_INFO_DESCRIPTOR;
-	Texture2D<float4> imguiTexture = IMGUI_TEXTURE_DESCRIPTOR;
+	RENDER_INFO_DESCRIPTOR(renderInfo);
+	IMGUI_TEXTURE_DESCRIPTOR(imguiTexture);
 	float4 output = vsOutput.color * imguiTexture.Sample(textureSampler, vsOutput.texCoord);
 	if (renderInfo.hdr) {
-		output.rgb = sRGBToLinear(output.rgb);
+		output.rgb = srgbToLinear(output.rgb);
 		output.rgb = bt709To2020(output.rgb);
-		output.rgb *= (100.0 / 10000.0);
+        output.rgb *= HDR_SCALE_FACTOR;
 		output.rgb = linearToPQ(output.rgb);
 	}
 	return output;

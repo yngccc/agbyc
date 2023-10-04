@@ -1,27 +1,45 @@
-camera:
-  position: [-3.1590188,7.805804,-0.020632358]
-  rotation: [0.23599952,1.6120006,0]
+editorCamera:
+  position: [1.0663764,0.07757952,-2.5295653]
+  rotation: [-0.112636946,-0.40079433,0]
+  sensitivity: 1
+  controllerSensitivity: 1
 player:
-  position: [0,7.009788,0]
-  velocity: [0,-1,0]
+  file: animatedModels/riggedSimple/riggedSimple.glb
+  scale: [0.20000005,0.20000005,0.20000005]
+  rotate: [-0,0,-0,1]
+  translate: [-0.014724214,0.1157084,0]
+  velocity: [0,0,0]
   acceleration: [0,0,0]
-  cameraRotation: [-1.0146381,2.8936253,0]
-  cameraDistance: 5
-  file: ../../assets/simpleGeometries/sphere.glb
+  cameraLookAtOffset: [0,0.02,0]
+  cameraRotation: [0.061999973,-0.047999922,0]
+  cameraDistance: 0.08
+  cameraSensitivity: 1
+  cameraControllerSensitivity: 1
 skybox:
-  file: ../../assets/skybox/industrial_sunset_02_puresky_4k.dds
-terrain:
-  file: ../../assets/terrain/terrain.glb
-buildings:
+  file: skybox/industrial_sunset_02_puresky_4k.dds
+staticObjects:
   - name: cube
-    file: ../../assets/simpleGeometries/cube.glb
-    position: [0,5,0]
-    rotation: [0,0,0]
+    file: staticModels/cube.glb
+    scale: [0.019600011,0.019600011,0.019600011]
+    rotate: [-0,0,-0,1]
+    translate: [-0.011537774,0.21926257,0.13709268]
   - name: sphere
-    file: ../../assets/simpleGeometries/sphere.glb
-    position: [5,5,-5]
-    rotation: [0,0,0]
+    file: staticModels/sphere.glb
+    scale: [0.031500008,0.031500008,0.031500008]
+    rotate: [-0,0,-0,1]
+    translate: [-0.23383498,0.22479938,0]
   - name: cone
-    file: ../../assets/simpleGeometries/cone.glb
-    position: [-5,5,0]
-    rotation: [0,0,0]
+    file: staticModels/cone.glb
+    scale: [0.08000004,0.08000004,0.08000004]
+    rotate: [-0,0,-0,1]
+    translate: [0.18959805,0.19178441,0]
+  - name: sphere2
+    file: staticModels/sphere.glb
+    scale: [0.05760002,0.05760002,0.05760002]
+    rotate: [-0,0,-0,1]
+    translate: [-0.26518375,0.2301766,-0.25261185]
+  - name: robot
+    file: animatedModels\xbot\Xbot.glb
+    scale: [8.67,8.67,8.67]
+    rotate: [-0,0,-0,1]
+    translate: [-0.033425085,0.26019663,-0.12651841]

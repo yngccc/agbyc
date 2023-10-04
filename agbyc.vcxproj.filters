@@ -24,10 +24,11 @@
     <None Include="src\shared.hlsli">
       <Filter>HLSL</Filter>
     </None>
-    <None Include="packages.config" />
     <None Include="assets\scenes\scene.yaml">
       <Filter>Scenes</Filter>
     </None>
+    <None Include="packages.config" />
+    <None Include=".clang-format" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="src\imguiPS.hlsl">
@@ -46,12 +47,6 @@
       <Filter>HLSL</Filter>
     </FxCompile>
     <FxCompile Include="src\collisionDetection.hlsl">
-      <Filter>HLSL</Filter>
-    </FxCompile>
-    <FxCompile Include="src\gizmoVS.hlsl">
-      <Filter>HLSL</Filter>
-    </FxCompile>
-    <FxCompile Include="src\gizmoPS.hlsl">
       <Filter>HLSL</Filter>
     </FxCompile>
   </ItemGroup>

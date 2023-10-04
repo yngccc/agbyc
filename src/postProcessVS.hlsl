@@ -8,29 +8,29 @@
 sampler renderTextureSampler : register(s0);
 
 struct VSOutput {
-	float4 position : SV_POSITION;
-	float2 texCoord : TEXCOORD;
+    float4 translate : SV_POSITION;
+    float2 texCoord : TEXCOORD;
 };
 
 [RootSignature(rootSig)]
 VSOutput vertexShader(uint vertexID : SV_VertexID) {
-	VSOutput output;
-	output.texCoord = float2((vertexID << 1) & 2, vertexID & 2);
-	output.position = float4(output.texCoord * float2(2, -2) + float2(-1, 1), 0, 1);
-	return output;
+    VSOutput output;
+    output.texCoord = float2((vertexID << 1) & 2, vertexID & 2);
+    output.translate = float4(output.texCoord * float2(2, -2) + float2(-1, 1), 0, 1);
+    return output;
 }
 
 [RootSignature(rootSig)]
 float4 pixelShader(VSOutput vsOutput) : SV_TARGET {
-	ConstantBuffer<RenderInfo> renderInfo = RENDER_INFO_DESCRIPTOR;
-	Texture2D<float4> renderTexture = RENDER_TEXTURE_DESCRIPTOR;
-	float4 output = renderTexture.Sample(renderTextureSampler, vsOutput.texCoord);
-	if (renderInfo.hdr) {
-		output.rgb /= 10; // 10 = 10000 nits
-		output.rgb = linearToPQ(output.rgb);
-	}
-	else {
-		output.rgb = linearToSRGB(output.rgb);
-	}
-	return output;
+    RENDER_INFO_DESCRIPTOR(renderInfo);
+    RENDER_TEXTURE_SRV_DESCRIPTOR(renderTexture);
+    float4 output = renderTexture.Sample(renderTextureSampler, vsOutput.texCoord);
+    if (renderInfo.hdr) {
+        output.rgb *= HDR_SCALE_FACTOR;
+        output.rgb = linearToPQ(output.rgb);
+    }
+    else {
+        output.rgb = linearToSrgb(output.rgb);
+    }
+    return output;
 }

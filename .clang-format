@@ -1,0 +1,13 @@
+ColumnLimit: 0
+IndentWidth: 4
+PointerAlignment: Left
+BinPackArguments: True
+BinPackParameters: True
+AllowAllParametersOfDeclarationOnNextLine: True
+AllowShortBlocksOnASingleLine: Always
+AllowShortCaseLabelsOnASingleLine: True
+AllowShortEnumsOnASingleLine: True
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortLambdasOnASingleLine: All
+AllowShortLoopsOnASingleLine: True
