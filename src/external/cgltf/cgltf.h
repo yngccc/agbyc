@@ -418,7 +418,7 @@ typedef struct cgltf_texture_view
 	cgltf_int texcoord;
 	cgltf_float scale; /* equivalent to strength for occlusion_texture */
 	cgltf_bool has_transform;
-	cgltf_texture_transform globalTransform;
+	cgltf_texture_transform transform;
 	cgltf_extras extras;
 	cgltf_size extensions_count;
 	cgltf_extension* extensions;
@@ -663,7 +663,7 @@ struct cgltf_node {
 	cgltf_size children_count;
 	cgltf_skin* skin;
 	cgltf_mesh* mesh;
-	cgltf_camera* editorCamera;
+	cgltf_camera* camera;
 	cgltf_light* light;
 	cgltf_float* weights;
 	cgltf_size weights_count;
@@ -3780,7 +3780,7 @@ static int cgltf_parse_json_texture_view(cgltf_options* options, jsmntok_t const
 	CGLTF_CHECK_TOKTYPE(tokens[i], JSMN_OBJECT);
 
 	out_texture_view->scale = 1.0f;
-	cgltf_fill_float_array(out_texture_view->globalTransform.scale, 2, 1.0f);
+	cgltf_fill_float_array(out_texture_view->transform.scale, 2, 1.0f);
 
 	int size = tokens[i].size;
 	++i;
@@ -3845,7 +3845,7 @@ static int cgltf_parse_json_texture_view(cgltf_options* options, jsmntok_t const
 				if (cgltf_json_strcmp(tokens+i, json_chunk, "KHR_texture_transform") == 0)
 				{
 					out_texture_view->has_transform = 1;
-					i = cgltf_parse_json_texture_transform(tokens, i + 1, json_chunk, &out_texture_view->globalTransform);
+					i = cgltf_parse_json_texture_transform(tokens, i + 1, json_chunk, &out_texture_view->transform);
 				}
 				else
 				{
@@ -5610,7 +5610,7 @@ static int cgltf_parse_json_node(cgltf_options* options, jsmntok_t const* tokens
 		{
 			++i;
 			CGLTF_CHECK_TOKTYPE(tokens[i], JSMN_PRIMITIVE);
-			out_node->editorCamera = CGLTF_PTRINDEX(cgltf_camera, cgltf_json_to_int(tokens + i, json_chunk));
+			out_node->camera = CGLTF_PTRINDEX(cgltf_camera, cgltf_json_to_int(tokens + i, json_chunk));
 			++i;
 		}
 		else if (cgltf_json_strcmp(tokens+i, json_chunk, "translation") == 0)
@@ -6638,7 +6638,7 @@ static int cgltf_fixup_pointers(cgltf_data* data)
 
 		CGLTF_PTRFIXUP(data->nodes[i].mesh, data->meshes, data->meshes_count);
 		CGLTF_PTRFIXUP(data->nodes[i].skin, data->skins, data->skins_count);
-		CGLTF_PTRFIXUP(data->nodes[i].editorCamera, data->cameras, data->cameras_count);
+		CGLTF_PTRFIXUP(data->nodes[i].camera, data->cameras, data->cameras_count);
 		CGLTF_PTRFIXUP(data->nodes[i].light, data->lights, data->lights_count);
 
 		if (data->nodes[i].has_mesh_gpu_instancing)

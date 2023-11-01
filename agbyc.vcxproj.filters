@@ -21,32 +21,32 @@
     <None Include="src\sceneStructs.h">
       <Filter>Source Files</Filter>
     </None>
-    <None Include="src\shared.hlsli">
-      <Filter>HLSL</Filter>
-    </None>
     <None Include="assets\scenes\scene.yaml">
       <Filter>Scenes</Filter>
     </None>
     <None Include="packages.config" />
     <None Include=".clang-format" />
+    <None Include="src\hlsl\shared.hlsli">
+      <Filter>HLSL</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
-    <FxCompile Include="src\imguiPS.hlsl">
+    <FxCompile Include="src\hlsl\collisionDetection.hlsl">
       <Filter>HLSL</Filter>
     </FxCompile>
-    <FxCompile Include="src\imguiVS.hlsl">
+    <FxCompile Include="src\hlsl\imguiPS.hlsl">
       <Filter>HLSL</Filter>
     </FxCompile>
-    <FxCompile Include="src\renderScene.hlsl">
+    <FxCompile Include="src\hlsl\imguiVS.hlsl">
       <Filter>HLSL</Filter>
     </FxCompile>
-    <FxCompile Include="src\postProcessPS.hlsl">
+    <FxCompile Include="src\hlsl\postProcessPS.hlsl">
       <Filter>HLSL</Filter>
     </FxCompile>
-    <FxCompile Include="src\postProcessVS.hlsl">
+    <FxCompile Include="src\hlsl\postProcessVS.hlsl">
       <Filter>HLSL</Filter>
     </FxCompile>
-    <FxCompile Include="src\collisionDetection.hlsl">
+    <FxCompile Include="src\hlsl\renderScene.hlsl">
       <Filter>HLSL</Filter>
     </FxCompile>
   </ItemGroup>

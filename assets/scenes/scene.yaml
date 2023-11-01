@@ -1,45 +1,23 @@
 editorCamera:
-  position: [1.0663764,0.07757952,-2.5295653]
-  rotation: [-0.112636946,-0.40079433,0]
-  sensitivity: 1
+  position: [20.539669,5.0479956,10.517791]
+  pitchYaw: [0.22661297,-2.0906467]
+  fovVertical: 50
+  sensitivity: 100
+  rotationSensitivity: 0.725
   controllerSensitivity: 1
 player:
-  file: animatedModels/riggedSimple/riggedSimple.glb
-  scale: [0.20000005,0.20000005,0.20000005]
+  file: animatedModels/girl/girl.glb
+  scale: [0.100800045,0.1008,0.100800045]
   rotate: [-0,0,-0,1]
-  translate: [-0.014724214,0.1157084,0]
+  translate: [1.4318947,0,0]
   velocity: [0,0,0]
   acceleration: [0,0,0]
   cameraLookAtOffset: [0,0.02,0]
-  cameraRotation: [0.061999973,-0.047999922,0]
+  cameraRotation: [0.103999995,0.70399994,0]
   cameraDistance: 0.08
   cameraSensitivity: 1
   cameraControllerSensitivity: 1
 skybox:
   file: skybox/industrial_sunset_02_puresky_4k.dds
-staticObjects:
-  - name: cube
-    file: staticModels/cube.glb
-    scale: [0.019600011,0.019600011,0.019600011]
-    rotate: [-0,0,-0,1]
-    translate: [-0.011537774,0.21926257,0.13709268]
-  - name: sphere
-    file: staticModels/sphere.glb
-    scale: [0.031500008,0.031500008,0.031500008]
-    rotate: [-0,0,-0,1]
-    translate: [-0.23383498,0.22479938,0]
-  - name: cone
-    file: staticModels/cone.glb
-    scale: [0.08000004,0.08000004,0.08000004]
-    rotate: [-0,0,-0,1]
-    translate: [0.18959805,0.19178441,0]
-  - name: sphere2
-    file: staticModels/sphere.glb
-    scale: [0.05760002,0.05760002,0.05760002]
-    rotate: [-0,0,-0,1]
-    translate: [-0.26518375,0.2301766,-0.25261185]
-  - name: robot
-    file: animatedModels\xbot\Xbot.glb
-    scale: [8.67,8.67,8.67]
-    rotate: [-0,0,-0,1]
-    translate: [-0.033425085,0.26019663,-0.12651841]
+staticObjects: []
+dynamicObjects: []

@@ -3,7 +3,7 @@ struct Vertex {
     float3 position;
     float3 normal;
     float2 uv;
-    ushort4 joints;
+    uint16_4 joints;
     float4 jointWeights;
 #else
     float3 position;
@@ -16,7 +16,7 @@ struct Vertex {
 
 struct Joint {
 #ifdef __cplusplus
-    DirectX::XMMATRIX globalTransform;
+    DirectX::XMMATRIX transform;
     DirectX::XMMATRIX inverseBindTransform;
 #else
     float4x4 globalTransform;
@@ -63,8 +63,8 @@ struct Light {
 
 struct RenderInfo {
 #ifdef __cplusplus
-    DirectX::XMMATRIX cameraViewMat;
-    DirectX::XMMATRIX cameraProjMat;
+    XMMATRIX cameraViewMat;
+    XMMATRIX cameraProjMat;
     uint32 resolution[2];
     uint32 mouseSelectPosition[2];
     uint32 hdr;
@@ -98,6 +98,7 @@ enum SceneObjectType : uint {
     SceneObjectTypePlayer,
     SceneObjectTypeSkybox,
     SceneObjectTypeStaticObject,
+    SceneObjectTypeDynamicObject,
 };
 
 struct TLASInstanceInfo {
