@@ -58,14 +58,12 @@ using namespace DirectX;
 #include <d3d12ma/d3d12MemAlloc.cpp>
 
 typedef int8_t int8;
-typedef uint8_t uint8;
 typedef int16_t int16;
-typedef uint16_t uint16;
-typedef int32_t int32;
-typedef uint32_t uint32;
-typedef uint32_t uint;
 typedef int64_t int64;
+typedef uint8_t uint8;
+typedef uint16_t uint16;
 typedef uint64_t uint64;
+typedef uint32_t uint;
 
 static const float e = 2.71828182845904523536f;
 static const float pi = 3.14159265358979323846f;
@@ -78,32 +76,17 @@ static const float sqrt2 = 1.41421356237309504880f;
 #define degree(r) (r * (180.0f / pi))
 
 #undef assert
-void assert(bool b) {
-    if (!b) abort();
-}
-void assert(BOOL b) {
-    if (!b) abort();
-}
-void assert(HRESULT r) {
-    if (r != S_OK) abort();
-}
-
+#define assert(expr) \
+    if (!(expr)) abort();
 #ifdef _DEBUG
-void assertDebug(bool b) {
-    if (!b) abort();
-}
-void assertDebug(BOOL b) {
-    if (!b) abort();
-}
-void assertDebug(HRESULT r) {
-    if (r != S_OK) abort();
-}
+#define assertDebug(expr) \
+    if (!(expr)) abort();
 #else
-#define debugAssert(x)
+#define assertDebug(expr)
 #endif
 
-template <typename T, uint32 N>
-constexpr uint32 countof(const T (&)[N]) { return N; }
+template <typename T, uint N>
+constexpr uint countof(const T (&)[N]) { return N; }
 
 template <typename T>
 uint64 vectorSizeof(const std::vector<T>& v) { return v.size() * sizeof(T); }
@@ -137,8 +120,8 @@ struct uint16_4 {
     std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
 };
 
-struct uint32_4 {
-    uint32 x = 0, y = 0, z = 0, w = 0;
+struct uint_4 {
+    uint x = 0, y = 0, z = 0, w = 0;
     std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
 };
 
@@ -219,7 +202,7 @@ struct Transform {
 
 float3 lerp(const float3& a, const float3& b, float t) { return a + ((b - a) * t); };
 
-float4 slerp(const float4& a, const float4& b, float t){ return float4(XMQuaternionSlerp(a.toXMVector(), b.toXMVector(), t)); };
+float4 slerp(const float4& a, const float4& b, float t) { return float4(XMQuaternionSlerp(a.toXMVector(), b.toXMVector(), t)); };
 
 std::string toString(const XMVECTOR& vec) {
     return std::format("|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n", XMVectorGetX(vec), XMVectorGetY(vec), XMVectorGetZ(vec), XMVectorGetW(vec));
@@ -319,9 +302,9 @@ enum WindowMode {
 
 struct Settings {
     WindowMode windowMode = WindowModeWindowed;
-    uint32 windowX = 0, windowY = 0;
-    uint32 windowW = 1920, windowH = 1080;
-    uint32 renderW = 1920, renderH = 1080;
+    uint windowX = 0, windowY = 0;
+    uint windowW = 1920, windowH = 1080;
+    uint renderW = 1920, renderH = 1080;
     DXGI_RATIONAL refreshRate = {60, 1};
     bool hdr = false;
 };
@@ -374,7 +357,7 @@ void windowUpdateSizes() {
 }
 
 void windowInit() {
-    assert(SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE));
+    assert(SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) == S_OK);
 
     HMODULE instanceHandle = GetModuleHandle(nullptr);
     WNDCLASSA windowClass = {};
@@ -400,7 +383,7 @@ void windowInit() {
 
 struct DisplayMode {
     struct Resolution {
-        uint32 width, height;
+        uint width, height;
     };
     Resolution resolution;
     std::vector<DXGI_RATIONAL> refreshRates;
@@ -439,18 +422,19 @@ struct D3D {
     D3D12_CPU_DESCRIPTOR_HANDLE swapChainImageRTVDescriptors[2];
 
     ID3D12DescriptorHeap* rtvDescriptorHeap;
-    uint32 rtvDescriptorSize;
-    uint32 rtvDescriptorCount;
+    uint rtvDescriptorSize;
+    uint rtvDescriptorCount;
     ID3D12DescriptorHeap* cbvSrvUavDescriptorHeap;
-    uint32 cbvSrvUavDescriptorSize;
-    uint32 cbvSrvUavDescriptorCapacity;
-    uint32 cbvSrvUavDescriptorCount;
+    uint cbvSrvUavDescriptorSize;
+    uint cbvSrvUavDescriptorCapacity;
+    uint cbvSrvUavDescriptorCount;
 
     D3D12MA::Allocator* allocator;
 
     D3D12MA::Allocation* stagingBuffer;
     char* stagingBufferPtr;
     D3D12_GPU_VIRTUAL_ADDRESS stagingBufferGPUAddress;
+
     D3D12MA::Allocation* constantBuffer;
     char* constantBufferPtr;
 
@@ -512,7 +496,7 @@ struct D3DDescriptor {
 
 D3DDescriptor d3dAppendCbvDescriptor(D3D12_CONSTANT_BUFFER_VIEW_DESC* constantBufferViewDesc) {
     assert(d3d.cbvSrvUavDescriptorCount < d3d.cbvSrvUavDescriptorCapacity);
-    uint32 offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
+    uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
     D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
     D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + offset};
     d3d.device->CreateConstantBufferView(constantBufferViewDesc, cpuHandle);
@@ -522,7 +506,7 @@ D3DDescriptor d3dAppendCbvDescriptor(D3D12_CONSTANT_BUFFER_VIEW_DESC* constantBu
 
 D3DDescriptor d3dAppendSrvDescriptor(D3D12_SHADER_RESOURCE_VIEW_DESC* resourceViewDesc, ID3D12Resource* resource) {
     assert(d3d.cbvSrvUavDescriptorCount < d3d.cbvSrvUavDescriptorCapacity);
-    uint32 offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
+    uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
     D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
     D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + offset};
     d3d.device->CreateShaderResourceView(resource, resourceViewDesc, cpuHandle);
@@ -532,7 +516,7 @@ D3DDescriptor d3dAppendSrvDescriptor(D3D12_SHADER_RESOURCE_VIEW_DESC* resourceVi
 
 D3DDescriptor d3dAppendUavDescriptor(D3D12_UNORDERED_ACCESS_VIEW_DESC* unorderedAccessViewDesc, ID3D12Resource* resource) {
     assert(d3d.cbvSrvUavDescriptorCount < d3d.cbvSrvUavDescriptorCapacity);
-    uint32 offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
+    uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
     D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
     D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + offset};
     d3d.device->CreateUnorderedAccessView(resource, nullptr, unorderedAccessViewDesc, cpuHandle);
@@ -541,12 +525,12 @@ D3DDescriptor d3dAppendUavDescriptor(D3D12_UNORDERED_ACCESS_VIEW_DESC* unordered
 }
 
 void d3dGraphicsQueueStartRecording() {
-    assert(d3d.graphicsCmdAllocator->Reset());
-    assert(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr));
+    assert(d3d.graphicsCmdAllocator->Reset() == S_OK);
+    assert(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr) == S_OK);
 }
 
 void d3dGraphicsQueueSubmitRecording() {
-    assert(d3d.graphicsCmdList->Close());
+    assert(d3d.graphicsCmdList->Close() == S_OK);
     d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
 }
 
@@ -554,18 +538,18 @@ void d3dGraphicsQueueWait() {
     d3d.graphicsQueueFenceCounter += 1;
     d3d.graphicsQueue->Signal(d3d.graphicsQueueFence, d3d.graphicsQueueFenceCounter);
     if (d3d.graphicsQueueFence->GetCompletedValue() < d3d.graphicsQueueFenceCounter) {
-        assert(d3d.graphicsQueueFence->SetEventOnCompletion(d3d.graphicsQueueFenceCounter, d3d.graphicsQueueFenceEvent));
+        assert(d3d.graphicsQueueFence->SetEventOnCompletion(d3d.graphicsQueueFenceCounter, d3d.graphicsQueueFenceEvent) == S_OK);
         assert(WaitForSingleObjectEx(d3d.graphicsQueueFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
     }
 }
 
 void d3dTransferQueueStartRecording() {
-    assert(d3d.transferCmdAllocator->Reset());
-    assert(d3d.transferCmdList->Reset(d3d.transferCmdAllocator, nullptr));
+    assert(d3d.transferCmdAllocator->Reset() == S_OK);
+    assert(d3d.transferCmdList->Reset(d3d.transferCmdAllocator, nullptr) == S_OK);
 }
 
 void d3dTransferQueueSubmitRecording() {
-    assert(d3d.transferCmdList->Close());
+    assert(d3d.transferCmdList->Close() == S_OK);
     d3d.transferQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.transferCmdList);
 }
 
@@ -573,7 +557,7 @@ void d3dTransferQueueWait() {
     d3d.transferQueueFenceCounter += 1;
     d3d.transferQueue->Signal(d3d.transferQueueFence, d3d.transferQueueFenceCounter);
     if (d3d.transferQueueFence->GetCompletedValue() < d3d.transferQueueFenceCounter) {
-        assert(d3d.transferQueueFence->SetEventOnCompletion(d3d.transferQueueFenceCounter, d3d.transferQueueFenceEvent));
+        assert(d3d.transferQueueFence->SetEventOnCompletion(d3d.transferQueueFenceCounter, d3d.transferQueueFenceEvent) == S_OK);
         assert(WaitForSingleObjectEx(d3d.transferQueueFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
     }
 }
@@ -585,11 +569,11 @@ void d3dMessageCallback(D3D12_MESSAGE_CATEGORY category, D3D12_MESSAGE_SEVERITY 
 }
 
 void d3dInit(bool debug) {
-    uint32 factoryFlags = 0;
+    uint factoryFlags = 0;
     if (debug) {
         factoryFlags = DXGI_CREATE_FACTORY_DEBUG;
         ID3D12Debug1* debug;
-        assert(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)));
+        assert(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)) == S_OK);
         debug->EnableDebugLayer();
         // d3d.debug->SetEnableGPUBasedValidation(true);
         // d3d.debug->SetEnableSynchronizedCommandQueueValidation(true);
@@ -599,27 +583,27 @@ void d3dInit(bool debug) {
     DXGI_ADAPTER_DESC dxgiAdapterDesc = {};
     DXGI_OUTPUT_DESC1 dxgiOutputDesc = {};
 
-    assert(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&dxgiFactory)));
-    assert(dxgiFactory->EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&d3d.dxgiAdapter)));
-    assert(D3D12CreateDevice(d3d.dxgiAdapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&d3d.device)));
+    assert(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&dxgiFactory)) == S_OK);
+    assert(dxgiFactory->EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&d3d.dxgiAdapter)) == S_OK);
+    assert(D3D12CreateDevice(d3d.dxgiAdapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&d3d.device)) == S_OK);
     if (debug) {
         ID3D12InfoQueue1* infoQueue;
-        assert(d3d.device->QueryInterface(IID_PPV_ARGS(&infoQueue)));
+        assert(d3d.device->QueryInterface(IID_PPV_ARGS(&infoQueue)) == S_OK);
         DWORD callbackCookie;
-        assert(infoQueue->RegisterMessageCallback(d3dMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &callbackCookie));
+        assert(infoQueue->RegisterMessageCallback(d3dMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &callbackCookie) == S_OK);
     }
-    assert(d3d.dxgiAdapter->GetDesc(&dxgiAdapterDesc));
-    assert(d3d.dxgiAdapter->EnumOutputs(0, (IDXGIOutput**)&d3d.dxgiOutput));
-    assert(d3d.dxgiOutput->GetDesc1(&dxgiOutputDesc));
+    assert(d3d.dxgiAdapter->GetDesc(&dxgiAdapterDesc) == S_OK);
+    assert(d3d.dxgiAdapter->EnumOutputs(0, (IDXGIOutput**)&d3d.dxgiOutput) == S_OK);
+    assert(d3d.dxgiOutput->GetDesc1(&dxgiOutputDesc) == S_OK);
     settings.hdr = (dxgiOutputDesc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
     {
         D3D12_FEATURE_DATA_D3D12_OPTIONS resourceBindingTier = {};
         D3D12_FEATURE_DATA_SHADER_MODEL shaderModel = {D3D_SHADER_MODEL_6_6};
         D3D12_FEATURE_DATA_D3D12_OPTIONS5 rayTracing = {};
         // D3D12_FEATURE_DATA_D3D12_OPTIONS16 gpuUploadHeap = {};
-        assert(d3d.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &resourceBindingTier, sizeof(resourceBindingTier)));
-        assert(d3d.device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &shaderModel, sizeof(shaderModel)));
-        assert(d3d.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &rayTracing, sizeof(rayTracing)));
+        assert(d3d.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &resourceBindingTier, sizeof(resourceBindingTier)) == S_OK);
+        assert(d3d.device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &shaderModel, sizeof(shaderModel)) == S_OK);
+        assert(d3d.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &rayTracing, sizeof(rayTracing)) == S_OK);
         // assert(d3d.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS16, &gpuUploadHeap, sizeof(gpuUploadHeap)));
         assert(resourceBindingTier.ResourceBindingTier == D3D12_RESOURCE_BINDING_TIER_3);
         assert(shaderModel.HighestShaderModel == D3D_SHADER_MODEL_6_6);
@@ -628,28 +612,28 @@ void d3dInit(bool debug) {
     }
     {
         D3D12_COMMAND_QUEUE_DESC graphicsQueueDesc = {.Type = D3D12_COMMAND_LIST_TYPE_DIRECT, .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE};
-        assert(d3d.device->CreateCommandQueue(&graphicsQueueDesc, IID_PPV_ARGS(&d3d.graphicsQueue)));
+        assert(d3d.device->CreateCommandQueue(&graphicsQueueDesc, IID_PPV_ARGS(&d3d.graphicsQueue)) == S_OK);
         D3D12_COMMAND_QUEUE_DESC transferQueueDesc = {.Type = D3D12_COMMAND_LIST_TYPE_DIRECT, .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE};
-        assert(d3d.device->CreateCommandQueue(&transferQueueDesc, IID_PPV_ARGS(&d3d.transferQueue)));
+        assert(d3d.device->CreateCommandQueue(&transferQueueDesc, IID_PPV_ARGS(&d3d.transferQueue)) == S_OK);
 
-        assert(d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&d3d.graphicsCmdAllocator)));
-        assert(d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&d3d.transferCmdAllocator)));
+        assert(d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&d3d.graphicsCmdAllocator)) == S_OK);
+        assert(d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&d3d.transferCmdAllocator)) == S_OK);
 
-        assert(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.graphicsCmdAllocator, nullptr, IID_PPV_ARGS(&d3d.graphicsCmdList)));
-        assert(d3d.graphicsCmdList->Close());
-        assert(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.transferCmdAllocator, nullptr, IID_PPV_ARGS(&d3d.transferCmdList)));
-        assert(d3d.transferCmdList->Close());
+        assert(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.graphicsCmdAllocator, nullptr, IID_PPV_ARGS(&d3d.graphicsCmdList)) == S_OK);
+        assert(d3d.graphicsCmdList->Close() == S_OK);
+        assert(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.transferCmdAllocator, nullptr, IID_PPV_ARGS(&d3d.transferCmdList)) == S_OK);
+        assert(d3d.transferCmdList->Close() == S_OK);
 
-        assert(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.graphicsQueueFence)));
+        assert(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.graphicsQueueFence)) == S_OK);
         d3d.graphicsQueueFenceEvent = CreateEventA(nullptr, false, false, nullptr);
         assert(d3d.graphicsQueueFenceEvent);
-        assert(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.transferQueueFence)));
+        assert(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.transferQueueFence)) == S_OK);
         d3d.transferQueueFenceEvent = CreateEventA(nullptr, false, false, nullptr);
         assert(d3d.transferQueueFenceEvent);
     }
     {
         d3d.swapChainFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
-        uint32 dxgiModeCount = 0;
+        uint dxgiModeCount = 0;
         d3d.dxgiOutput->GetDisplayModeList(d3d.swapChainFormat, 0, &dxgiModeCount, nullptr);
         std::vector<DXGI_MODE_DESC> dxgiModes(dxgiModeCount);
         d3d.dxgiOutput->GetDisplayModeList(d3d.swapChainFormat, 0, &dxgiModeCount, dxgiModes.data());
@@ -663,8 +647,8 @@ void d3dInit(bool debug) {
             }
         }
         DXGI_SWAP_CHAIN_DESC1 desc = {
-            .Width = (uint32)settings.renderW,
-            .Height = (uint32)settings.renderH,
+            .Width = (uint)settings.renderW,
+            .Height = (uint)settings.renderH,
             .Format = d3d.swapChainFormat,
             .SampleDesc = {.Count = 1},
             .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_BACK_BUFFER,
@@ -674,13 +658,13 @@ void d3dInit(bool debug) {
             .AlphaMode = DXGI_ALPHA_MODE_IGNORE,
             .Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH,
         };
-        assert(dxgiFactory->CreateSwapChainForHwnd(d3d.graphicsQueue, window.hwnd, &desc, nullptr, nullptr, (IDXGISwapChain1**)&d3d.swapChain));
+        assert(dxgiFactory->CreateSwapChainForHwnd(d3d.graphicsQueue, window.hwnd, &desc, nullptr, nullptr, (IDXGISwapChain1**)&d3d.swapChain) == S_OK);
 
         DXGI_COLOR_SPACE_TYPE colorSpace = settings.hdr ? DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
-        assert(d3d.swapChain->SetColorSpace1(colorSpace));
-        for (uint32 imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
+        assert(d3d.swapChain->SetColorSpace1(colorSpace) == S_OK);
+        for (uint imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
             ID3D12Resource** image = &d3d.swapChainImages[imageIndex];
-            assert(d3d.swapChain->GetBuffer(imageIndex, IID_PPV_ARGS(image)));
+            assert(d3d.swapChain->GetBuffer(imageIndex, IID_PPV_ARGS(image)) == S_OK);
             (*image)->SetName(std::format(L"swapChain{}", imageIndex).c_str());
         }
 
@@ -688,12 +672,12 @@ void d3dInit(bool debug) {
     }
     {
         D3D12_DESCRIPTOR_HEAP_DESC rtvDescriptorHeapDesc = {.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV, .NumDescriptors = 16, .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE};
-        assert(d3d.device->CreateDescriptorHeap(&rtvDescriptorHeapDesc, IID_PPV_ARGS(&d3d.rtvDescriptorHeap)));
+        assert(d3d.device->CreateDescriptorHeap(&rtvDescriptorHeapDesc, IID_PPV_ARGS(&d3d.rtvDescriptorHeap)) == S_OK);
         d3d.rtvDescriptorCount = 0;
         d3d.rtvDescriptorSize = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-        for (uint32 imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
+        for (uint imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
             ID3D12Resource** image = &d3d.swapChainImages[imageIndex];
-            uint32 offset = d3d.rtvDescriptorSize * d3d.rtvDescriptorCount;
+            uint offset = d3d.rtvDescriptorSize * d3d.rtvDescriptorCount;
             d3d.swapChainImageRTVDescriptors[imageIndex] = {d3d.rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
             d3d.device->CreateRenderTargetView(*image, nullptr, d3d.swapChainImageRTVDescriptors[imageIndex]);
             d3d.rtvDescriptorCount += 1;
@@ -702,17 +686,17 @@ void d3dInit(bool debug) {
         d3d.cbvSrvUavDescriptorCapacity = 1024;
         d3d.cbvSrvUavDescriptorSize = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         D3D12_DESCRIPTOR_HEAP_DESC cbvSrvUavDescriptorHeapDesc = {.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, .NumDescriptors = d3d.cbvSrvUavDescriptorCapacity, .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
-        assert(d3d.device->CreateDescriptorHeap(&cbvSrvUavDescriptorHeapDesc, IID_PPV_ARGS(&d3d.cbvSrvUavDescriptorHeap)));
+        assert(d3d.device->CreateDescriptorHeap(&cbvSrvUavDescriptorHeapDesc, IID_PPV_ARGS(&d3d.cbvSrvUavDescriptorHeap)) == S_OK);
     }
     {
         D3D12MA::ALLOCATOR_DESC allocatorDesc = {.Flags = D3D12MA::ALLOCATOR_FLAG_NONE, .pDevice = d3d.device, .pAdapter = d3d.dxgiAdapter};
-        assert(D3D12MA::CreateAllocator(&allocatorDesc, &d3d.allocator));
+        assert(D3D12MA::CreateAllocator(&allocatorDesc, &d3d.allocator) == S_OK);
     }
     {
         struct BufferDesc {
             D3D12MA::Allocation** buffer;
             char** bufferPtr;
-            uint32 size;
+            uint size;
             D3D12_HEAP_TYPE heapType;
             D3D12_RESOURCE_FLAGS flags;
             D3D12_RESOURCE_STATES initState;
@@ -735,10 +719,10 @@ void d3dInit(bool debug) {
         for (BufferDesc& desc : descs) {
             D3D12_RESOURCE_DESC bufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = desc.size, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = desc.flags};
             D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = desc.heapType};
-            assert(d3d.allocator->CreateResource(&allocationDesc, &bufferDesc, desc.initState, nullptr, desc.buffer, {}, nullptr));
+            assert(d3d.allocator->CreateResource(&allocationDesc, &bufferDesc, desc.initState, nullptr, desc.buffer, {}, nullptr) == S_OK);
             (*desc.buffer)->GetResource()->SetName(desc.name);
             if (desc.bufferPtr) {
-                assert((*desc.buffer)->GetResource()->Map(0, nullptr, (void**)desc.bufferPtr));
+                assert((*desc.buffer)->GetResource()->Map(0, nullptr, (void**)desc.bufferPtr) == S_OK);
             }
         }
         d3d.stagingBufferGPUAddress = d3d.stagingBuffer->GetResource()->GetGPUVirtualAddress();
@@ -757,7 +741,7 @@ void d3dInit(bool debug) {
         };
 
         D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-        assert(d3d.allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr));
+        assert(d3d.allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr) == S_OK);
         d3d.renderTexture->GetResource()->SetName(L"renderTexture");
         d3d.renderTextureFormat = renderTextureDesc.Format;
     }
@@ -781,21 +765,21 @@ void d3dInit(bool debug) {
             const wchar_t* name;
         } descs[] = {
             {.texture = &d3d.imguiTexture,
-             .desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint64)imguiTextureWidth, .Height = (uint32)imguiTextureHeight, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}},
+             .desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint64)imguiTextureWidth, .Height = (uint)imguiTextureHeight, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}},
              .data = imguiTextureData,
              .name = L"imguiTexture"},
         };
         for (TextureDesc& desc : descs) {
             D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-            assert(d3d.allocator->CreateResource(&allocationDesc, &desc.desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, desc.texture, {}, nullptr));
+            assert(d3d.allocator->CreateResource(&allocationDesc, &desc.desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, desc.texture, {}, nullptr) == S_OK);
             (*desc.texture)->GetResource()->SetName(desc.name);
         }
         uint64 stagingBufferOffset = 0;
         d3dTransferQueueStartRecording();
         for (TextureDesc& desc : descs) {
-            const uint32 maxMipmapCount = 16;
+            const uint maxMipmapCount = 16;
             D3D12_PLACED_SUBRESOURCE_FOOTPRINT mipmapFootPrints[maxMipmapCount] = {};
-            uint32 mipmapRowCounts[maxMipmapCount] = {};
+            uint mipmapRowCounts[maxMipmapCount] = {};
             uint64 mipmapRowSizes[maxMipmapCount] = {};
             uint64 textureSize = 0;
             d3d.device->GetCopyableFootprints(&desc.desc, 0, desc.desc.MipLevels, 0, mipmapFootPrints, mipmapRowCounts, mipmapRowSizes, &textureSize);
@@ -807,9 +791,9 @@ void d3dInit(bool debug) {
                 stagingBufferOffset = 0;
             }
             uint64 dataOffset = 0;
-            for (uint32 mip = 0; mip < desc.desc.MipLevels; mip++) {
+            for (uint mip = 0; mip < desc.desc.MipLevels; mip++) {
                 uint64 mipmapStagingBufferOffset = stagingBufferOffset + mipmapFootPrints[mip].Offset;
-                for (uint32 row = 0; row < mipmapRowCounts[mip]; row++) {
+                for (uint row = 0; row < mipmapRowCounts[mip]; row++) {
                     memcpy(d3d.stagingBufferPtr + mipmapStagingBufferOffset, desc.data + dataOffset, mipmapRowSizes[mip]);
                     mipmapStagingBufferOffset += mipmapFootPrints[mip].Footprint.RowPitch;
                     dataOffset += mipmapRowSizes[mip];
@@ -831,13 +815,13 @@ void d3dCompilePipelines() {
     {
         std::vector<unsigned char> rtByteCode = fileRead(exeDir / "renderScene.cso");
         assert(rtByteCode.size() > 0);
-        assert(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.renderSceneRootSig)));
+        assert(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.renderSceneRootSig)) == S_OK);
         D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"primaryRayMiss"}, {L"primaryRayHitGroup"}, {L"primaryRayClosestHit"}, {L"secondaryRayMiss"}, {L"secondaryRayHitGroup"}, {L"secondaryRayClosestHit"}};
         D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
         D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
         D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
-        assert(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.renderSceneSO)));
-        assert(d3d.renderSceneSO->QueryInterface(IID_PPV_ARGS(&d3d.renderSceneSOProps)));
+        assert(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.renderSceneSO)) == S_OK);
+        assert(d3d.renderSceneSO->QueryInterface(IID_PPV_ARGS(&d3d.renderSceneSOProps)) == S_OK);
         assert(d3d.renderSceneRayGenID = d3d.renderSceneSOProps->GetShaderIdentifier(L"rayGen"));
         assert(d3d.renderScenePrimaryRayMissID = d3d.renderSceneSOProps->GetShaderIdentifier(L"primaryRayMiss"));
         assert(d3d.renderScenePrimaryRayHitGroupID = d3d.renderSceneSOProps->GetShaderIdentifier(L"primaryRayHitGroup"));
@@ -847,13 +831,13 @@ void d3dCompilePipelines() {
     {
         std::vector<unsigned char> rtByteCode = fileRead(exeDir / "collisionDetection.cso");
         assert(rtByteCode.size() > 0);
-        assert(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.collisionDetectionRootSig)));
+        assert(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.collisionDetectionRootSig)) == S_OK);
         D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"miss"}, {L"hitGroup"}, {L"closestHit"}};
         D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
         D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
         D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
-        assert(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.collisionDetection)));
-        assert(d3d.collisionDetection->QueryInterface(IID_PPV_ARGS(&d3d.collisionDetectionProps)));
+        assert(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.collisionDetection)) == S_OK);
+        assert(d3d.collisionDetection->QueryInterface(IID_PPV_ARGS(&d3d.collisionDetectionProps)) == S_OK);
         assert(d3d.collisionDetectionRayGenID = d3d.collisionDetectionProps->GetShaderIdentifier(L"rayGen"));
         assert(d3d.collisionDetectionMissID = d3d.collisionDetectionProps->GetShaderIdentifier(L"miss"));
         assert(d3d.collisionDetectionHitGroupID = d3d.collisionDetectionProps->GetShaderIdentifier(L"hitGroup"));
@@ -863,7 +847,7 @@ void d3dCompilePipelines() {
         std::vector<unsigned char> psByteCode = fileRead(exeDir / "postProcessPS.cso");
         assert(vsByteCode.size() > 0);
         assert(psByteCode.size() > 0);
-        assert(d3d.device->CreateRootSignature(0, psByteCode.data(), psByteCode.size(), IID_PPV_ARGS(&d3d.postProcessRootSig)));
+        assert(d3d.device->CreateRootSignature(0, psByteCode.data(), psByteCode.size(), IID_PPV_ARGS(&d3d.postProcessRootSig)) == S_OK);
         D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {
             .VS = {vsByteCode.data(), vsByteCode.size()},
             .PS = {psByteCode.data(), psByteCode.size()},
@@ -875,14 +859,14 @@ void d3dCompilePipelines() {
             .RTVFormats = {d3d.swapChainFormat},
             .SampleDesc = {.Count = 1},
         };
-        assert(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.postProcess)));
+        assert(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.postProcess)) == S_OK);
     }
     {
         std::vector<unsigned char> vsByteCode = fileRead(exeDir / "ImGuiVS.cso");
         std::vector<unsigned char> psByteCode = fileRead(exeDir / "ImGuiPS.cso");
         assert(vsByteCode.size() > 0);
         assert(psByteCode.size() > 0);
-        assert(d3d.device->CreateRootSignature(0, vsByteCode.data(), vsByteCode.size(), IID_PPV_ARGS(&d3d.imguiRootSig)));
+        assert(d3d.device->CreateRootSignature(0, vsByteCode.data(), vsByteCode.size(), IID_PPV_ARGS(&d3d.imguiRootSig)) == S_OK);
         D3D12_INPUT_ELEMENT_DESC inputElemDescs[] = {
             {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
             {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -910,24 +894,24 @@ void d3dCompilePipelines() {
             .RTVFormats = {d3d.swapChainFormat},
             .SampleDesc = {.Count = 1},
         };
-        assert(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.imgui)));
+        assert(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.imgui)) == S_OK);
     }
 }
 
-void d3dResizeSwapChain(uint32 width, uint32 height) {
+void d3dResizeSwapChain(uint width, uint height) {
     d3dGraphicsQueueWait();
     for (ID3D12Resource* image : d3d.swapChainImages) { image->Release(); }
-    assert(d3d.swapChain->ResizeBuffers(countof(d3d.swapChainImages), width, height, d3d.swapChainFormat, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH));
-    for (uint32 imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
+    assert(d3d.swapChain->ResizeBuffers(countof(d3d.swapChainImages), width, height, d3d.swapChainFormat, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH) == S_OK);
+    for (uint imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
         ID3D12Resource** image = &d3d.swapChainImages[imageIndex];
-        assert(d3d.swapChain->GetBuffer(imageIndex, IID_PPV_ARGS(image)));
+        assert(d3d.swapChain->GetBuffer(imageIndex, IID_PPV_ARGS(image)) == S_OK);
         (*image)->SetName(std::format(L"swapChain{}", imageIndex).c_str());
         d3d.device->CreateRenderTargetView(*image, nullptr, d3d.swapChainImageRTVDescriptors[imageIndex]);
     }
     d3d.renderTexture->Release();
     D3D12_RESOURCE_DESC renderTextureDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = width, .Height = height, .DepthOrArraySize = 1, .MipLevels = 1, .Format = d3d.renderTextureFormat, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
     D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-    assert(d3d.allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr));
+    assert(d3d.allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr) == S_OK);
     d3d.renderTexture->GetResource()->SetName(L"renderTexture");
 }
 
@@ -938,23 +922,23 @@ static const uint64 settingAll = ~0;
 void applySettings(uint64 settingBits) {
     if (settingBits & settingsHDR) {
         DXGI_OUTPUT_DESC1 dxgiOutputDesc = {};
-        assert(d3d.dxgiOutput->GetDesc1(&dxgiOutputDesc));
+        assert(d3d.dxgiOutput->GetDesc1(&dxgiOutputDesc) == S_OK);
         if (settings.hdr && dxgiOutputDesc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) {
-            assert(d3d.swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020));
+            assert(d3d.swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) == S_OK);
         } else {
-            assert(d3d.swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709));
+            assert(d3d.swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709) == S_OK);
         }
     }
     if (settingBits & settingWindowMode) {
         if (settings.windowMode == WindowModeWindowed) {
-            assert(d3d.swapChain->SetFullscreenState(false, nullptr));
+            assert(d3d.swapChain->SetFullscreenState(false, nullptr) == S_OK);
             DWORD dwStyle = GetWindowLong(window.hwnd, GWL_STYLE);
             MONITORINFO mi = {.cbSize = sizeof(mi)};
             assert(GetMonitorInfo(MonitorFromWindow(window.hwnd, MONITOR_DEFAULTTOPRIMARY), &mi));
             assert(SetWindowLong(window.hwnd, GWL_STYLE, dwStyle | WS_OVERLAPPEDWINDOW) != 0);
             assert(SetWindowPos(window.hwnd, NULL, settings.windowX, settings.windowY, settings.windowW, settings.windowH, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED));
         } else if (settings.windowMode == WindowModeBorderless) {
-            assert(d3d.swapChain->SetFullscreenState(false, nullptr));
+            assert(d3d.swapChain->SetFullscreenState(false, nullptr) == S_OK);
             DWORD dwStyle = GetWindowLong(window.hwnd, GWL_STYLE);
             MONITORINFO mi = {.cbSize = sizeof(mi)};
             assert(GetMonitorInfo(MonitorFromWindow(window.hwnd, MONITOR_DEFAULTTOPRIMARY), &mi));
@@ -962,8 +946,8 @@ void applySettings(uint64 settingBits) {
             assert(SetWindowPos(window.hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_NOOWNERZORDER | SWP_FRAMECHANGED));
         } else if (settings.windowMode == WindowModeFullscreen) {
             DXGI_MODE_DESC dxgiMode = {.Width = settings.windowW, .Height = settings.windowH, .RefreshRate = settings.refreshRate, .Format = d3d.swapChainFormat};
-            assert(d3d.swapChain->ResizeTarget(&dxgiMode));
-            assert(d3d.swapChain->SetFullscreenState(true, nullptr));
+            assert(d3d.swapChain->ResizeTarget(&dxgiMode) == S_OK);
+            assert(d3d.swapChain->SetFullscreenState(true, nullptr) == S_OK);
         }
     }
 }
@@ -1026,11 +1010,27 @@ struct CameraThirdPerson {
     // }
 };
 
+struct ModelImage {
+    D3D12MA::Allocation* gpuData = nullptr;
+};
+
+struct ModelTexture {
+    ModelImage* image = nullptr;
+};
+
+struct ModelMaterial {
+    std::string name;
+    float4 baseColor = {0, 0, 0, 0};
+    ModelTexture* baseColorTexture = nullptr;
+    ;
+};
+
 struct ModelPrimitive {
     std::vector<Vertex> vertices;
-    std::vector<uint32> indices;
-    D3D12MA::Allocation* verticesBuffer;
-    D3D12MA::Allocation* indicesBuffer;
+    std::vector<uint> indices;
+    D3D12MA::Allocation* verticesBuffer = nullptr;
+    D3D12MA::Allocation* indicesBuffer = nullptr;
+    ModelMaterial* material = nullptr;
 };
 
 struct ModelMesh {
@@ -1097,10 +1097,13 @@ struct Model {
     std::vector<ModelNode*> rootNodes;
     std::vector<ModelJoint> joints;
     std::vector<ModelAnimation> animations;
+    std::vector<ModelMaterial> materials;
+    std::vector<ModelTexture> textures;
+    std::vector<ModelImage> images;
 };
 
 struct ModelInstanceAnimationState {
-    uint32 index = 0;
+    uint index = 0;
     double time = 0;
     D3D12MA::Allocation* skinJointsBuffer = nullptr;
     std::vector<std::vector<D3D12MA::Allocation*>> meshPrimitivesVerticesBuffers;
@@ -1109,7 +1112,7 @@ struct ModelInstanceAnimationState {
 };
 
 struct ModelInstance {
-    uint32 index = UINT_MAX;
+    uint index = UINT_MAX;
     ModelInstanceAnimationState animationState;
 };
 
@@ -1160,7 +1163,7 @@ struct SceneEditor {
     CameraEditor camera;
     bool cameraMoving;
     SceneObjectType selectedObjectType;
-    uint32 selectedObjectIndex;
+    uint selectedObjectIndex;
     std::stack<SceneEditorUndo> undos;
 };
 
@@ -1187,18 +1190,88 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
         Model& model = scene.models.emplace_back();
         modelIter = scene.models.end() - 1;
 
+        const std::filesystem::path gltfFilePath = assetsDir / filePath;
+        const std::filesystem::path gltfFileFolderPath = gltfFilePath.parent_path();
         cgltf_options gltfOptions = {};
         cgltf_data* gltfData = nullptr;
-        assert(cgltf_parse_file(&gltfOptions, (assetsDir / filePath).string().c_str(), &gltfData) == cgltf_result_success);
-        assert(cgltf_load_buffers(&gltfOptions, gltfData, nullptr) == cgltf_result_success);
+        cgltf_result gltfParseFileResult = cgltf_parse_file(&gltfOptions, gltfFilePath.string().c_str(), &gltfData);
+        cgltf_result gltfLoadBuffersResult = cgltf_load_buffers(&gltfOptions, gltfData, gltfFilePath.string().c_str());
+        assert(gltfParseFileResult == cgltf_result_success);
+        assert(gltfLoadBuffersResult == cgltf_result_success);
         model.filePath = filePath;
         model.gltfData = gltfData;
-        uint64 stagingBufferOffset = 0;
+
         d3dTransferQueueStartRecording();
-        model.meshes.resize(gltfData->meshes_count);
-        for (uint32 meshIndex = 0; meshIndex < gltfData->meshes_count; meshIndex++) {
+        uint stagingBufferOffset = 0;
+
+        model.images.reserve(gltfData->images_count);
+        for (uint imageIndex = 0; imageIndex < gltfData->images_count; imageIndex++) {
+            cgltf_image& gltfImage = gltfData->images[imageIndex];
+            ModelImage& image = model.images.emplace_back();
+            std::filesystem::path imageFilePath = gltfFileFolderPath / gltfImage.uri;
+            std::filesystem::path imageDDSFilePath = imageFilePath;
+            imageDDSFilePath.replace_extension(".dds");
+            if (std::filesystem::exists(imageDDSFilePath)) {
+                ScratchImage scratchImage;
+                assert(LoadFromDDSFile(imageDDSFilePath.c_str(), DDS_FLAGS_NONE, nullptr, scratchImage) == S_OK);
+                D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+                D3D12_RESOURCE_DESC resourceDesc = {
+                    .Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+                    .Width = (uint)scratchImage.GetMetadata().width,
+                    .Height = (uint)scratchImage.GetMetadata().height,
+                    .DepthOrArraySize = (uint16)scratchImage.GetMetadata().arraySize,
+                    .MipLevels = (uint16)scratchImage.GetMetadata().mipLevels,
+                    .Format = scratchImage.GetMetadata().format,
+                    .SampleDesc = {.Count = 1},
+                };
+                assert(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image.gpuData, {}, nullptr) == S_OK);
+                D3D12_PLACED_SUBRESOURCE_FOOTPRINT mipFootprints[16];
+                uint64 totalSize;
+                d3d.device->GetCopyableFootprints(&resourceDesc, 0, (uint)scratchImage.GetImageCount(), 0, mipFootprints, nullptr, nullptr, &totalSize);
+                stagingBufferOffset = align(stagingBufferOffset, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
+                assert(stagingBufferOffset + totalSize < d3d.stagingBuffer->GetSize());
+                for (uint mipIndex = 0; mipIndex < scratchImage.GetImageCount(); mipIndex++) {
+                    const Image& mip = scratchImage.GetImages()[mipIndex];
+                    memcpy(d3d.stagingBufferPtr + stagingBufferOffset + mipFootprints[mipIndex].Offset, mip.pixels, mip.slicePitch);
+                    D3D12_TEXTURE_COPY_LOCATION copyDst = {.pResource = image.gpuData->GetResource(), .Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, .SubresourceIndex = mipIndex};
+                    D3D12_TEXTURE_COPY_LOCATION copySrc = {.pResource = d3d.stagingBuffer->GetResource(), .Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, .PlacedFootprint = mipFootprints[mipIndex]};
+                    d3d.transferCmdList->CopyTextureRegion(&copyDst, 0, 0, 0, &copySrc, nullptr);
+                }
+                stagingBufferOffset += totalSize;
+                D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = image.gpuData->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
+                d3d.transferCmdList->ResourceBarrier(1, &barrier);
+            } else {
+                assert(false && "Implement");
+                int width, height, channel;
+                unsigned char* imageData = stbi_load(imageFilePath.string().c_str(), &width, &height, &channel, 4);
+                assert(imageData);
+                stbi_image_free(imageData);
+            }
+        }
+        model.textures.reserve(gltfData->textures_count);
+        for (uint textureIndex = 0; textureIndex < gltfData->textures_count; textureIndex++) {
+            cgltf_texture& gltfTexture = gltfData->textures[textureIndex];
+            ModelTexture& texture = model.textures.emplace_back();
+            assertDebug(gltfTexture.image && gltfTexture.sampler);
+            texture.image = &model.images[gltfTexture.image - &gltfData->images[0]];
+        }
+        model.materials.reserve(gltfData->materials_count);
+        for (uint materialIndex = 0; materialIndex < gltfData->materials_count; materialIndex++) {
+            cgltf_material& gltfMaterial = gltfData->materials[materialIndex];
+            ModelMaterial& material = model.materials.emplace_back();
+            if (gltfMaterial.name) material.name = gltfMaterial.name;
+            assertDebug(gltfMaterial.has_pbr_metallic_roughness);
+            material.baseColor = float4(gltfMaterial.pbr_metallic_roughness.base_color_factor);
+            if (gltfMaterial.pbr_metallic_roughness.base_color_texture.texture) {
+                assertDebug(gltfMaterial.pbr_metallic_roughness.base_color_texture.texcoord == 0);
+                assertDebug(!gltfMaterial.pbr_metallic_roughness.base_color_texture.has_transform);
+                material.baseColorTexture = &model.textures[gltfMaterial.pbr_metallic_roughness.base_color_texture.texture - &gltfData->textures[0]];
+            }
+        }
+        model.meshes.reserve(gltfData->meshes_count);
+        for (uint meshIndex = 0; meshIndex < gltfData->meshes_count; meshIndex++) {
             cgltf_mesh& gltfMesh = gltfData->meshes[meshIndex];
-            ModelMesh& mesh = model.meshes[meshIndex];
+            ModelMesh& mesh = model.meshes.emplace_back();
             if (gltfMesh.name) mesh.name = gltfMesh.name;
             mesh.primitives.reserve(gltfMesh.primitives_count);
             for (cgltf_primitive& gltfPrimitive : std::span(gltfMesh.primitives, gltfMesh.primitives_count)) {
@@ -1239,7 +1312,7 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
                 ModelPrimitive& primitive = mesh.primitives.emplace_back();
                 primitive.vertices.reserve(positions->count);
                 primitive.indices.reserve(indices->count);
-                for (uint32 vertexIndex = 0; vertexIndex < positions->count; vertexIndex++) {
+                for (uint vertexIndex = 0; vertexIndex < positions->count; vertexIndex++) {
                     Vertex vertex = {.position = positionsBuffer[vertexIndex], .normal = normalsBuffer[vertexIndex]};
                     if (uvsBuffer) vertex.uv = uvsBuffer[vertexIndex];
                     if (jointIndicesBuffer) {
@@ -1255,15 +1328,18 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
                 if (indices->component_type == cgltf_component_type_r_16u) {
                     primitive.indices.append_range(std::span((uint16*)indicesBuffer, indices->count));
                 } else if (indices->component_type == cgltf_component_type_r_32u) {
-                    primitive.indices.append_range(std::span((uint32*)indicesBuffer, indices->count));
+                    primitive.indices.append_range(std::span((uint*)indicesBuffer, indices->count));
+                }
+                if (gltfPrimitive.material) {
+                    primitive.material = &model.materials[gltfPrimitive.material - gltfData->materials];
                 }
 
                 D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
                 D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
                 resourceDesc.Width = vectorSizeof(primitive.vertices);
-                assert(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &primitive.verticesBuffer, {}, nullptr));
+                assert(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &primitive.verticesBuffer, {}, nullptr) == S_OK);
                 resourceDesc.Width = vectorSizeof(primitive.indices);
-                assert(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &primitive.indicesBuffer, {}, nullptr));
+                assert(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &primitive.indicesBuffer, {}, nullptr) == S_OK);
 
                 memcpy(d3d.stagingBufferPtr + stagingBufferOffset, primitive.vertices.data(), vectorSizeof(primitive.vertices));
                 d3d.transferCmdList->CopyBufferRegion(primitive.verticesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), stagingBufferOffset, vectorSizeof(primitive.vertices));
@@ -1282,7 +1358,7 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
                 barrier.Transition.pResource = primitive.indicesBuffer->GetResource();
                 bufferBarriers.push_back(barrier);
             }
-            d3d.transferCmdList->ResourceBarrier((uint32)bufferBarriers.size(), bufferBarriers.data());
+            d3d.transferCmdList->ResourceBarrier((uint)bufferBarriers.size(), bufferBarriers.data());
 
             std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
             for (ModelPrimitive& primitive : mesh.primitives) {
@@ -1294,40 +1370,40 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
                         .Transform3x4 = 0,
                         .IndexFormat = DXGI_FORMAT_R32_UINT,
                         .VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
-                        .IndexCount = (uint32)primitive.indices.size(),
-                        .VertexCount = (uint32)primitive.vertices.size(),
+                        .IndexCount = (uint)primitive.indices.size(),
+                        .VertexCount = (uint)primitive.vertices.size(),
                         .IndexBuffer = primitive.indicesBuffer->GetResource()->GetGPUVirtualAddress(),
                         .VertexBuffer = {primitive.verticesBuffer->GetResource()->GetGPUVirtualAddress(), sizeof(Vertex)},
                     },
                 };
             }
-            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL, .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE, .NumDescs = (uint32)geometryDescs.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .pGeometryDescs = geometryDescs.data()};
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL, .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE, .NumDescs = (uint)geometryDescs.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .pGeometryDescs = geometryDescs.data()};
             D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
             d3d.device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
 
             D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
             D3D12_RESOURCE_DESC blasBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
             blasBufferDesc.Width = prebuildInfo.ResultDataMaxSizeInBytes;
-            assert(d3d.allocator->CreateResource(&allocationDesc, &blasBufferDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &mesh.blas, {}, nullptr));
+            assert(d3d.allocator->CreateResource(&allocationDesc, &blasBufferDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &mesh.blas, {}, nullptr) == S_OK);
             blasBufferDesc.Width = prebuildInfo.ScratchDataSizeInBytes;
-            assert(d3d.allocator->CreateResource(&allocationDesc, &blasBufferDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &mesh.blasScratch, {}, nullptr));
+            assert(d3d.allocator->CreateResource(&allocationDesc, &blasBufferDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &mesh.blasScratch, {}, nullptr) == S_OK);
             D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = mesh.blas->GetResource()->GetGPUVirtualAddress(), .Inputs = inputs, .ScratchAccelerationStructureData = mesh.blasScratch->GetResource()->GetGPUVirtualAddress()};
             d3d.transferCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
         }
         model.nodes.resize(gltfData->nodes_count);
-        for (uint32 nodeIndex = 0; nodeIndex < gltfData->nodes_count; nodeIndex++) {
+        for (uint nodeIndex = 0; nodeIndex < gltfData->nodes_count; nodeIndex++) {
             cgltf_node& gltfNode = gltfData->nodes[nodeIndex];
             ModelNode& node = model.nodes[nodeIndex];
             if (gltfNode.name) node.name = gltfNode.name;
             if (gltfNode.parent) {
-                uint32 parentNodeIndex = (uint32)(gltfNode.parent - gltfData->nodes);
+                uint parentNodeIndex = (uint)(gltfNode.parent - gltfData->nodes);
                 assertDebug(parentNodeIndex >= 0 && parentNodeIndex < gltfData->nodes_count);
                 node.parent = &model.nodes[parentNodeIndex];
             } else {
                 node.parent = nullptr;
             }
             for (cgltf_node* child : std::span(gltfNode.children, gltfNode.children_count)) {
-                uint32 childNodeIndex = (uint32)(child - gltfData->nodes);
+                uint childNodeIndex = (uint)(child - gltfData->nodes);
                 assertDebug(childNodeIndex >= 0 && childNodeIndex < gltfData->nodes_count);
                 node.children.push_back(&model.nodes[childNodeIndex]);
             }
@@ -1344,7 +1420,7 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
                 node.localTransform = localTransform.toMat();
             }
             if (gltfNode.mesh) {
-                uint32 meshIndex = (uint32)(gltfNode.mesh - gltfData->meshes);
+                uint meshIndex = (uint)(gltfNode.mesh - gltfData->meshes);
                 assertDebug(meshIndex >= 0 && meshIndex < gltfData->meshes_count);
                 node.mesh = &model.meshes[meshIndex];
             } else {
@@ -1353,7 +1429,7 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
         }
         assertDebug(gltfData->scenes_count == 1);
         for (cgltf_node* gltfNode : std::span(gltfData->scene[0].nodes, gltfData->scene[0].nodes_count)) {
-            uint32 nodeIndex = (uint32)(gltfNode - gltfData->nodes);
+            uint nodeIndex = (uint)(gltfNode - gltfData->nodes);
             assertDebug(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
             model.rootNodes.push_back(&model.nodes[nodeIndex]);
         }
@@ -1365,9 +1441,9 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
             assertDebug(gltfSkin.inverse_bind_matrices->stride == 16 * sizeof(float));
             assertDebug(gltfSkin.inverse_bind_matrices->buffer_view->size == 64 * gltfSkin.joints_count);
             model.joints.reserve(gltfSkin.joints_count);
-            for (uint32 jointIndex = 0; jointIndex < gltfSkin.joints_count; jointIndex++) {
+            for (uint jointIndex = 0; jointIndex < gltfSkin.joints_count; jointIndex++) {
                 cgltf_node* jointNode = gltfSkin.joints[jointIndex];
-                uint32 nodeIndex = (uint32)(jointNode - gltfData->nodes);
+                uint nodeIndex = (uint)(jointNode - gltfData->nodes);
                 assertDebug(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
                 float* matsData = (float*)((uint8*)(gltfSkin.inverse_bind_matrices->buffer_view->buffer->data) + gltfSkin.inverse_bind_matrices->offset + gltfSkin.inverse_bind_matrices->buffer_view->offset);
                 matsData += jointIndex * 16;
@@ -1406,7 +1482,7 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
                 assertDebug(inputs[0] == 0.0f);
                 assertDebug(inputs[gltfSampler.input->count - 1] == animation.timeLength);
                 sampler.keyFrames.reserve(gltfSampler.input->count);
-                for (uint32 frameIndex = 0; frameIndex < gltfSampler.input->count; frameIndex++) {
+                for (uint frameIndex = 0; frameIndex < gltfSampler.input->count; frameIndex++) {
                     ModelAnimationSamplerKeyFrame& keyFrame = sampler.keyFrames.emplace_back();
                     keyFrame.time = inputs[frameIndex];
                     if (gltfSampler.output->type == cgltf_type_vec3) {
@@ -1416,12 +1492,11 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
                     }
                 }
             }
-
             animation.channels.reserve(gltfAnimation.channels_count);
             for (cgltf_animation_channel& gltfChannel : std::span(gltfAnimation.channels, gltfAnimation.channels_count)) {
                 ModelAnimationChannel& channel = animation.channels.emplace_back();
-                uint32 nodeIndex = (uint32)(gltfChannel.target_node - gltfData->nodes);
-                uint32 samplerIndex = (uint32)(gltfChannel.sampler - gltfAnimation.samplers);
+                uint nodeIndex = (uint)(gltfChannel.target_node - gltfData->nodes);
+                uint samplerIndex = (uint)(gltfChannel.sampler - gltfAnimation.samplers);
                 assertDebug(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
                 assertDebug(samplerIndex >= 0 && samplerIndex < gltfAnimation.samplers_count);
                 channel.node = &model.nodes[nodeIndex];
@@ -1445,15 +1520,15 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
     }
 
     ModelInstance modelInstance = {};
-    modelInstance.index = (uint32)(modelIter - scene.models.begin());
+    modelInstance.index = (uint)(modelIter - scene.models.begin());
 
     if (modelIter->joints.size() > 0) {
         D3D12MA::ALLOCATION_DESC allocDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
         D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = sizeof(struct Joint) * modelIter->joints.size(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
-        assert(d3d.allocator->CreateResource(&allocDesc, &resourceDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &modelInstance.animationState.skinJointsBuffer, {}, nullptr));
+        assert(d3d.allocator->CreateResource(&allocDesc, &resourceDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &modelInstance.animationState.skinJointsBuffer, {}, nullptr) == S_OK);
         Joint* skinJointsBufferPtr = nullptr;
-        assert(modelInstance.animationState.skinJointsBuffer->GetResource()->Map(0, nullptr, (void**)&skinJointsBufferPtr));
-        for (uint32 jointIndex = 0; jointIndex < modelIter->joints.size(); jointIndex++) {
+        assert(modelInstance.animationState.skinJointsBuffer->GetResource()->Map(0, nullptr, (void**)&skinJointsBufferPtr) == S_OK);
+        for (uint jointIndex = 0; jointIndex < modelIter->joints.size(); jointIndex++) {
             ModelJoint& modelJoint = modelIter->joints[jointIndex];
             skinJointsBufferPtr[jointIndex] = {XMMatrixTranspose(modelJoint.node->globalTransform), XMMatrixTranspose(modelJoint.inverseBindMat)};
         }
@@ -1465,7 +1540,7 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
                 D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
                 D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = primitive.verticesBuffer->GetSize(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
                 D3D12MA::Allocation* verticesBuffer;
-                assert(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &verticesBuffer, {}, nullptr));
+                assert(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &verticesBuffer, {}, nullptr) == S_OK);
                 meshPrimitivesVerticesBuffers.push_back(verticesBuffer);
             }
             {
@@ -1474,9 +1549,9 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
                 D3D12MA::Allocation* blasBuffer;
                 D3D12MA::Allocation* blasScratchBuffer;
                 blasBufferDesc.Width = mesh.blas->GetSize();
-                assert(d3d.allocator->CreateResource(&allocationDesc, &blasBufferDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &blasBuffer, {}, nullptr));
+                assert(d3d.allocator->CreateResource(&allocationDesc, &blasBufferDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &blasBuffer, {}, nullptr) == S_OK);
                 blasBufferDesc.Width = mesh.blasScratch->GetSize();
-                assert(d3d.allocator->CreateResource(&allocationDesc, &blasBufferDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &blasScratchBuffer, {}, nullptr));
+                assert(d3d.allocator->CreateResource(&allocationDesc, &blasBufferDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &blasScratchBuffer, {}, nullptr) == S_OK);
                 modelInstance.animationState.meshBlases.push_back(blasBuffer);
                 modelInstance.animationState.meshBlasScratches.push_back(blasScratchBuffer);
             }
@@ -1487,7 +1562,7 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
 }
 
 ModelInstance sceneLoadModel(const std::filesystem::path& filePath) {
-    if (filePath.extension() == ".glb") {
+    if (filePath.extension() == ".gltf") {
         return sceneLoadModelGLTF(filePath);
     } else {
         assert(false);
@@ -1548,20 +1623,19 @@ void sceneLoad(const std::filesystem::path& path) {
         std::string file;
         skyboxYaml["file"] >> file;
         scene.skybox.hdriTextureFilePath = file;
-        TexMetadata textureMetaData;
-        std::unique_ptr<ScratchImage> textureData = std::make_unique<ScratchImage>();
-        assert(LoadFromDDSFile((assetsDir / scene.skybox.hdriTextureFilePath).c_str(), DDS_FLAGS_NONE, &textureMetaData, *textureData));
+        ScratchImage scratchImage;
+        assert(LoadFromDDSFile((assetsDir / scene.skybox.hdriTextureFilePath).c_str(), DDS_FLAGS_NONE, nullptr, scratchImage) == S_OK);
         D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-        D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint32)textureMetaData.width, .Height = (uint32)textureMetaData.height, .DepthOrArraySize = 1, .MipLevels = 1, .Format = textureMetaData.format, .SampleDesc = {.Count = 1}};
-        assert(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &scene.skybox.hdriTexture, {}, nullptr));
-        assert(scene.skybox.hdriTexture->GetResource()->SetName(L"skyboxHDRITexture"));
+        D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint)scratchImage.GetMetadata().width, .Height = (uint)scratchImage.GetMetadata().height, .DepthOrArraySize = 1, .MipLevels = 1, .Format = scratchImage.GetMetadata().format, .SampleDesc = {.Count = 1}};
+        assert(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &scene.skybox.hdriTexture, {}, nullptr) == S_OK);
+        assert(scene.skybox.hdriTexture->GetResource()->SetName(L"skyboxHDRITexture") == S_OK);
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT copyableFootprint;
         uint64 totalSize;
         d3d.device->GetCopyableFootprints(&resourceDesc, 0, 1, 0, &copyableFootprint, nullptr, nullptr, &totalSize);
-        assert(copyableFootprint.Footprint.RowPitch == textureData->GetImages()->rowPitch);
-        assert(textureData->GetImages()->slicePitch == totalSize);
+        assert(copyableFootprint.Footprint.RowPitch == scratchImage.GetImages()->rowPitch);
+        assert(scratchImage.GetImages()->slicePitch == totalSize);
         assert(totalSize < d3d.stagingBuffer->GetSize());
-        memcpy(d3d.stagingBufferPtr, textureData->GetImages()->pixels, totalSize);
+        memcpy(d3d.stagingBufferPtr, scratchImage.GetImages()->pixels, totalSize);
 
         d3dTransferQueueStartRecording();
         D3D12_TEXTURE_COPY_LOCATION copyDst = {.pResource = scene.skybox.hdriTexture->GetResource(), .Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
@@ -1747,8 +1821,8 @@ static LARGE_INTEGER perfCounters[2] = {};
 static double frameTime = 0;
 static int mouseDeltaRaw[2] = {};
 static float mouseWheel = 0;
-static uint32 mouseSelectX = UINT_MAX;
-static uint32 mouseSelectY = UINT_MAX;
+static uint mouseSelectX = UINT_MAX;
+static uint mouseSelectY = UINT_MAX;
 
 LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lParam) {
     LRESULT result = 0;
@@ -1759,8 +1833,8 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
     case WM_SHOWWINDOW:
     case WM_SIZE:
     case WM_MOVE: {
-        uint32 prevRenderW = settings.renderW;
-        uint32 prevRenderH = settings.renderH;
+        uint prevRenderW = settings.renderW;
+        uint prevRenderH = settings.renderH;
         windowUpdateSizes();
         if (d3d.swapChain && settings.renderW > 0 && settings.renderH > 0 && (prevRenderW != settings.renderW || prevRenderH != settings.renderH)) {
             d3dResizeSwapChain(settings.renderW, settings.renderH);
@@ -1783,7 +1857,7 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
     } break;
     case WM_INPUT: {
         static char rawInputBuffer[256];
-        uint32 size = sizeof(rawInputBuffer);
+        uint size = sizeof(rawInputBuffer);
         if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, rawInputBuffer, &size, sizeof(RAWINPUTHEADER)) < sizeof(rawInputBuffer)) {
             RAWINPUT* raw = (RAWINPUT*)rawInputBuffer;
             if (raw->header.dwType == RIM_TYPEMOUSE) {
@@ -1903,7 +1977,7 @@ void update() {
 
     if (d3d.graphicsQueueFenceCounter > 0) {
         ReadBackBuffer* readBackBuffer = (ReadBackBuffer*)d3d.readBackBufferPtr;
-        uint32 mouseSelectInstanceIndex = readBackBuffer->mouseSelectInstanceIndex;
+        uint mouseSelectInstanceIndex = readBackBuffer->mouseSelectInstanceIndex;
         if (mouseSelectInstanceIndex < scene.tlasInstancesInfos.size()) {
             TLASInstanceInfo& info = scene.tlasInstancesInfos[mouseSelectInstanceIndex];
             scene.editor.selectedObjectType = info.objectType;
@@ -2028,7 +2102,7 @@ void update() {
             ImGui::EndPopup();
         }
         if (ImGui::TreeNode("Static Objects")) {
-            for (uint32 index = 0; StaticObject & object : scene.staticObjects) {
+            for (uint index = 0; StaticObject & object : scene.staticObjects) {
                 if (ImGui::Selectable(object.name.c_str(), scene.editor.selectedObjectType == SceneObjectTypeStaticObject && scene.editor.selectedObjectIndex == index)) {
                     scene.editor.selectedObjectType = SceneObjectTypeStaticObject;
                     scene.editor.selectedObjectIndex = index;
@@ -2050,7 +2124,7 @@ void update() {
             ImGui::TreePop();
         }
         if (ImGui::TreeNode("Dyanmic Objects")) {
-            for (uint32 index = 0; DynamicObject & object : scene.dynamicObjects) {
+            for (uint index = 0; DynamicObject & object : scene.dynamicObjects) {
                 if (ImGui::Selectable(object.name.c_str(), scene.editor.selectedObjectType == SceneObjectTypeDynamicObject && scene.editor.selectedObjectIndex == index)) {
                     scene.editor.selectedObjectType = SceneObjectTypeDynamicObject;
                     scene.editor.selectedObjectIndex = index;
@@ -2091,7 +2165,7 @@ void update() {
         if (ImGui::TreeNode("Model")) {
             ImGui::Text(std::format("File: {}", model->filePath.string()).c_str());
             if (ImGui::TreeNode("Animations")) {
-                for (uint32 animationIndex = 0; animationIndex < model->animations.size(); animationIndex++) {
+                for (uint animationIndex = 0; animationIndex < model->animations.size(); animationIndex++) {
                     ModelAnimation& animation = model->animations[animationIndex];
                     ImGui::Text(std::format("#{}: {}", animationIndex, animation.name).c_str());
                     ImGui::SameLine(ImGui::GetWindowWidth() * 0.8f);
@@ -2215,8 +2289,8 @@ void update() {
         scene.player.camera.lookAt = scene.player.transform.translate + scene.player.camera.lookAtOffset;
     } else {
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().WantCaptureMouse) {
-            mouseSelectX = (uint32)mousePos.x;
-            mouseSelectY = (uint32)mousePos.y;
+            mouseSelectX = (uint)mousePos.x;
+            mouseSelectY = (uint)mousePos.y;
         } else {
             mouseSelectX = UINT_MAX;
             mouseSelectY = UINT_MAX;
@@ -2325,7 +2399,7 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
         float4 frame0 = channel.sampler->keyFrames[0].xyzw;
         float4 frame1 = channel.sampler->keyFrames[1].xyzw;
         float progress = 0;
-        for (uint32 frameIndex = 1; frameIndex < channel.sampler->keyFrames.size(); frameIndex++) {
+        for (uint frameIndex = 1; frameIndex < channel.sampler->keyFrames.size(); frameIndex++) {
             ModelAnimationSamplerKeyFrame& keyFrame = channel.sampler->keyFrames[frameIndex];
             if (modelInstance.animationState.time <= keyFrame.time) {
                 ModelAnimationSamplerKeyFrame& keyFramePrevious = channel.sampler->keyFrames[frameIndex - 1];
@@ -2356,7 +2430,7 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
             }
         }
     }
-    for (uint32 nodeIndex = 0; nodeIndex < model.nodes.size(); nodeIndex++) {
+    for (uint nodeIndex = 0; nodeIndex < model.nodes.size(); nodeIndex++) {
         nodeLocalTransformMats[nodeIndex] = nodeLocalTransforms[nodeIndex].toMat();
         nodeGlobalTransformMats[nodeIndex] = XMMatrixIdentity();
     }
@@ -2378,22 +2452,22 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
             }
         }
     }
-    for (uint32 jointIndex = 0; jointIndex < model.joints.size(); jointIndex++) {
+    for (uint jointIndex = 0; jointIndex < model.joints.size(); jointIndex++) {
         int64 nodeIndex = model.joints[jointIndex].node - &model.nodes[0];
         jointTransformMats[jointIndex] = XMMatrixMultiply(model.joints[jointIndex].inverseBindMat, nodeGlobalTransformMats[nodeIndex]);
     }
 
     static std::vector<D3D12_RESOURCE_BARRIER> barriers;
     barriers.resize(model.meshes.size());
-    for (uint32 meshIndex = 0; meshIndex < model.meshes.size(); meshIndex++) {
+    for (uint meshIndex = 0; meshIndex < model.meshes.size(); meshIndex++) {
         ModelMesh& mesh = model.meshes[meshIndex];
         std::vector<D3D12MA::Allocation*>& verticesBuffers = modelInstance.animationState.meshPrimitivesVerticesBuffers[meshIndex];
-        for (uint32 primitiveIndex = 0; primitiveIndex < mesh.primitives.size(); primitiveIndex++) {
+        for (uint primitiveIndex = 0; primitiveIndex < mesh.primitives.size(); primitiveIndex++) {
             ModelPrimitive& primitive = mesh.primitives[primitiveIndex];
             D3D12MA::Allocation* verticesBuffer = verticesBuffers[primitiveIndex];
             Vertex* verticesBufferPtr = nullptr;
-            assert(verticesBuffer->GetResource()->Map(0, nullptr, (void**)&verticesBufferPtr));
-            for (uint32 vertexIndex = 0; vertexIndex < primitive.vertices.size(); vertexIndex++) {
+            assert(verticesBuffer->GetResource()->Map(0, nullptr, (void**)&verticesBufferPtr) == S_OK);
+            for (uint vertexIndex = 0; vertexIndex < primitive.vertices.size(); vertexIndex++) {
                 Vertex vertex = primitive.vertices[vertexIndex];
                 XMMATRIX skinMat0 = jointTransformMats[vertex.joints.x] * vertex.jointWeights.x;
                 XMMATRIX skinMat1 = jointTransformMats[vertex.joints.y] * vertex.jointWeights.y;
@@ -2410,7 +2484,7 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
         }
         std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
         geometryDescs.resize(verticesBuffers.size());
-        for (uint32 bufferIndex = 0; bufferIndex < verticesBuffers.size(); bufferIndex++) {
+        for (uint bufferIndex = 0; bufferIndex < verticesBuffers.size(); bufferIndex++) {
             D3D12MA::Allocation* verticesBuffer = verticesBuffers[bufferIndex];
             geometryDescs[bufferIndex] = {
                 .Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
@@ -2419,8 +2493,8 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
                     .Transform3x4 = 0,
                     .IndexFormat = DXGI_FORMAT_R32_UINT,
                     .VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
-                    .IndexCount = (uint32)(mesh.primitives[bufferIndex].indices.size()),
-                    .VertexCount = (uint32)(mesh.primitives[bufferIndex].vertices.size()),
+                    .IndexCount = (uint)(mesh.primitives[bufferIndex].indices.size()),
+                    .VertexCount = (uint)(mesh.primitives[bufferIndex].vertices.size()),
                     .IndexBuffer = mesh.primitives[bufferIndex].indicesBuffer->GetResource()->GetGPUVirtualAddress(),
                     .VertexBuffer = {.StartAddress = verticesBuffer->GetResource()->GetGPUVirtualAddress(), .StrideInBytes = sizeof(Vertex)},
                 },
@@ -2429,7 +2503,7 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
         D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS blasInputs = {
             .Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL,
             .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD,
-            .NumDescs = (uint32)geometryDescs.size(),
+            .NumDescs = (uint)geometryDescs.size(),
             .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY,
             .pGeometryDescs = geometryDescs.data(),
         };
@@ -2437,10 +2511,10 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
         d3d.graphicsCmdList->BuildRaytracingAccelerationStructure(&blasDesc, 0, nullptr);
         barriers[meshIndex] = {.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = modelInstance.animationState.meshBlases[meshIndex]->GetResource()}};
     }
-    d3d.graphicsCmdList->ResourceBarrier((uint32)barriers.size(), barriers.data());
+    d3d.graphicsCmdList->ResourceBarrier((uint)barriers.size(), barriers.data());
 }
 
-void addTlasInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransform, SceneObjectType objectType, uint32 objectIndex, uint32 selected) {
+void addTlasInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransform, SceneObjectType objectType, uint objectIndex, uint selected) {
     Model& model = scene.models[modelInstance.index];
     TLASInstanceInfo tlasInstanceInfo = {.objectType = objectType, .objectIndex = objectIndex, .selected = selected, .skinJointsDescriptor = UINT32_MAX};
     if (!model.joints.empty()) {
@@ -2461,10 +2535,10 @@ void addTlasInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
                 memcpy(instanceDesc.Transform, &transform, sizeof(instanceDesc.Transform));
                 scene.tlasInstancesBuildInfos.push_back(instanceDesc);
                 scene.tlasInstancesInfos.push_back(tlasInstanceInfo);
-                for (uint32 primitiveIndex = 0; primitiveIndex < node.mesh->primitives.size(); primitiveIndex++) {
+                for (uint primitiveIndex = 0; primitiveIndex < node.mesh->primitives.size(); primitiveIndex++) {
                     ModelPrimitive& primitive = node.mesh->primitives[primitiveIndex];
-                    D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint32)primitive.vertices.size(), .StructureByteStride = sizeof(struct Vertex)}};
-                    D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint32)primitive.indices.size(), .StructureByteStride = sizeof(uint32)}};
+                    D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)primitive.vertices.size(), .StructureByteStride = sizeof(struct Vertex)}};
+                    D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)primitive.indices.size(), .StructureByteStride = sizeof(uint)}};
                     d3dAppendSrvDescriptor(&vertexBufferDesc, primitiveVerticesBuffers[primitiveIndex]->GetResource());
                     d3dAppendSrvDescriptor(&indexBufferDesc, primitive.indicesBuffer->GetResource());
                 }
@@ -2482,8 +2556,8 @@ void addTlasInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
                 scene.tlasInstancesBuildInfos.push_back(instanceDesc);
                 scene.tlasInstancesInfos.push_back(tlasInstanceInfo);
                 for (ModelPrimitive& primitive : node.mesh->primitives) {
-                    D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint32)primitive.vertices.size(), .StructureByteStride = sizeof(struct Vertex)}};
-                    D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint32)primitive.indices.size(), .StructureByteStride = sizeof(uint32)}};
+                    D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)primitive.vertices.size(), .StructureByteStride = sizeof(struct Vertex)}};
+                    D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)primitive.indices.size(), .StructureByteStride = sizeof(uint)}};
                     d3dAppendSrvDescriptor(&vertexBufferDesc, primitive.verticesBuffer->GetResource());
                     d3dAppendSrvDescriptor(&indexBufferDesc, primitive.indicesBuffer->GetResource());
                 }
@@ -2501,13 +2575,13 @@ void render() {
     d3d.cbvSrvUavDescriptorCount = 0;
     d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap);
 
-    uint32 constantBufferOffset = 0;
+    uint constantBufferOffset = 0;
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC renderTextureSRVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = 1}};
         D3D12_UNORDERED_ACCESS_VIEW_DESC renderTextureUAVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
-        D3D12_CONSTANT_BUFFER_VIEW_DESC renderInfoCBVDesc = {.BufferLocation = d3d.constantBuffer->GetResource()->GetGPUVirtualAddress(), .SizeInBytes = align((uint32)sizeof(struct RenderInfo), D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT)};
+        D3D12_CONSTANT_BUFFER_VIEW_DESC renderInfoCBVDesc = {.BufferLocation = d3d.constantBuffer->GetResource()->GetGPUVirtualAddress(), .SizeInBytes = align((uint)sizeof(struct RenderInfo), D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT)};
         D3D12_SHADER_RESOURCE_VIEW_DESC tlasViewDesc = {.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .RaytracingAccelerationStructure = {.Location = d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress()}};
-        D3D12_SHADER_RESOURCE_VIEW_DESC tlasInstancesInfosDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint32)(d3d.tlasInstancesInfosBuffer->GetSize() / sizeof(struct TLASInstanceInfo)), .StructureByteStride = sizeof(struct TLASInstanceInfo)}};
+        D3D12_SHADER_RESOURCE_VIEW_DESC tlasInstancesInfosDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.tlasInstancesInfosBuffer->GetSize() / sizeof(struct TLASInstanceInfo)), .StructureByteStride = sizeof(struct TLASInstanceInfo)}};
         D3D12_UNORDERED_ACCESS_VIEW_DESC readBackBufferDesc = {.ViewDimension = D3D12_UAV_DIMENSION_BUFFER, .Buffer = {.NumElements = 1, .StructureByteStride = sizeof(struct ReadBackBuffer)}};
         D3D12_SHADER_RESOURCE_VIEW_DESC collisionQueriesDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = 1, .StructureByteStride = sizeof(struct CollisionQuery)}};
         D3D12_UNORDERED_ACCESS_VIEW_DESC collisionQueryResultsDesc = {.ViewDimension = D3D12_UAV_DIMENSION_BUFFER, .Buffer = {.NumElements = 1, .StructureByteStride = sizeof(struct CollisionQueryResult)}};
@@ -2559,15 +2633,15 @@ void render() {
         scene.tlasInstancesBuildInfos.resize(0);
         scene.tlasInstancesInfos.resize(0);
         addTlasInstance(scene.player.model, scene.player.transform.toMat(), SceneObjectTypePlayer, 0, scene.editor.selectedObjectType == SceneObjectTypePlayer);
-        for (uint32 objIndex = 0; objIndex < scene.staticObjects.size(); objIndex++) addTlasInstance(scene.staticObjects[objIndex].model, scene.staticObjects[objIndex].transform.toMat(), SceneObjectTypeStaticObject, objIndex, scene.editor.selectedObjectType == SceneObjectTypeStaticObject && scene.editor.selectedObjectIndex == objIndex);
-        for (uint32 objIndex = 0; objIndex < scene.dynamicObjects.size(); objIndex++) addTlasInstance(scene.dynamicObjects[objIndex].model, scene.dynamicObjects[objIndex].transform.toMat(), SceneObjectTypeDynamicObject, objIndex, scene.editor.selectedObjectType == SceneObjectTypeDynamicObject && scene.editor.selectedObjectIndex == objIndex);
+        for (uint objIndex = 0; objIndex < scene.staticObjects.size(); objIndex++) addTlasInstance(scene.staticObjects[objIndex].model, scene.staticObjects[objIndex].transform.toMat(), SceneObjectTypeStaticObject, objIndex, scene.editor.selectedObjectType == SceneObjectTypeStaticObject && scene.editor.selectedObjectIndex == objIndex);
+        for (uint objIndex = 0; objIndex < scene.dynamicObjects.size(); objIndex++) addTlasInstance(scene.dynamicObjects[objIndex].model, scene.dynamicObjects[objIndex].transform.toMat(), SceneObjectTypeDynamicObject, objIndex, scene.editor.selectedObjectType == SceneObjectTypeDynamicObject && scene.editor.selectedObjectIndex == objIndex);
 
         assert(vectorSizeof(scene.tlasInstancesBuildInfos) < d3d.tlasInstancesBuildInfosBuffer->GetSize());
         assert(vectorSizeof(scene.tlasInstancesInfos) < d3d.tlasInstancesInfosBuffer->GetSize());
         memcpy(d3d.tlasInstancesBuildInfosBufferPtr, scene.tlasInstancesBuildInfos.data(), vectorSizeof(scene.tlasInstancesBuildInfos));
         memcpy(d3d.tlasInstancesInfosBufferPtr, scene.tlasInstancesInfos.data(), vectorSizeof(scene.tlasInstancesInfos));
 
-        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL, .NumDescs = (uint32)scene.tlasInstancesBuildInfos.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .InstanceDescs = d3d.tlasInstancesBuildInfosBuffer->GetResource()->GetGPUVirtualAddress()};
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL, .NumDescs = (uint)scene.tlasInstancesBuildInfos.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .InstanceDescs = d3d.tlasInstancesBuildInfosBuffer->GetResource()->GetGPUVirtualAddress()};
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
         d3d.device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
         assert(prebuildInfo.ResultDataMaxSizeInBytes < d3d.tlasBuffer->GetSize());
@@ -2629,7 +2703,7 @@ void render() {
         d3d.graphicsCmdList->CopyBufferRegion(d3d.collisionQueryResultsBuffer->GetResource(), 0, d3d.collisionQueryResultsUavBuffer->GetResource(), 0, d3d.collisionQueryResultsBuffer->GetSize());
     }
     {
-        uint32 swapChainBackBufferIndex = d3d.swapChain->GetCurrentBackBufferIndex();
+        uint swapChainBackBufferIndex = d3d.swapChain->GetCurrentBackBufferIndex();
         D3D12_RESOURCE_BARRIER swapChainImageTransition = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.swapChainImages[swapChainBackBufferIndex], .StateBefore = D3D12_RESOURCE_STATE_PRESENT, .StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET}};
         d3d.graphicsCmdList->ResourceBarrier(1, &swapChainImageTransition);
         d3d.graphicsCmdList->OMSetRenderTargets(1, &d3d.swapChainImageRTVDescriptors[swapChainBackBufferIndex], false, nullptr);
@@ -2652,24 +2726,24 @@ void render() {
             float blendFactor[] = {0, 0, 0, 0};
             d3d.graphicsCmdList->OMSetBlendFactor(blendFactor);
             d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.imguiRootSig);
-            D3D12_VERTEX_BUFFER_VIEW vertBufferView = {d3d.imguiVertexBuffer->GetResource()->GetGPUVirtualAddress(), (uint32)d3d.imguiVertexBuffer->GetSize(), sizeof(ImDrawVert)};
-            D3D12_INDEX_BUFFER_VIEW indexBufferView = {d3d.imguiIndexBuffer->GetResource()->GetGPUVirtualAddress(), (uint32)d3d.imguiIndexBuffer->GetSize(), DXGI_FORMAT_R16_UINT};
-            assert(d3d.imguiVertexBuffer->GetResource()->Map(0, nullptr, (void**)&d3d.imguiVertexBufferPtr));
-            assert(d3d.imguiIndexBuffer->GetResource()->Map(0, nullptr, (void**)&d3d.imguiIndexBufferPtr));
+            D3D12_VERTEX_BUFFER_VIEW vertBufferView = {d3d.imguiVertexBuffer->GetResource()->GetGPUVirtualAddress(), (uint)d3d.imguiVertexBuffer->GetSize(), sizeof(ImDrawVert)};
+            D3D12_INDEX_BUFFER_VIEW indexBufferView = {d3d.imguiIndexBuffer->GetResource()->GetGPUVirtualAddress(), (uint)d3d.imguiIndexBuffer->GetSize(), DXGI_FORMAT_R16_UINT};
+            assert(d3d.imguiVertexBuffer->GetResource()->Map(0, nullptr, (void**)&d3d.imguiVertexBufferPtr) == S_OK);
+            assert(d3d.imguiIndexBuffer->GetResource()->Map(0, nullptr, (void**)&d3d.imguiIndexBufferPtr) == S_OK);
             d3d.graphicsCmdList->IASetVertexBuffers(0, 1, &vertBufferView);
             d3d.graphicsCmdList->IASetIndexBuffer(&indexBufferView);
             d3d.graphicsCmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            uint32 vertBufferOffset = 0;
-            uint32 indexBufferOffset = 0;
+            uint vertBufferOffset = 0;
+            uint indexBufferOffset = 0;
             const ImDrawData* drawData = ImGui::GetDrawData();
             for (int i = 0; i < drawData->CmdListsCount; i++) {
                 const ImDrawList* dlist = drawData->CmdLists[i];
-                uint32 verticesSize = dlist->VtxBuffer.Size * sizeof(ImDrawVert);
-                uint32 indicesSize = dlist->IdxBuffer.Size * sizeof(ImDrawIdx);
+                uint verticesSize = dlist->VtxBuffer.Size * sizeof(ImDrawVert);
+                uint indicesSize = dlist->IdxBuffer.Size * sizeof(ImDrawIdx);
                 memcpy(d3d.imguiVertexBufferPtr + vertBufferOffset, dlist->VtxBuffer.Data, verticesSize);
                 memcpy(d3d.imguiIndexBufferPtr + indexBufferOffset, dlist->IdxBuffer.Data, indicesSize);
-                uint32 vertexIndex = vertBufferOffset / sizeof(ImDrawVert);
-                uint32 indiceIndex = indexBufferOffset / sizeof(ImDrawIdx);
+                uint vertexIndex = vertBufferOffset / sizeof(ImDrawVert);
+                uint indiceIndex = indexBufferOffset / sizeof(ImDrawIdx);
                 for (int i = 0; i < dlist->CmdBuffer.Size; i++) {
                     const ImDrawCmd& dcmd = dlist->CmdBuffer[i];
                     D3D12_RECT scissor = {(long)dcmd.ClipRect.x, (long)dcmd.ClipRect.y, (long)dcmd.ClipRect.z, (long)dcmd.ClipRect.w};
@@ -2687,7 +2761,7 @@ void render() {
         d3d.graphicsCmdList->ResourceBarrier(1, &swapChainImageTransition);
     }
     d3dGraphicsQueueSubmitRecording();
-    assert(d3d.swapChain->Present(0, 0));
+    assert(d3d.swapChain->Present(0, 0) == S_OK);
     d3dGraphicsQueueWait();
 }
 

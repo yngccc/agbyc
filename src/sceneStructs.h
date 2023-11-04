@@ -27,16 +27,16 @@ struct Joint {
 struct Material {
 #ifdef __cplusplus
     float3 diffuse;
-    int diffuseTextureIndex;
+    uint diffuseTextureIndex;
     float3 emissive;
-    int emissiveTextureIndex;
-    // int normalTextureIndex;
+    uint emissiveTextureIndex;
+    // uint normalTextureIndex;
 #else
     float3 diffuse;
-    int diffuseTextureIndex;
+    uint diffuseTextureIndex;
     float3 emissive;
-    int emissiveTextureIndex;
-    // int normalTextureIndex;
+    uint emissiveTextureIndex;
+    // uint normalTextureIndex;
 #endif
 };
 
@@ -65,9 +65,9 @@ struct RenderInfo {
 #ifdef __cplusplus
     XMMATRIX cameraViewMat;
     XMMATRIX cameraProjMat;
-    uint32 resolution[2];
-    uint32 mouseSelectPosition[2];
-    uint32 hdr;
+    uint resolution[2];
+    uint mouseSelectPosition[2];
+    uint hdr;
     float frameTime;
     float padding0[2];
     float3 playerPosition;
@@ -104,9 +104,9 @@ enum SceneObjectType : uint {
 struct TLASInstanceInfo {
 #ifdef __cplusplus
     SceneObjectType objectType;
-    uint32 objectIndex;
-    uint32 selected;
-    uint32 skinJointsDescriptor;
+    uint objectIndex;
+    uint selected;
+    uint skinJointsDescriptor;
 #else
     SceneObjectType objectType;
     uint objectIndex;
@@ -117,7 +117,7 @@ struct TLASInstanceInfo {
 
 struct ReadBackBuffer {
 #ifdef __cplusplus
-    uint32 mouseSelectInstanceIndex;
+    uint mouseSelectInstanceIndex;
     float3 playerPosition;
     float padding0;
     float3 playerVelocity;
@@ -152,7 +152,7 @@ struct CollisionQuery {
 struct CollisionQueryResult {
 #ifdef __cplusplus
     float3 distance;
-    uint32 instanceIndex;
+    uint instanceIndex;
 #else
     float3 distance;
     uint instanceIndex;

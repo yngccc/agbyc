@@ -1,12 +1,12 @@
 editorCamera:
-  position: [20.539669,5.0479956,10.517791]
-  pitchYaw: [0.22661297,-2.0906467]
+  position: [32.39233,5.4097934,0.12768814]
+  pitchYaw: [0.14686316,-1.9612461]
   fovVertical: 50
   sensitivity: 100
   rotationSensitivity: 0.725
   controllerSensitivity: 1
 player:
-  file: animatedModels/girl/girl.glb
+  file: animatedModels\girl\girl.gltf
   scale: [0.100800045,0.1008,0.100800045]
   rotate: [-0,0,-0,1]
   translate: [1.4318947,0,0]
@@ -18,6 +18,6 @@ player:
   cameraSensitivity: 1
   cameraControllerSensitivity: 1
 skybox:
-  file: skybox/industrial_sunset_02_puresky_4k.dds
+  file: skybox\industrial_sunset_02_puresky_4k.dds
 staticObjects: []
 dynamicObjects: []
