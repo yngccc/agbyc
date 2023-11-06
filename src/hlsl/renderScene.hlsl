@@ -28,7 +28,7 @@ void rayGen() {
     RENDER_TEXTURE_UAV_DESCRIPTOR(renderTexture);
     RENDER_INFO_DESCRIPTOR(renderInfo);
     BVH_DESCRIPTOR(bvh);
-    TLAS_INSTANCE_INFOS_DESCRIPTOR(instanceInfos);
+    TLAS_INSTANCES_INFOS_DESCRIPTOR(instanceInfos);
     SKYBOX_TEXTURE_DESCRIPTOR(skyboxTexture);
 
     RayPayload primaryRayPayload = (RayPayload) 0;
@@ -48,7 +48,7 @@ void rayGen() {
         else {
             float3 lightDir = normalize(float3(1, 1, 1));
             float ndotl = dot(primaryRayPayload.normal, lightDir);
-            renderTexture[pixelIndex] = float4(ndotl, ndotl, ndotl, 0);
+            renderTexture[pixelIndex] = float4(primaryRayPayload.diffuse * ndotl, 0);
         }
     }
     //float3 lightDir = normalize(float3(1, 1, 1));
@@ -79,9 +79,10 @@ void primaryRayMiss(inout RayPayload payload) {
 
 [shader("closesthit")]
 void primaryRayClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
-    uint verticesDescriptorIndex = InstanceID() + GeometryIndex() * 2;
+    uint verticesDescriptorIndex = InstanceID() + GeometryIndex() * 3;
     StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex)];
     StructuredBuffer<uint> indices = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex + 1)];
+    Texture2D<float3> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex + 2)];
     uint triangleIndex = PrimitiveIndex() * 3;
     Vertex vertex0 = vertices[indices[NonUniformResourceIndex(triangleIndex)]];
     Vertex vertex1 = vertices[indices[NonUniformResourceIndex(triangleIndex + 1)]];
@@ -91,10 +92,15 @@ void primaryRayClosestHit(inout RayPayload payload, in BuiltInTriangleIntersecti
     payload.position = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     payload.normal = barycentricsLerp(trigAttribs.barycentrics, vertex0.normal, vertex1.normal, vertex2.normal);
     payload.normal = normalize(mul(normalTransform, payload.normal));
+    float2 uv = barycentricsLerp(trigAttribs.barycentrics, vertex0.uv, vertex1.uv, vertex2.uv);
+    payload.diffuse = baseColorTexture.SampleLevel(bilinearSampler, uv, 0);
+    //BLASGeometryInfo blasGeometryInfo = blasGeometriesInfos[instanceInfo.blasGeometriesOffset + GeometryIndex()];
+    //payload.diffuse = blasGeometryInfo.baseColorFactor.xyz;
     payload.edge = false;
     
-    TLAS_INSTANCE_INFOS_DESCRIPTOR(instanceInfos);
-    TLASInstanceInfo instanceInfo = instanceInfos[InstanceIndex()];
+    TLAS_INSTANCES_INFOS_DESCRIPTOR(instancesInfos);
+    BLAS_GEOMETRIES_INFOS_DESCRIPTOR(blasGeometriesInfos);
+    TLASInstanceInfo instanceInfo = instancesInfos[InstanceIndex()];
     if (instanceInfo.selected) {
         payload.edge = barycentricsOnEdge(trigAttribs.barycentrics, 0.02);
     }

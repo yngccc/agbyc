@@ -8,12 +8,13 @@
 #define RENDER_TEXTURE_UAV_DESCRIPTOR(name) RWTexture2D<float4> name = ResourceDescriptorHeap[1]
 #define RENDER_INFO_DESCRIPTOR(name) ConstantBuffer<RenderInfo> name = ResourceDescriptorHeap[2]
 #define BVH_DESCRIPTOR(name) RaytracingAccelerationStructure name = ResourceDescriptorHeap[3]
-#define TLAS_INSTANCE_INFOS_DESCRIPTOR(name) StructuredBuffer<TLASInstanceInfo> name = ResourceDescriptorHeap[4]
-#define SKYBOX_TEXTURE_DESCRIPTOR(name) Texture2D<float3> name = ResourceDescriptorHeap[5]
-#define READBACK_BUFFER_DESCRIPTOR(name) RWStructuredBuffer<ReadBackBuffer> name = ResourceDescriptorHeap[6]
-#define IMGUI_TEXTURE_DESCRIPTOR(name) Texture2D<float4> name = ResourceDescriptorHeap[7]
-#define COLLISION_QUERIES_DESCRIPTOR(name) StructuredBuffer<CollisionQuery> name = ResourceDescriptorHeap[8]
-#define COLLISION_QUERY_RESULTS_DESCRIPTOR(name) RWStructuredBuffer<CollisionQueryResult> name = ResourceDescriptorHeap[9]
+#define TLAS_INSTANCES_INFOS_DESCRIPTOR(name) StructuredBuffer<TLASInstanceInfo> name = ResourceDescriptorHeap[4]
+#define BLAS_GEOMETRIES_INFOS_DESCRIPTOR(name) StructuredBuffer<BLASGeometryInfo> name = ResourceDescriptorHeap[5]
+#define SKYBOX_TEXTURE_DESCRIPTOR(name) Texture2D<float3> name = ResourceDescriptorHeap[6]
+#define READBACK_BUFFER_DESCRIPTOR(name) RWStructuredBuffer<ReadBackBuffer> name = ResourceDescriptorHeap[7]
+#define IMGUI_TEXTURE_DESCRIPTOR(name) Texture2D<float4> name = ResourceDescriptorHeap[8]
+#define COLLISION_QUERIES_DESCRIPTOR(name) StructuredBuffer<CollisionQuery> name = ResourceDescriptorHeap[9]
+#define COLLISION_QUERY_RESULTS_DESCRIPTOR(name) RWStructuredBuffer<CollisionQueryResult> name = ResourceDescriptorHeap[10]
 
 float srgbToLinear(float e) {
     if (e <= 0.04045) {

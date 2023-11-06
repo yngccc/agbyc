@@ -9,7 +9,7 @@ struct Vertex {
     float3 position;
     float3 normal;
     float2 uv;
-    uint2 joints;
+    uint16_t joints[4];
     float4 jointWeights;
 #endif
 };
@@ -107,11 +107,23 @@ struct TLASInstanceInfo {
     uint objectIndex;
     uint selected;
     uint skinJointsDescriptor;
+    uint blasGeometriesOffset;
+    uint padding[3];
 #else
     SceneObjectType objectType;
     uint objectIndex;
     uint selected;
     uint skinJointsDescriptor;
+    uint blasGeometriesOffset;
+    uint padding[3];
+#endif
+};
+
+struct BLASGeometryInfo {
+#ifdef __cplusplus
+    float4 baseColorFactor;
+#else
+    float4 baseColorFactor;
 #endif
 };
 
