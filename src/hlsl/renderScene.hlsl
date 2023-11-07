@@ -79,6 +79,11 @@ void primaryRayMiss(inout RayPayload payload) {
 
 [shader("closesthit")]
 void primaryRayClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
+    TLAS_INSTANCES_INFOS_DESCRIPTOR(instancesInfos);
+    BLAS_GEOMETRIES_INFOS_DESCRIPTOR(blasGeometriesInfos);
+    TLASInstanceInfo instanceInfo = instancesInfos[InstanceIndex()];
+    BLASGeometryInfo blasGeometryInfo = blasGeometriesInfos[instanceInfo.blasGeometriesOffset + GeometryIndex()];
+
     uint verticesDescriptorIndex = InstanceID() + GeometryIndex() * 3;
     StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex)];
     StructuredBuffer<uint> indices = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex + 1)];
@@ -87,6 +92,7 @@ void primaryRayClosestHit(inout RayPayload payload, in BuiltInTriangleIntersecti
     Vertex vertex0 = vertices[indices[NonUniformResourceIndex(triangleIndex)]];
     Vertex vertex1 = vertices[indices[NonUniformResourceIndex(triangleIndex + 1)]];
     Vertex vertex2 = vertices[indices[NonUniformResourceIndex(triangleIndex + 2)]];
+
     float3x4 transform = ObjectToWorld3x4();
     float3x3 normalTransform = float3x3(transform[0].xyz, transform[1].xyz, transform[2].xyz);
     payload.position = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
@@ -94,13 +100,9 @@ void primaryRayClosestHit(inout RayPayload payload, in BuiltInTriangleIntersecti
     payload.normal = normalize(mul(normalTransform, payload.normal));
     float2 uv = barycentricsLerp(trigAttribs.barycentrics, vertex0.uv, vertex1.uv, vertex2.uv);
     payload.diffuse = baseColorTexture.SampleLevel(bilinearSampler, uv, 0);
-    //BLASGeometryInfo blasGeometryInfo = blasGeometriesInfos[instanceInfo.blasGeometriesOffset + GeometryIndex()];
-    //payload.diffuse = blasGeometryInfo.baseColorFactor.xyz;
+    payload.diffuse *= blasGeometryInfo.baseColorFactor.xyz;
     payload.edge = false;
     
-    TLAS_INSTANCES_INFOS_DESCRIPTOR(instancesInfos);
-    BLAS_GEOMETRIES_INFOS_DESCRIPTOR(blasGeometriesInfos);
-    TLASInstanceInfo instanceInfo = instancesInfos[InstanceIndex()];
     if (instanceInfo.selected) {
         payload.edge = barycentricsOnEdge(trigAttribs.barycentrics, 0.02);
     }

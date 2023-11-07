@@ -28,8 +28,8 @@ VSOutput vertexShader(float2 translate : POSITION, float2 texCoord : TEXCOORD, f
 [RootSignature(rootSig)]
 float4 pixelShader(VSOutput vsOutput) : SV_TARGET {
 	RENDER_INFO_DESCRIPTOR(renderInfo);
-	IMGUI_TEXTURE_DESCRIPTOR(imguiTexture);
-	float4 output = vsOutput.color * imguiTexture.Sample(textureSampler, vsOutput.texCoord);
+	IMGUI_IMAGE_DESCRIPTOR(imguiImage);
+	float4 output = vsOutput.color * imguiImage.Sample(textureSampler, vsOutput.texCoord);
 	if (renderInfo.hdr) {
 		output.rgb = srgbToLinear(output.rgb);
 		output.rgb = bt709To2020(output.rgb);

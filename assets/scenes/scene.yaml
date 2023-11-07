@@ -1,12 +1,12 @@
 editorCamera:
-  position: [-22.1955,-2.028856,-15.81098]
-  pitchYaw: [-0.09963649,1.5230024]
+  position: [1.6290454,0.10987642,-12.3475485]
+  pitchYaw: [0.07871352,-0.52874416]
   fovVertical: 50
-  sensitivity: 74.833
+  sensitivity: 10
   rotationSensitivity: 0.725
   controllerSensitivity: 1
 player:
-  file: animatedModels\girl\girl.gltf
+  file: animatedModels\xbot\xbot.gltf
   scale: [0.1,0.1,0.1]
   rotate: [-0,0,-0,1]
   translate: [1.4318947,0,-12.054222]

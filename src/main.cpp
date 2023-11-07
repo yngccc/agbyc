@@ -446,11 +446,14 @@ struct D3D {
     D3D12MA::Allocation* renderTexture;
     DXGI_FORMAT renderTextureFormat;
 
-    D3D12MA::Allocation* imguiTexture;
+    D3D12MA::Allocation* imguiImage;
     D3D12MA::Allocation* imguiVertexBuffer;
     uint8* imguiVertexBufferPtr;
     D3D12MA::Allocation* imguiIndexBuffer;
     uint8* imguiIndexBufferPtr;
+
+    D3D12MA::Allocation* defaultMaterialBaseColorImage;
+    D3D12_SHADER_RESOURCE_VIEW_DESC defaultMaterialBaseColorImageSRVDesc;
 
     D3D12MA::Allocation* tlasInstancesBuildInfosBuffer;
     D3D12MA::Allocation* tlasInstancesInfosBuffer;
@@ -498,7 +501,7 @@ struct D3DDescriptor {
     D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle;
 };
 
-D3DDescriptor d3dAppendCbvDescriptor(D3D12_CONSTANT_BUFFER_VIEW_DESC* constantBufferViewDesc) {
+D3DDescriptor d3dAppendCBVDescriptor(D3D12_CONSTANT_BUFFER_VIEW_DESC* constantBufferViewDesc) {
     assert(d3d.cbvSrvUavDescriptorCount < d3d.cbvSrvUavDescriptorCapacity);
     uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
     D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
@@ -508,7 +511,7 @@ D3DDescriptor d3dAppendCbvDescriptor(D3D12_CONSTANT_BUFFER_VIEW_DESC* constantBu
     return {cpuHandle, gpuHandle};
 }
 
-D3DDescriptor d3dAppendSrvDescriptor(D3D12_SHADER_RESOURCE_VIEW_DESC* resourceViewDesc, ID3D12Resource* resource) {
+D3DDescriptor d3dAppendSRVDescriptor(D3D12_SHADER_RESOURCE_VIEW_DESC* resourceViewDesc, ID3D12Resource* resource) {
     assert(d3d.cbvSrvUavDescriptorCount < d3d.cbvSrvUavDescriptorCapacity);
     uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
     D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
@@ -518,7 +521,7 @@ D3DDescriptor d3dAppendSrvDescriptor(D3D12_SHADER_RESOURCE_VIEW_DESC* resourceVi
     return {cpuHandle, gpuHandle};
 }
 
-D3DDescriptor d3dAppendUavDescriptor(D3D12_UNORDERED_ACCESS_VIEW_DESC* unorderedAccessViewDesc, ID3D12Resource* resource) {
+D3DDescriptor d3dAppendUAVDescriptor(D3D12_UNORDERED_ACCESS_VIEW_DESC* unorderedAccessViewDesc, ID3D12Resource* resource) {
     assert(d3d.cbvSrvUavDescriptorCount < d3d.cbvSrvUavDescriptorCapacity);
     uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
     D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
@@ -582,6 +585,7 @@ D3D12MA::Allocation* d3dCreate2DImage(const D3D12_RESOURCE_DESC& resourceDesc, D
     uint64 rowSizes[16];
     uint64 requiredSize;
     d3d.device->GetCopyableFootprints(&resourceDesc, 0, resourceDesc.MipLevels, 0, mipFootprints, rowCounts, rowSizes, &requiredSize);
+    assert(d3d.stagingBufferOffset + requiredSize < d3d.stagingBuffer->GetSize());
     for (uint mipIndex = 0; mipIndex < resourceDesc.MipLevels; mipIndex++) {
         mipFootprints[mipIndex].Offset += d3d.stagingBufferOffset;
     }
@@ -606,6 +610,7 @@ D3D12MA::Allocation* d3dCreate2DImageDDS(const std::filesystem::path& ddsFilePat
     uint64 requiredSize;
     D3D12_SUBRESOURCE_DATA srcData[16];
     d3d.device->GetCopyableFootprints(&resourceDesc, 0, resourceDesc.MipLevels, 0, mipFootprints, rowCounts, rowSizes, &requiredSize);
+    assert(d3d.stagingBufferOffset + requiredSize < d3d.stagingBuffer->GetSize());
     for (uint mipIndex = 0; mipIndex < scratchImageInfo.mipLevels; mipIndex++) {
         mipFootprints[mipIndex].Offset += d3d.stagingBufferOffset;
         const Image& image = scratchImage.GetImages()[mipIndex];
@@ -803,17 +808,28 @@ void d3dInit(bool debug) {
         io.FontGlobalScale = (float)settings.renderH / 1000.0f;
         assert(io.Fonts->AddFontDefault());
 
-        uint8* imguiTextureData;
-        int imguiTextureWidth, imguiTextureHeight;
-        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&imguiTextureData, &imguiTextureWidth, &imguiTextureHeight);
-
         d3dTransferQueueStartRecording();
         d3d.stagingBufferOffset = 0;
-        D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint64)imguiTextureWidth, .Height = (uint)imguiTextureHeight, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
-        D3D12_SUBRESOURCE_DATA imageMip = {.pData = imguiTextureData, .RowPitch = imguiTextureWidth * 4, .SlicePitch = imguiTextureWidth * imguiTextureHeight * 4};
-        d3d.imguiTexture = d3dCreate2DImage(desc, &imageMip);
-        D3D12_RESOURCE_BARRIER textureBarrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.imguiTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}};
-        d3d.transferCmdList->ResourceBarrier(1, &textureBarrier);
+        {
+            uint8* imguiTextureData;
+            int imguiTextureWidth, imguiTextureHeight;
+            ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&imguiTextureData, &imguiTextureWidth, &imguiTextureHeight);
+            D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint64)imguiTextureWidth, .Height = (uint)imguiTextureHeight, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
+            D3D12_SUBRESOURCE_DATA data = {.pData = imguiTextureData, .RowPitch = imguiTextureWidth * 4, .SlicePitch = imguiTextureWidth * imguiTextureHeight * 4};
+            d3d.imguiImage = d3dCreate2DImage(desc, &data);
+        }
+        {
+            uint8_4 defaultMaterialBaseColorImage[4] = {{255, 255, 255, 255}, {255, 255, 255, 255}, {255, 255, 255, 255}, {255, 255, 255, 255}};
+            D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = 2, .Height = 2, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
+            D3D12_SUBRESOURCE_DATA data = {.pData = defaultMaterialBaseColorImage, .RowPitch = 8, .SlicePitch = 16};
+            d3d.defaultMaterialBaseColorImage = d3dCreate2DImage(desc, &data);
+            d3d.defaultMaterialBaseColorImageSRVDesc = {.Format = desc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = desc.MipLevels}};
+        }
+        D3D12_RESOURCE_BARRIER barriers[2] = {
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.imguiImage->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.defaultMaterialBaseColorImage->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
+        };
+        d3d.transferCmdList->ResourceBarrier(2, barriers);
         d3dTransferQueueSubmitRecording();
         d3dTransferQueueWait();
     }
@@ -1020,7 +1036,7 @@ struct CameraThirdPerson {
 
 struct ModelImage {
     D3D12MA::Allocation* gpuData = nullptr;
-    D3D12_SHADER_RESOURCE_VIEW_DESC desc;
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc;
 };
 
 struct ModelTextureSampler {
@@ -1227,7 +1243,7 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
             assert(std::filesystem::exists(imageDDSFilePath));
             image.gpuData = d3dCreate2DImageDDS(imageDDSFilePath);
             D3D12_RESOURCE_DESC imageDesc = image.gpuData->GetResource()->GetDesc();
-            image.desc = {.Format = imageDesc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = imageDesc.MipLevels}};
+            image.srvDesc = {.Format = imageDesc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = imageDesc.MipLevels}};
             D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = image.gpuData->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
             d3d.transferCmdList->ResourceBarrier(1, &barrier);
         }
@@ -2488,7 +2504,7 @@ void addTlasInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
     // assertDebug(modelInstance.animationState.skinJointsBuffer);
     // tlasInstanceInfo.skinJointsDescriptor = d3d.cbvSrvUavDescriptorCount;
     // D3D12_SHADER_RESOURCE_VIEW_DESC desc;
-    // d3dAppendSrvDescriptor(&desc, modelInstance.animationState.skinJointsBuffer->GetResource());
+    // d3dAppendSRVDescriptor(&desc, modelInstance.animationState.skinJointsBuffer->GetResource());
     for (ModelNode& node : model.nodes) {
         if (!node.mesh) continue;
         int64 meshIndex = node.mesh - &model.meshes[0];
@@ -2507,15 +2523,14 @@ void addTlasInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
             D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)primitive.vertices.size(), .StructureByteStride = sizeof(struct Vertex)}};
             D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)primitive.indices.size(), .StructureByteStride = sizeof(uint)}};
             D3D12MA::Allocation* verticesBuffer = animatedModel ? (*primitiveVerticesBuffers)[primitiveIndex] : primitive.verticesBuffer;
-            d3dAppendSrvDescriptor(&vertexBufferDesc, verticesBuffer->GetResource());
-            d3dAppendSrvDescriptor(&indexBufferDesc, primitive.indicesBuffer->GetResource());
+            d3dAppendSRVDescriptor(&vertexBufferDesc, verticesBuffer->GetResource());
+            d3dAppendSRVDescriptor(&indexBufferDesc, primitive.indicesBuffer->GetResource());
             if (primitive.material) {
                 scene.blasGeometriesInfos.push_back(BLASGeometryInfo{.baseColorFactor = primitive.material->baseColorFactor});
                 if (primitive.material->baseColorTexture) {
-                    d3dAppendSrvDescriptor(&primitive.material->baseColorTexture->image->desc, primitive.material->baseColorTexture->image->gpuData->GetResource());
+                    d3dAppendSRVDescriptor(&primitive.material->baseColorTexture->image->srvDesc, primitive.material->baseColorTexture->image->gpuData->GetResource());
                 } else {
-                    // d3dAppendCbvDescriptor(&defaultMaterialBaseColorImageDesc, defaultMaterialBaseColorImage);
-                    assert(false);
+                    d3dAppendSRVDescriptor(&d3d.defaultMaterialBaseColorImageSRVDesc, d3d.defaultMaterialBaseColorImage->GetResource());
                 }
             } else {
                 scene.blasGeometriesInfos.push_back(BLASGeometryInfo{.baseColorFactor = {1, 1, 1, 1}});
@@ -2570,17 +2585,17 @@ void render() {
         D3D12_SHADER_RESOURCE_VIEW_DESC collisionQueriesDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = 1, .StructureByteStride = sizeof(struct CollisionQuery)}};
         D3D12_UNORDERED_ACCESS_VIEW_DESC collisionQueryResultsDesc = {.ViewDimension = D3D12_UAV_DIMENSION_BUFFER, .Buffer = {.NumElements = 1, .StructureByteStride = sizeof(struct CollisionQueryResult)}};
 
-        D3DDescriptor renderTextureSRVDescriptor = d3dAppendSrvDescriptor(&renderTextureSRVDesc, d3d.renderTexture->GetResource());
-        D3DDescriptor renderTextureUAVDescriptor = d3dAppendUavDescriptor(&renderTextureUAVDesc, d3d.renderTexture->GetResource());
-        D3DDescriptor renderInfoDescriptor = d3dAppendCbvDescriptor(&renderInfoCBVDesc);
-        D3DDescriptor tlasDescriptor = d3dAppendSrvDescriptor(&tlasViewDesc, nullptr);
-        D3DDescriptor tlasInstancesInfosDescriptor = d3dAppendSrvDescriptor(&tlasInstancesInfosDesc, d3d.tlasInstancesInfosBuffer->GetResource());
-        D3DDescriptor blasGeometriesInfosDescriptor = d3dAppendSrvDescriptor(&blasGeometriesInfosDesc, d3d.blasGeometriesInfosBuffer->GetResource());
-        D3DDescriptor skyboxTextureDescriptor = d3dAppendSrvDescriptor(nullptr, scene.skybox.hdriTexture->GetResource());
-        D3DDescriptor readBackBufferDescriptor = d3dAppendUavDescriptor(&readBackBufferDesc, d3d.readBackUavBuffer->GetResource());
-        D3DDescriptor imguiTextureDescriptor = d3dAppendSrvDescriptor(nullptr, d3d.imguiTexture->GetResource());
-        D3DDescriptor collisionQueriesDescriptor = d3dAppendSrvDescriptor(&collisionQueriesDesc, d3d.collisionQueriesBuffer->GetResource());
-        D3DDescriptor collisionQueryResultsDescriptor = d3dAppendUavDescriptor(&collisionQueryResultsDesc, d3d.collisionQueryResultsUavBuffer->GetResource());
+        D3DDescriptor renderTextureSRVDescriptor = d3dAppendSRVDescriptor(&renderTextureSRVDesc, d3d.renderTexture->GetResource());
+        D3DDescriptor renderTextureUAVDescriptor = d3dAppendUAVDescriptor(&renderTextureUAVDesc, d3d.renderTexture->GetResource());
+        D3DDescriptor renderInfoDescriptor = d3dAppendCBVDescriptor(&renderInfoCBVDesc);
+        D3DDescriptor tlasDescriptor = d3dAppendSRVDescriptor(&tlasViewDesc, nullptr);
+        D3DDescriptor tlasInstancesInfosDescriptor = d3dAppendSRVDescriptor(&tlasInstancesInfosDesc, d3d.tlasInstancesInfosBuffer->GetResource());
+        D3DDescriptor blasGeometriesInfosDescriptor = d3dAppendSRVDescriptor(&blasGeometriesInfosDesc, d3d.blasGeometriesInfosBuffer->GetResource());
+        D3DDescriptor skyboxTextureDescriptor = d3dAppendSRVDescriptor(nullptr, scene.skybox.hdriTexture->GetResource());
+        D3DDescriptor readBackBufferDescriptor = d3dAppendUAVDescriptor(&readBackBufferDesc, d3d.readBackUavBuffer->GetResource());
+        D3DDescriptor imguiImageDescriptor = d3dAppendSRVDescriptor(nullptr, d3d.imguiImage->GetResource());
+        D3DDescriptor collisionQueriesDescriptor = d3dAppendSRVDescriptor(&collisionQueriesDesc, d3d.collisionQueriesBuffer->GetResource());
+        D3DDescriptor collisionQueryResultsDescriptor = d3dAppendUAVDescriptor(&collisionQueryResultsDesc, d3d.collisionQueryResultsUavBuffer->GetResource());
     }
     {
         float3 cameraPosition;
