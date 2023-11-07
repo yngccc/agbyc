@@ -1,19 +1,19 @@
 editorCamera:
-  position: [15.325352,3.7726166,-15.104907]
-  pitchYaw: [0.31216323,-1.3689771]
+  position: [-22.1955,-2.028856,-15.81098]
+  pitchYaw: [-0.09963649,1.5230024]
   fovVertical: 50
-  sensitivity: 100
+  sensitivity: 74.833
   rotationSensitivity: 0.725
   controllerSensitivity: 1
 player:
   file: animatedModels\girl\girl.gltf
-  scale: [0.100800045,0.1008,0.100800045]
+  scale: [0.1,0.1,0.1]
   rotate: [-0,0,-0,1]
-  translate: [1.4318947,0,0]
+  translate: [1.4318947,0,-12.054222]
   velocity: [0,0,0]
   acceleration: [0,0,0]
   cameraLookAtOffset: [0,0.02,0]
-  cameraRotation: [0.103999995,0.70399994,0]
+  cameraRotation: [0.20399998,2.2119994,0]
   cameraDistance: 0.08
   cameraSensitivity: 1
   cameraControllerSensitivity: 1
