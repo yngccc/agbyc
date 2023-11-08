@@ -1054,16 +1054,20 @@ struct ModelMaterial {
 };
 
 struct ModelPrimitive {
-    std::vector<Vertex> vertices;
-    std::vector<uint> indices;
-    D3D12MA::Allocation* verticesBuffer = nullptr;
-    D3D12MA::Allocation* indicesBuffer = nullptr;
+    uint verticesBufferOffset;
+    uint verticesCount;
+    uint indicesBufferOffset;
+    uint indicesCount;
     ModelMaterial* material = nullptr;
 };
 
 struct ModelMesh {
     std::string name;
     std::vector<ModelPrimitive> primitives;
+    std::vector<Vertex> vertices;
+    std::vector<uint> indices;
+    D3D12MA::Allocation* verticesBuffer = nullptr;
+    D3D12MA::Allocation* indicesBuffer = nullptr;
     D3D12MA::Allocation* blas = nullptr;
     D3D12MA::Allocation* blasScratch = nullptr;
 };
@@ -1134,7 +1138,7 @@ struct ModelInstanceAnimationState {
     uint index = 0;
     double time = 0;
     D3D12MA::Allocation* skinJointsBuffer = nullptr;
-    std::vector<std::vector<D3D12MA::Allocation*>> meshPrimitivesVerticesBuffers;
+    std::vector<D3D12MA::Allocation*> meshVerticesBuffers;
     std::vector<D3D12MA::Allocation*> meshBlases;
     std::vector<D3D12MA::Allocation*> meshBlasScratches;
 };
@@ -1309,8 +1313,10 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
                 float4* jointWeightsBuffer = jointWeights ? (float4*)((uint8*)(jointWeights->buffer_view->buffer->data) + jointWeights->offset + jointWeights->buffer_view->offset) : nullptr;
 
                 ModelPrimitive& primitive = mesh.primitives.emplace_back();
-                primitive.vertices.reserve(positions->count);
-                primitive.indices.reserve(indices->count);
+                primitive.verticesBufferOffset = (uint)mesh.vertices.size();
+                primitive.verticesCount = (uint)positions->count;
+                primitive.indicesBufferOffset = (uint)mesh.indices.size();
+                primitive.indicesCount = (uint)indices->count;
                 for (uint vertexIndex = 0; vertexIndex < positions->count; vertexIndex++) {
                     Vertex vertex = {.position = positionsBuffer[vertexIndex], .normal = normalsBuffer[vertexIndex]};
                     if (uvsBuffer) vertex.uv = uvsBuffer[vertexIndex];
@@ -1319,37 +1325,32 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
                         else vertex.joints = ((uint8_4*)jointIndicesBuffer)[vertexIndex];
                     }
                     if (jointWeightsBuffer) vertex.jointWeights = jointWeightsBuffer[vertexIndex];
-                    primitive.vertices.push_back(vertex);
+                    mesh.vertices.push_back(vertex);
                 }
-                if (indices->component_type == cgltf_component_type_r_16u) primitive.indices.append_range(std::span((uint16*)indicesBuffer, indices->count));
-                else if (indices->component_type == cgltf_component_type_r_32u) primitive.indices.append_range(std::span((uint*)indicesBuffer, indices->count));
+                if (indices->component_type == cgltf_component_type_r_16u) mesh.indices.append_range(std::span((uint16*)indicesBuffer, indices->count));
+                else if (indices->component_type == cgltf_component_type_r_32u) mesh.indices.append_range(std::span((uint*)indicesBuffer, indices->count));
                 if (gltfPrimitive.material) primitive.material = &model.materials[gltfPrimitive.material - gltfData->materials];
-
-                D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-                D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
-                resourceDesc.Width = vectorSizeof(primitive.vertices);
-                assert(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &primitive.verticesBuffer, {}, nullptr) == S_OK);
-                resourceDesc.Width = vectorSizeof(primitive.indices);
-                assert(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &primitive.indicesBuffer, {}, nullptr) == S_OK);
-
-                memcpy(d3d.stagingBufferPtr + d3d.stagingBufferOffset, primitive.vertices.data(), vectorSizeof(primitive.vertices));
-                d3d.transferCmdList->CopyBufferRegion(primitive.verticesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(primitive.vertices));
-                d3d.stagingBufferOffset += (uint)vectorSizeof(primitive.vertices);
-                memcpy(d3d.stagingBufferPtr + d3d.stagingBufferOffset, primitive.indices.data(), vectorSizeof(primitive.indices));
-                d3d.transferCmdList->CopyBufferRegion(primitive.indicesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(primitive.indices));
-                d3d.stagingBufferOffset += (uint)vectorSizeof(primitive.indices);
-                assert(d3d.stagingBufferOffset < d3d.stagingBuffer->GetSize());
             }
-            std::vector<D3D12_RESOURCE_BARRIER> bufferBarriers;
-            bufferBarriers.reserve(mesh.primitives.size() * 2);
-            for (ModelPrimitive& primitive : mesh.primitives) {
-                D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
-                barrier.Transition.pResource = primitive.verticesBuffer->GetResource();
-                bufferBarriers.push_back(barrier);
-                barrier.Transition.pResource = primitive.indicesBuffer->GetResource();
-                bufferBarriers.push_back(barrier);
-            }
-            d3d.transferCmdList->ResourceBarrier((uint)bufferBarriers.size(), bufferBarriers.data());
+
+            D3D12MA::ALLOCATION_DESC verticeIndicesBuffersAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+            D3D12_RESOURCE_DESC verticeIndicesBuffersDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
+            verticeIndicesBuffersDesc.Width = vectorSizeof(mesh.vertices);
+            assert(d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.verticesBuffer, {}, nullptr) == S_OK);
+            verticeIndicesBuffersDesc.Width = vectorSizeof(mesh.indices);
+            assert(d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.indicesBuffer, {}, nullptr) == S_OK);
+
+            memcpy(d3d.stagingBufferPtr + d3d.stagingBufferOffset, mesh.vertices.data(), vectorSizeof(mesh.vertices));
+            d3d.transferCmdList->CopyBufferRegion(mesh.verticesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(mesh.vertices));
+            d3d.stagingBufferOffset += (uint)vectorSizeof(mesh.vertices);
+            memcpy(d3d.stagingBufferPtr + d3d.stagingBufferOffset, mesh.indices.data(), vectorSizeof(mesh.indices));
+            d3d.transferCmdList->CopyBufferRegion(mesh.indicesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(mesh.indices));
+            d3d.stagingBufferOffset += (uint)vectorSizeof(mesh.indices);
+            assert(d3d.stagingBufferOffset < d3d.stagingBuffer->GetSize());
+            D3D12_RESOURCE_BARRIER bufferBarriers[2] = {
+                {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = mesh.verticesBuffer->GetResource(), .Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
+                {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = mesh.indicesBuffer->GetResource(), .Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
+            };
+            d3d.transferCmdList->ResourceBarrier(countof(bufferBarriers), bufferBarriers);
 
             std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
             for (ModelPrimitive& primitive : mesh.primitives) {
@@ -1361,10 +1362,10 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
                         .Transform3x4 = 0,
                         .IndexFormat = DXGI_FORMAT_R32_UINT,
                         .VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
-                        .IndexCount = (uint)primitive.indices.size(),
-                        .VertexCount = (uint)primitive.vertices.size(),
-                        .IndexBuffer = primitive.indicesBuffer->GetResource()->GetGPUVirtualAddress(),
-                        .VertexBuffer = {primitive.verticesBuffer->GetResource()->GetGPUVirtualAddress(), sizeof(Vertex)},
+                        .IndexCount = (uint)primitive.indicesCount,
+                        .VertexCount = (uint)primitive.verticesCount,
+                        .IndexBuffer = mesh.indicesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.indicesBufferOffset * sizeof(uint),
+                        .VertexBuffer = {mesh.verticesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.verticesBufferOffset * sizeof(struct Vertex), sizeof(Vertex)},
                     },
                 };
             }
@@ -1372,12 +1373,12 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
             D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
             d3d.device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
 
-            D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-            D3D12_RESOURCE_DESC blasBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
-            blasBufferDesc.Width = prebuildInfo.ResultDataMaxSizeInBytes;
-            assert(d3d.allocator->CreateResource(&allocationDesc, &blasBufferDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &mesh.blas, {}, nullptr) == S_OK);
-            blasBufferDesc.Width = prebuildInfo.ScratchDataSizeInBytes;
-            assert(d3d.allocator->CreateResource(&allocationDesc, &blasBufferDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &mesh.blasScratch, {}, nullptr) == S_OK);
+            D3D12MA::ALLOCATION_DESC blasAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+            D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+            blasDesc.Width = prebuildInfo.ResultDataMaxSizeInBytes;
+            assert(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &mesh.blas, {}, nullptr) == S_OK);
+            blasDesc.Width = prebuildInfo.ScratchDataSizeInBytes;
+            assert(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &mesh.blasScratch, {}, nullptr) == S_OK);
             D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = mesh.blas->GetResource()->GetGPUVirtualAddress(), .Inputs = inputs, .ScratchAccelerationStructureData = mesh.blasScratch->GetResource()->GetGPUVirtualAddress()};
             d3d.transferCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
         }
@@ -1527,26 +1528,22 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
         modelInstance.animationState.skinJointsBuffer->GetResource()->Unmap(0, nullptr);
 
         for (ModelMesh& mesh : modelIter->meshes) {
-            std::vector<D3D12MA::Allocation*>& meshPrimitivesVerticesBuffers = modelInstance.animationState.meshPrimitivesVerticesBuffers.emplace_back();
-            for (ModelPrimitive& primitive : mesh.primitives) {
-                D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
-                D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = primitive.verticesBuffer->GetSize(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
-                D3D12MA::Allocation* verticesBuffer;
-                assert(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &verticesBuffer, {}, nullptr) == S_OK);
-                meshPrimitivesVerticesBuffers.push_back(verticesBuffer);
-            }
-            {
-                D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-                D3D12_RESOURCE_DESC blasBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
-                D3D12MA::Allocation* blasBuffer;
-                D3D12MA::Allocation* blasScratchBuffer;
-                blasBufferDesc.Width = mesh.blas->GetSize();
-                assert(d3d.allocator->CreateResource(&allocationDesc, &blasBufferDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &blasBuffer, {}, nullptr) == S_OK);
-                blasBufferDesc.Width = mesh.blasScratch->GetSize();
-                assert(d3d.allocator->CreateResource(&allocationDesc, &blasBufferDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &blasScratchBuffer, {}, nullptr) == S_OK);
-                modelInstance.animationState.meshBlases.push_back(blasBuffer);
-                modelInstance.animationState.meshBlasScratches.push_back(blasScratchBuffer);
-            }
+            D3D12MA::Allocation* meshVerticesBuffer;
+            D3D12MA::ALLOCATION_DESC meshVerticesBufferAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
+            D3D12_RESOURCE_DESC meshVerticesBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = mesh.verticesBuffer->GetSize(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
+            assert(d3d.allocator->CreateResource(&meshVerticesBufferAllocationDesc, &meshVerticesBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &meshVerticesBuffer, {}, nullptr) == S_OK);
+            modelInstance.animationState.meshVerticesBuffers.push_back(meshVerticesBuffer);
+
+            D3D12MA::Allocation* blasBuffer;
+            D3D12MA::Allocation* blasScratchBuffer;
+            D3D12MA::ALLOCATION_DESC blasAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+            D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+            blasDesc.Width = mesh.blas->GetSize();
+            assert(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &blasBuffer, {}, nullptr) == S_OK);
+            blasDesc.Width = mesh.blasScratch->GetSize();
+            assert(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &blasScratchBuffer, {}, nullptr) == S_OK);
+            modelInstance.animationState.meshBlases.push_back(blasBuffer);
+            modelInstance.animationState.meshBlasScratches.push_back(blasScratchBuffer);
         }
     }
 
@@ -2439,17 +2436,17 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
     }
 
     static std::vector<D3D12_RESOURCE_BARRIER> barriers;
-    barriers.resize(model.meshes.size());
     for (uint meshIndex = 0; meshIndex < model.meshes.size(); meshIndex++) {
         ModelMesh& mesh = model.meshes[meshIndex];
-        std::vector<D3D12MA::Allocation*>& verticesBuffers = modelInstance.animationState.meshPrimitivesVerticesBuffers[meshIndex];
+        D3D12MA::Allocation* verticesBuffer = modelInstance.animationState.meshVerticesBuffers[meshIndex];
+        Vertex* verticesBufferPtr = nullptr;
+        assert(verticesBuffer->GetResource()->Map(0, nullptr, (void**)&verticesBufferPtr) == S_OK);
+        std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
+        geometryDescs.reserve(mesh.primitives.size());
         for (uint primitiveIndex = 0; primitiveIndex < mesh.primitives.size(); primitiveIndex++) {
             ModelPrimitive& primitive = mesh.primitives[primitiveIndex];
-            D3D12MA::Allocation* verticesBuffer = verticesBuffers[primitiveIndex];
-            Vertex* verticesBufferPtr = nullptr;
-            assert(verticesBuffer->GetResource()->Map(0, nullptr, (void**)&verticesBufferPtr) == S_OK);
-            for (uint vertexIndex = 0; vertexIndex < primitive.vertices.size(); vertexIndex++) {
-                Vertex vertex = primitive.vertices[vertexIndex];
+            for (uint vertexIndex = 0; vertexIndex < primitive.verticesCount; vertexIndex++) {
+                Vertex vertex = mesh.vertices[primitive.verticesBufferOffset + vertexIndex];
                 XMMATRIX skinMat0 = jointTransformMats[vertex.joints.x] * vertex.jointWeights.x;
                 XMMATRIX skinMat1 = jointTransformMats[vertex.joints.y] * vertex.jointWeights.y;
                 XMMATRIX skinMat2 = jointTransformMats[vertex.joints.z] * vertex.jointWeights.z;
@@ -2459,28 +2456,23 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
                 XMFLOAT3X3 normalMat;
                 XMStoreFloat3x3(&normalMat, skinMat);
                 vertex.normal = XMVector3Transform(vertex.normal.toXMVector(), XMLoadFloat3x3(&normalMat));
-                verticesBufferPtr[vertexIndex] = vertex;
+                verticesBufferPtr[primitive.verticesBufferOffset + vertexIndex] = vertex;
             }
-            verticesBuffer->GetResource()->Unmap(0, nullptr);
-        }
-        std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
-        geometryDescs.resize(verticesBuffers.size());
-        for (uint bufferIndex = 0; bufferIndex < verticesBuffers.size(); bufferIndex++) {
-            D3D12MA::Allocation* verticesBuffer = verticesBuffers[bufferIndex];
-            geometryDescs[bufferIndex] = {
+            geometryDescs.push_back({
                 .Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
                 .Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE,
                 .Triangles = {
                     .Transform3x4 = 0,
                     .IndexFormat = DXGI_FORMAT_R32_UINT,
                     .VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
-                    .IndexCount = (uint)(mesh.primitives[bufferIndex].indices.size()),
-                    .VertexCount = (uint)(mesh.primitives[bufferIndex].vertices.size()),
-                    .IndexBuffer = mesh.primitives[bufferIndex].indicesBuffer->GetResource()->GetGPUVirtualAddress(),
-                    .VertexBuffer = {.StartAddress = verticesBuffer->GetResource()->GetGPUVirtualAddress(), .StrideInBytes = sizeof(Vertex)},
+                    .IndexCount = (uint)primitive.indicesCount,
+                    .VertexCount = (uint)primitive.verticesCount,
+                    .IndexBuffer = mesh.indicesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.indicesBufferOffset * sizeof(uint),
+                    .VertexBuffer = {.StartAddress = verticesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.verticesBufferOffset * sizeof(struct Vertex), .StrideInBytes = sizeof(struct Vertex)},
                 },
-            };
+            });
         }
+        verticesBuffer->GetResource()->Unmap(0, nullptr);
         D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS blasInputs = {
             .Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL,
             .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD,
@@ -2490,30 +2482,20 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
         };
         D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC blasDesc = {.DestAccelerationStructureData = modelInstance.animationState.meshBlases[meshIndex]->GetResource()->GetGPUVirtualAddress(), .Inputs = blasInputs, .ScratchAccelerationStructureData = modelInstance.animationState.meshBlasScratches[meshIndex]->GetResource()->GetGPUVirtualAddress()};
         d3d.graphicsCmdList->BuildRaytracingAccelerationStructure(&blasDesc, 0, nullptr);
-        barriers[meshIndex] = {.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = modelInstance.animationState.meshBlases[meshIndex]->GetResource()}};
+        barriers.push_back({.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = modelInstance.animationState.meshBlases[meshIndex]->GetResource()}});
     }
     d3d.graphicsCmdList->ResourceBarrier((uint)barriers.size(), barriers.data());
 }
 
 void addTlasInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransform, SceneObjectType objectType, uint objectIndex, uint selected) {
     Model& model = scene.models[modelInstance.index];
-    TLASInstanceInfo tlasInstanceInfo = {
-        .objectType = objectType,
-        .objectIndex = objectIndex,
-        .selected = selected,
-        .skinJointsDescriptor = UINT32_MAX,
-        .blasGeometriesOffset = (uint)scene.blasGeometriesInfos.size(),
-    };
+    TLASInstanceInfo tlasInstanceInfo = {.objectType = objectType, .objectIndex = objectIndex, .selected = selected, .skinJointsDescriptor = UINT32_MAX, .blasGeometriesOffset = (uint)scene.blasGeometriesInfos.size()};
     bool animatedModel = !model.joints.empty();
-    // assertDebug(modelInstance.animationState.skinJointsBuffer);
-    // tlasInstanceInfo.skinJointsDescriptor = d3d.cbvSrvUavDescriptorCount;
-    // D3D12_SHADER_RESOURCE_VIEW_DESC desc;
-    // d3dAppendSRVDescriptor(&desc, modelInstance.animationState.skinJointsBuffer->GetResource());
     for (ModelNode& node : model.nodes) {
         if (!node.mesh) continue;
         int64 meshIndex = node.mesh - &model.meshes[0];
         D3D12MA::Allocation* meshBlas = animatedModel ? modelInstance.animationState.meshBlases[meshIndex] : node.mesh->blas;
-        std::vector<D3D12MA::Allocation*>* primitiveVerticesBuffers = animatedModel ? &modelInstance.animationState.meshPrimitivesVerticesBuffers[meshIndex] : nullptr;
+        D3D12MA::Allocation* meshVerticesBuffer = animatedModel ? modelInstance.animationState.meshVerticesBuffers[meshIndex] : node.mesh->verticesBuffer;
         D3D12_RAYTRACING_INSTANCE_DESC instanceDesc = {.InstanceID = d3d.cbvSrvUavDescriptorCount, .InstanceMask = 0xff, .AccelerationStructure = meshBlas->GetResource()->GetGPUVirtualAddress()};
         XMMATRIX transform = node.globalTransform;
         transform = XMMatrixMultiply(transform, XMMatrixScaling(1, 1, -1)); // convert RH to LH
@@ -2524,11 +2506,10 @@ void addTlasInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
         scene.tlasInstancesInfos.push_back(tlasInstanceInfo);
         for (uint primitiveIndex = 0; primitiveIndex < node.mesh->primitives.size(); primitiveIndex++) {
             ModelPrimitive& primitive = node.mesh->primitives[primitiveIndex];
-            D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)primitive.vertices.size(), .StructureByteStride = sizeof(struct Vertex)}};
-            D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)primitive.indices.size(), .StructureByteStride = sizeof(uint)}};
-            D3D12MA::Allocation* verticesBuffer = animatedModel ? (*primitiveVerticesBuffers)[primitiveIndex] : primitive.verticesBuffer;
-            d3dAppendSRVDescriptor(&vertexBufferDesc, verticesBuffer->GetResource());
-            d3dAppendSRVDescriptor(&indexBufferDesc, primitive.indicesBuffer->GetResource());
+            D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.verticesBufferOffset, .NumElements = primitive.verticesCount, .StructureByteStride = sizeof(struct Vertex)}};
+            D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.indicesBufferOffset, .NumElements = primitive.indicesCount, .StructureByteStride = sizeof(uint)}};
+            d3dAppendSRVDescriptor(&vertexBufferDesc, meshVerticesBuffer->GetResource());
+            d3dAppendSRVDescriptor(&indexBufferDesc, node.mesh->indicesBuffer->GetResource());
             if (primitive.material) {
                 scene.blasGeometriesInfos.push_back(BLASGeometryInfo{.baseColorFactor = primitive.material->baseColorFactor});
                 if (primitive.material->baseColorTexture) {
