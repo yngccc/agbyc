@@ -1970,10 +1970,12 @@ void update() {
     }
     {
         Model& model = scene.models[scene.player.model.index];
-        ModelAnimation& animation = model.animations[scene.player.model.animationState.index];
-        scene.player.model.animationState.time += frameTime;
-        if (scene.player.model.animationState.time > animation.timeLength) {
-            scene.player.model.animationState.time -= animation.timeLength;
+        if (scene.player.model.animationState.index < model.animations.size()) {
+            ModelAnimation& animation = model.animations[scene.player.model.animationState.index];
+            scene.player.model.animationState.time += frameTime;
+            if (scene.player.model.animationState.time > animation.timeLength) {
+                scene.player.model.animationState.time -= animation.timeLength;
+            }
         }
     }
 
@@ -2332,9 +2334,11 @@ void update() {
         const XMMATRIX perspectiveMat = XMMatrixPerspectiveFovLH(radian(scene.editor.camera.fovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f);
         auto transformGizmo = [&](Transform* transform) {
             XMMATRIX transformMat = transform->toMat();
-            if (ImGui::IsKeyPressed(ImGuiKey_T)) gizmoOperation = ImGuizmo::TRANSLATE;
-            else if (ImGui::IsKeyPressed(ImGuiKey_R)) gizmoOperation = ImGuizmo::ROTATE;
-            else if (ImGui::IsKeyPressed(ImGuiKey_S)) gizmoOperation = ImGuizmo::SCALE;
+            if (!ImGui::IsAnyItemActive()) {
+                if (ImGui::IsKeyPressed(ImGuiKey_T)) gizmoOperation = ImGuizmo::TRANSLATE;
+                else if (ImGui::IsKeyPressed(ImGuiKey_R)) gizmoOperation = ImGuizmo::ROTATE;
+                else if (ImGui::IsKeyPressed(ImGuiKey_S)) gizmoOperation = ImGuizmo::SCALE;
+            }
             if (ImGuizmo::Manipulate((const float*)&lookAtMat, (const float*)&perspectiveMat, gizmoOperation, gizmoMode, (float*)&transformMat)) {
                 XMVECTOR scale, rotate, translate;
                 if (XMMatrixDecompose(&scale, &rotate, &translate, transformMat)) {

@@ -1,15 +1,15 @@
 editorCamera:
-  position: [1.6290454,0.10987642,-12.3475485]
-  pitchYaw: [0.07871352,-0.52874416]
+  position: [28.605095,13.13893,24.197584]
+  pitchYaw: [0.2585139,-2.3586504]
   fovVertical: 50
-  sensitivity: 10
+  sensitivity: 38
   rotationSensitivity: 0.725
   controllerSensitivity: 1
 player:
-  file: animatedModels\xbot\xbot.gltf
+  file: models\girl\girl.gltf
   scale: [0.1,0.1,0.1]
   rotate: [-0,0,-0,1]
-  translate: [1.4318947,0,-12.054222]
+  translate: [9.325012,6.645564,-0.76229787]
   velocity: [0,0,0]
   acceleration: [0,0,0]
   cameraLookAtOffset: [0,0.02,0]
@@ -19,5 +19,15 @@ player:
   cameraControllerSensitivity: 1
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
-staticObjects: []
+staticObjects:
+  - name: Floor
+    file: models\cube\cube.gltf
+    scale: [100,0.1,100]
+    rotate: [-0,0,-0,1]
+    translate: [0,-1,0]
+  - name: DynamicObject0
+    file: models\girl\girl.gltf
+    scale: [0.1,0.1,0.1]
+    rotate: [-0,0,-0,1]
+    translate: [-15.811134,6.75689,0]
 dynamicObjects: []

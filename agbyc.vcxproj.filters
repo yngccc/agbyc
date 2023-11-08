@@ -49,5 +49,8 @@
     <FxCompile Include="src\hlsl\renderScene.hlsl">
       <Filter>HLSL</Filter>
     </FxCompile>
+    <FxCompile Include="src\hlsl\vertexSkinning.hlsl">
+      <Filter>HLSL</Filter>
+    </FxCompile>
   </ItemGroup>
 </Project>
