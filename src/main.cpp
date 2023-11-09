@@ -42,12 +42,13 @@ using namespace DirectX;
 
 // #define STB_IMAGE_IMPLEMENTATION
 // #include <stb/stb_image.h>
-//  #define STB_DS_IMPLEMENTATION
-//  #include <stb/stb_ds.h>
+// #define STB_DS_IMPLEMENTATION
+// #include <stb/stb_ds.h>
 
 #define IMGUI_DISABLE_OBSOLETE_FUNCTIONS
 #define IMGUI_DISABLE_OBSOLETE_KEYIO
 #define IMGUI_USE_STB_SPRINTF
+#define IMGUI_STB_SPRINTF_FILENAME <stb/stb_sprintf.h>
 #include <imgui/imgui.cpp>
 #include <imgui/imgui_draw.cpp>
 #include <imgui/imgui_tables.cpp>
@@ -244,21 +245,16 @@ std::string fileReadStr(const std::filesystem::path& path) {
     return str;
 }
 
-std::vector<unsigned char> fileRead(const std::filesystem::path& path) {
+std::vector<uint8> fileRead(const std::filesystem::path& path) {
     HANDLE hwnd = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (hwnd != INVALID_HANDLE_VALUE) {
-        DWORD size = GetFileSize(hwnd, nullptr);
-        if (size != INVALID_FILE_SIZE) {
-            std::vector<unsigned char> data(size);
-            DWORD byteRead;
-            if (ReadFile(hwnd, data.data(), size, &byteRead, nullptr) && byteRead == size) {
-                CloseHandle(hwnd);
-                return data;
-            }
-        }
-        CloseHandle(hwnd);
-    }
-    return {};
+    assert(hwnd != INVALID_HANDLE_VALUE);
+    DWORD size = GetFileSize(hwnd, nullptr);
+    assert(size != INVALID_FILE_SIZE);
+    std::vector<uint8> data(size);
+    DWORD byteRead;
+    assert(ReadFile(hwnd, data.data(), size, &byteRead, nullptr) && byteRead == size);
+    CloseHandle(hwnd);
+    return data;
 }
 
 bool fileWriteStr(const std::filesystem::path& path, const std::string& str) {
@@ -438,6 +434,7 @@ struct D3D {
 
     D3D12MA::Allocation* constantBuffer;
     uint8* constantBufferPtr;
+    uint constantBufferOffset = 0;
 
     D3D12MA::Allocation* readBackUavBuffer;
     D3D12MA::Allocation* readBackBuffer;
@@ -471,8 +468,11 @@ struct D3D {
     D3D12MA::Allocation* collisionQueryResultsBuffer;
     uint8* collisionQueryResultsBufferPtr;
 
-    ID3D12StateObject* renderSceneSO;
-    ID3D12StateObjectProperties* renderSceneSOProps;
+    ID3D12PipelineState* vertexSkinningPSO;
+    ID3D12RootSignature* vertexSkinningRootSig;
+
+    ID3D12StateObject* renderScenePSO;
+    ID3D12StateObjectProperties* renderSceneProps;
     ID3D12RootSignature* renderSceneRootSig;
     void* renderSceneRayGenID;
     void* renderScenePrimaryRayMissID;
@@ -487,10 +487,10 @@ struct D3D {
     void* collisionDetectionMissID;
     void* collisionDetectionHitGroupID;
 
-    ID3D12PipelineState* postProcess;
+    ID3D12PipelineState* postProcessPSO;
     ID3D12RootSignature* postProcessRootSig;
 
-    ID3D12PipelineState* imgui;
+    ID3D12PipelineState* imguiPSO;
     ID3D12RootSignature* imguiRootSig;
 };
 
@@ -837,24 +837,22 @@ void d3dInit(bool debug) {
 
 void d3dCompilePipelines() {
     {
-        std::vector<unsigned char> rtByteCode = fileRead(exeDir / "renderScene.cso");
-        assert(rtByteCode.size() > 0);
+        std::vector<uint8> rtByteCode = fileRead(exeDir / "renderScene.cso");
         assert(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.renderSceneRootSig)) == S_OK);
         D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"primaryRayMiss"}, {L"primaryRayHitGroup"}, {L"primaryRayClosestHit"}, {L"secondaryRayMiss"}, {L"secondaryRayHitGroup"}, {L"secondaryRayClosestHit"}};
         D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
         D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
         D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
-        assert(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.renderSceneSO)) == S_OK);
-        assert(d3d.renderSceneSO->QueryInterface(IID_PPV_ARGS(&d3d.renderSceneSOProps)) == S_OK);
-        assert(d3d.renderSceneRayGenID = d3d.renderSceneSOProps->GetShaderIdentifier(L"rayGen"));
-        assert(d3d.renderScenePrimaryRayMissID = d3d.renderSceneSOProps->GetShaderIdentifier(L"primaryRayMiss"));
-        assert(d3d.renderScenePrimaryRayHitGroupID = d3d.renderSceneSOProps->GetShaderIdentifier(L"primaryRayHitGroup"));
-        assert(d3d.renderSceneSecondaryRayMissID = d3d.renderSceneSOProps->GetShaderIdentifier(L"secondaryRayMiss"));
-        assert(d3d.renderSceneSecondaryRayHitGroupID = d3d.renderSceneSOProps->GetShaderIdentifier(L"secondaryRayHitGroup"));
+        assert(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.renderScenePSO)) == S_OK);
+        assert(d3d.renderScenePSO->QueryInterface(IID_PPV_ARGS(&d3d.renderSceneProps)) == S_OK);
+        assert(d3d.renderSceneRayGenID = d3d.renderSceneProps->GetShaderIdentifier(L"rayGen"));
+        assert(d3d.renderScenePrimaryRayMissID = d3d.renderSceneProps->GetShaderIdentifier(L"primaryRayMiss"));
+        assert(d3d.renderScenePrimaryRayHitGroupID = d3d.renderSceneProps->GetShaderIdentifier(L"primaryRayHitGroup"));
+        assert(d3d.renderSceneSecondaryRayMissID = d3d.renderSceneProps->GetShaderIdentifier(L"secondaryRayMiss"));
+        assert(d3d.renderSceneSecondaryRayHitGroupID = d3d.renderSceneProps->GetShaderIdentifier(L"secondaryRayHitGroup"));
     }
     {
-        std::vector<unsigned char> rtByteCode = fileRead(exeDir / "collisionDetection.cso");
-        assert(rtByteCode.size() > 0);
+        std::vector<uint8> rtByteCode = fileRead(exeDir / "collisionDetection.cso");
         assert(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.collisionDetectionRootSig)) == S_OK);
         D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"miss"}, {L"hitGroup"}, {L"closestHit"}};
         D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
@@ -867,10 +865,8 @@ void d3dCompilePipelines() {
         assert(d3d.collisionDetectionHitGroupID = d3d.collisionDetectionProps->GetShaderIdentifier(L"hitGroup"));
     }
     {
-        std::vector<unsigned char> vsByteCode = fileRead(exeDir / "postProcessVS.cso");
-        std::vector<unsigned char> psByteCode = fileRead(exeDir / "postProcessPS.cso");
-        assert(vsByteCode.size() > 0);
-        assert(psByteCode.size() > 0);
+        std::vector<uint8> vsByteCode = fileRead(exeDir / "postProcessVS.cso");
+        std::vector<uint8> psByteCode = fileRead(exeDir / "postProcessPS.cso");
         assert(d3d.device->CreateRootSignature(0, psByteCode.data(), psByteCode.size(), IID_PPV_ARGS(&d3d.postProcessRootSig)) == S_OK);
         D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {
             .VS = {vsByteCode.data(), vsByteCode.size()},
@@ -883,13 +879,11 @@ void d3dCompilePipelines() {
             .RTVFormats = {d3d.swapChainFormat},
             .SampleDesc = {.Count = 1},
         };
-        assert(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.postProcess)) == S_OK);
+        assert(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.postProcessPSO)) == S_OK);
     }
     {
-        std::vector<unsigned char> vsByteCode = fileRead(exeDir / "ImGuiVS.cso");
-        std::vector<unsigned char> psByteCode = fileRead(exeDir / "ImGuiPS.cso");
-        assert(vsByteCode.size() > 0);
-        assert(psByteCode.size() > 0);
+        std::vector<uint8> vsByteCode = fileRead(exeDir / "ImGuiVS.cso");
+        std::vector<uint8> psByteCode = fileRead(exeDir / "ImGuiPS.cso");
         assert(d3d.device->CreateRootSignature(0, vsByteCode.data(), vsByteCode.size(), IID_PPV_ARGS(&d3d.imguiRootSig)) == S_OK);
         D3D12_INPUT_ELEMENT_DESC inputElemDescs[] = {
             {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -918,7 +912,13 @@ void d3dCompilePipelines() {
             .RTVFormats = {d3d.swapChainFormat},
             .SampleDesc = {.Count = 1},
         };
-        assert(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.imgui)) == S_OK);
+        assert(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.imguiPSO)) == S_OK);
+    }
+    {
+        std::vector<uint8> csByteCode = fileRead(exeDir / "vertexSkinning.cso");
+        assert(d3d.device->CreateRootSignature(0, csByteCode.data(), csByteCode.size(), IID_PPV_ARGS(&d3d.vertexSkinningRootSig)) == S_OK);
+        D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {.pRootSignature = d3d.vertexSkinningRootSig, .CS = {.pShaderBytecode = csByteCode.data(), .BytecodeLength = csByteCode.size()}};
+        assert(d3d.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&d3d.vertexSkinningPSO)) == S_OK);
     }
 }
 
@@ -1297,14 +1297,14 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
                         jointWeights = attribute.data;
                     }
                 }
-                assertDebug(gltfPrimitive.type == cgltf_primitive_type_triangles);
-                assertDebug(indices && positions && normals);
-                assertDebug(indices->count % 3 == 0 && indices->type == cgltf_type_scalar && (indices->component_type == cgltf_component_type_r_16u || indices->component_type == cgltf_component_type_r_32u));
-                assertDebug(positions->type == cgltf_type_vec3 && positions->component_type == cgltf_component_type_r_32f);
-                assertDebug(normals->count == positions->count && normals->type == cgltf_type_vec3 && normals->component_type == cgltf_component_type_r_32f);
-                if (uvs) assertDebug(uvs->count == positions->count && uvs->component_type == cgltf_component_type_r_32f && uvs->type == cgltf_type_vec2);
-                if (jointIndices) assertDebug(jointIndices->count == positions->count && (jointIndices->component_type == cgltf_component_type_r_16u || jointIndices->component_type == cgltf_component_type_r_8u) && jointIndices->type == cgltf_type_vec4 && (jointIndices->stride == 8 || jointIndices->stride == 4));
-                if (jointWeights) assertDebug(jointWeights->count == positions->count && jointWeights->component_type == cgltf_component_type_r_32f && jointWeights->type == cgltf_type_vec4 && jointWeights->stride == 16);
+                assert(gltfPrimitive.type == cgltf_primitive_type_triangles);
+                assert(indices && positions && normals);
+                assert(indices->count % 3 == 0 && indices->type == cgltf_type_scalar && (indices->component_type == cgltf_component_type_r_16u || indices->component_type == cgltf_component_type_r_32u));
+                assert(positions->type == cgltf_type_vec3 && positions->component_type == cgltf_component_type_r_32f);
+                assert(normals->count == positions->count && normals->type == cgltf_type_vec3 && normals->component_type == cgltf_component_type_r_32f);
+                if (uvs) assert(uvs->count == positions->count && uvs->component_type == cgltf_component_type_r_32f && uvs->type == cgltf_type_vec2);
+                if (jointIndices) assert(jointIndices->count == positions->count && (jointIndices->component_type == cgltf_component_type_r_16u || jointIndices->component_type == cgltf_component_type_r_8u) && jointIndices->type == cgltf_type_vec4 && (jointIndices->stride == 8 || jointIndices->stride == 4));
+                if (jointWeights) assert(jointWeights->count == positions->count && jointWeights->component_type == cgltf_component_type_r_32f && jointWeights->type == cgltf_type_vec4 && jointWeights->stride == 16);
                 float3* positionsBuffer = (float3*)((uint8*)(positions->buffer_view->buffer->data) + positions->offset + positions->buffer_view->offset);
                 float3* normalsBuffer = (float3*)((uint8*)(normals->buffer_view->buffer->data) + normals->offset + normals->buffer_view->offset);
                 void* indicesBuffer = (uint8*)(indices->buffer_view->buffer->data) + indices->offset + indices->buffer_view->offset;
@@ -1516,32 +1516,24 @@ ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
     modelInstance.index = (uint)(modelIter - scene.models.begin());
 
     if (modelIter->joints.size() > 0) {
-        D3D12MA::ALLOCATION_DESC allocDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
-        D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = sizeof(struct Joint) * modelIter->joints.size(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
-        assert(d3d.allocator->CreateResource(&allocDesc, &resourceDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &modelInstance.animationState.skinJointsBuffer, {}, nullptr) == S_OK);
-        Joint* skinJointsBufferPtr = nullptr;
-        assert(modelInstance.animationState.skinJointsBuffer->GetResource()->Map(0, nullptr, (void**)&skinJointsBufferPtr) == S_OK);
-        for (uint jointIndex = 0; jointIndex < modelIter->joints.size(); jointIndex++) {
-            ModelJoint& modelJoint = modelIter->joints[jointIndex];
-            skinJointsBufferPtr[jointIndex] = {XMMatrixTranspose(modelJoint.node->globalTransform), XMMatrixTranspose(modelJoint.inverseBindMat)};
-        }
-        modelInstance.animationState.skinJointsBuffer->GetResource()->Unmap(0, nullptr);
-
+        D3D12MA::ALLOCATION_DESC jointBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
+        D3D12_RESOURCE_DESC jointBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = sizeof(struct Joint) * modelIter->joints.size(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
+        assert(d3d.allocator->CreateResource(&jointBufferAllocDesc, &jointBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &modelInstance.animationState.skinJointsBuffer, {}, nullptr) == S_OK);
         for (ModelMesh& mesh : modelIter->meshes) {
-            D3D12MA::Allocation* meshVerticesBuffer;
-            D3D12MA::ALLOCATION_DESC meshVerticesBufferAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
-            D3D12_RESOURCE_DESC meshVerticesBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = mesh.verticesBuffer->GetSize(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
-            assert(d3d.allocator->CreateResource(&meshVerticesBufferAllocationDesc, &meshVerticesBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &meshVerticesBuffer, {}, nullptr) == S_OK);
-            modelInstance.animationState.meshVerticesBuffers.push_back(meshVerticesBuffer);
+            D3D12MA::ALLOCATION_DESC verticesBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+            D3D12_RESOURCE_DESC verticesBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = mesh.verticesBuffer->GetSize(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+            D3D12MA::Allocation* verticesBuffer;
+            assert(d3d.allocator->CreateResource(&verticesBufferAllocDesc, &verticesBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &verticesBuffer, {}, nullptr) == S_OK);
+            modelInstance.animationState.meshVerticesBuffers.push_back(verticesBuffer);
 
             D3D12MA::Allocation* blasBuffer;
             D3D12MA::Allocation* blasScratchBuffer;
-            D3D12MA::ALLOCATION_DESC blasAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+            D3D12MA::ALLOCATION_DESC blasAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
             D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
             blasDesc.Width = mesh.blas->GetSize();
-            assert(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &blasBuffer, {}, nullptr) == S_OK);
+            assert(d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &blasBuffer, {}, nullptr) == S_OK);
             blasDesc.Width = mesh.blasScratch->GetSize();
-            assert(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &blasScratchBuffer, {}, nullptr) == S_OK);
+            assert(d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &blasScratchBuffer, {}, nullptr) == S_OK);
             modelInstance.animationState.meshBlases.push_back(blasBuffer);
             modelInstance.animationState.meshBlasScratches.push_back(blasScratchBuffer);
         }
@@ -2432,32 +2424,52 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
     }
     for (uint jointIndex = 0; jointIndex < model.joints.size(); jointIndex++) {
         int64 nodeIndex = model.joints[jointIndex].node - &model.nodes[0];
-        jointTransformMats[jointIndex] = XMMatrixMultiply(model.joints[jointIndex].inverseBindMat, nodeGlobalTransformMats[nodeIndex]);
+        jointTransformMats[jointIndex] = XMMatrixTranspose(XMMatrixMultiply(model.joints[jointIndex].inverseBindMat, nodeGlobalTransformMats[nodeIndex]));
+    }
+    {
+        uint8* skinJointsBufferPtr;
+        assert(modelInstance.animationState.skinJointsBuffer->GetResource()->Map(0, nullptr, (void**)&skinJointsBufferPtr) == S_OK);
+        memcpy(skinJointsBufferPtr, jointTransformMats.data(), vectorSizeof(jointTransformMats));
+        modelInstance.animationState.skinJointsBuffer->GetResource()->Unmap(0, nullptr);
     }
 
     static std::vector<D3D12_RESOURCE_BARRIER> barriers;
     for (uint meshIndex = 0; meshIndex < model.meshes.size(); meshIndex++) {
         ModelMesh& mesh = model.meshes[meshIndex];
         D3D12MA::Allocation* verticesBuffer = modelInstance.animationState.meshVerticesBuffers[meshIndex];
-        Vertex* verticesBufferPtr = nullptr;
-        assert(verticesBuffer->GetResource()->Map(0, nullptr, (void**)&verticesBufferPtr) == S_OK);
+        D3D12_RESOURCE_BARRIER verticesBufferBarriers[2] = {
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = verticesBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = verticesBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
+        };
+        d3d.graphicsCmdList->ResourceBarrier(1, &verticesBufferBarriers[0]);
+        d3d.graphicsCmdList->SetPipelineState(d3d.vertexSkinningPSO);
+        d3d.graphicsCmdList->SetComputeRootSignature(d3d.vertexSkinningRootSig);
+        d3d.graphicsCmdList->SetComputeRootShaderResourceView(0, modelInstance.animationState.skinJointsBuffer->GetResource()->GetGPUVirtualAddress());
+        d3d.graphicsCmdList->SetComputeRootShaderResourceView(1, mesh.verticesBuffer->GetResource()->GetGPUVirtualAddress());
+        d3d.graphicsCmdList->SetComputeRootUnorderedAccessView(2, verticesBuffer->GetResource()->GetGPUVirtualAddress());
+        d3d.graphicsCmdList->SetComputeRoot32BitConstant(3, (uint)mesh.vertices.size(), 0);
+        d3d.graphicsCmdList->Dispatch((uint)mesh.vertices.size() / 32 + 1, 1, 1);
+        d3d.graphicsCmdList->ResourceBarrier(1, &verticesBufferBarriers[1]);
+
+        //Vertex* verticesBufferPtr = nullptr;
+        //assert(verticesBuffer->GetResource()->Map(0, nullptr, (void**)&verticesBufferPtr) == S_OK);
         std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
         geometryDescs.reserve(mesh.primitives.size());
         for (uint primitiveIndex = 0; primitiveIndex < mesh.primitives.size(); primitiveIndex++) {
             ModelPrimitive& primitive = mesh.primitives[primitiveIndex];
-            for (uint vertexIndex = 0; vertexIndex < primitive.verticesCount; vertexIndex++) {
-                Vertex vertex = mesh.vertices[primitive.verticesBufferOffset + vertexIndex];
-                XMMATRIX skinMat0 = jointTransformMats[vertex.joints.x] * vertex.jointWeights.x;
-                XMMATRIX skinMat1 = jointTransformMats[vertex.joints.y] * vertex.jointWeights.y;
-                XMMATRIX skinMat2 = jointTransformMats[vertex.joints.z] * vertex.jointWeights.z;
-                XMMATRIX skinMat3 = jointTransformMats[vertex.joints.w] * vertex.jointWeights.w;
-                XMMATRIX skinMat = skinMat0 + skinMat1 + skinMat2 + skinMat3;
-                vertex.position = XMVector3Transform(vertex.position.toXMVector(), skinMat);
-                XMFLOAT3X3 normalMat;
-                XMStoreFloat3x3(&normalMat, skinMat);
-                vertex.normal = XMVector3Transform(vertex.normal.toXMVector(), XMLoadFloat3x3(&normalMat));
-                verticesBufferPtr[primitive.verticesBufferOffset + vertexIndex] = vertex;
-            }
+            //for (uint vertexIndex = 0; vertexIndex < primitive.verticesCount; vertexIndex++) {
+            //    Vertex vertex = mesh.vertices[primitive.verticesBufferOffset + vertexIndex];
+            //    XMMATRIX skinMat0 = jointTransformMats[vertex.joints.x] * vertex.jointWeights.x;
+            //    XMMATRIX skinMat1 = jointTransformMats[vertex.joints.y] * vertex.jointWeights.y;
+            //    XMMATRIX skinMat2 = jointTransformMats[vertex.joints.z] * vertex.jointWeights.z;
+            //    XMMATRIX skinMat3 = jointTransformMats[vertex.joints.w] * vertex.jointWeights.w;
+            //    XMMATRIX skinMat = skinMat0 + skinMat1 + skinMat2 + skinMat3;
+            //    vertex.position = XMVector3Transform(vertex.position.toXMVector(), skinMat);
+            //    XMFLOAT3X3 normalMat;
+            //    XMStoreFloat3x3(&normalMat, skinMat);
+            //    vertex.normal = XMVector3Transform(vertex.normal.toXMVector(), XMLoadFloat3x3(&normalMat));
+            //    verticesBufferPtr[primitive.verticesBufferOffset + vertexIndex] = vertex;
+            //}
             geometryDescs.push_back({
                 .Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
                 .Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE,
@@ -2472,7 +2484,7 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
                 },
             });
         }
-        verticesBuffer->GetResource()->Unmap(0, nullptr);
+        //verticesBuffer->GetResource()->Unmap(0, nullptr);
         D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS blasInputs = {
             .Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL,
             .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD,
@@ -2557,8 +2569,9 @@ void render() {
     scene.tlasInstancesBuildInfos.resize(0);
     scene.tlasInstancesInfos.resize(0);
     scene.blasGeometriesInfos.resize(0);
-
-    uint constantBufferOffset = 0;
+    
+    d3d.stagingBufferOffset = 0;
+    d3d.constantBufferOffset = 0;
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC renderTextureSRVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = 1}};
         D3D12_UNORDERED_ACCESS_VIEW_DESC renderTextureUAVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
@@ -2606,9 +2619,9 @@ void render() {
             .playerVelocity = scene.player.velocity,
             .playerAcceleration = scene.player.acceleration,
         };
-        assertDebug(constantBufferOffset == 0);
-        memcpy(d3d.constantBufferPtr + constantBufferOffset, &renderInfo, sizeof(renderInfo));
-        constantBufferOffset += sizeof(renderInfo);
+        assertDebug(d3d.constantBufferOffset == 0);
+        memcpy(d3d.constantBufferPtr + d3d.constantBufferOffset, &renderInfo, sizeof(renderInfo));
+        d3d.constantBufferOffset += sizeof(renderInfo);
     }
     {
         updateAnimatedModel(scene.player.model);
@@ -2639,11 +2652,11 @@ void render() {
 
         void* missIDs[2] = {d3d.renderScenePrimaryRayMissID, d3d.renderSceneSecondaryRayMissID};
         void* hitGroupIDs[2] = {d3d.renderScenePrimaryRayHitGroupID, d3d.renderSceneSecondaryRayHitGroupID};
-        D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantBufferPtr, d3d.constantBuffer->GetResource(), &constantBufferOffset, d3d.renderSceneRayGenID, missIDs, hitGroupIDs);
+        D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantBufferPtr, d3d.constantBuffer->GetResource(), &d3d.constantBufferOffset, d3d.renderSceneRayGenID, missIDs, hitGroupIDs);
         dispatchDesc.Width = settings.renderW, dispatchDesc.Height = settings.renderH, dispatchDesc.Depth = 1;
-        assert(constantBufferOffset < d3d.constantBuffer->GetSize());
+        assert(d3d.constantBufferOffset < d3d.constantBuffer->GetSize());
 
-        d3d.graphicsCmdList->SetPipelineState1(d3d.renderSceneSO);
+        d3d.graphicsCmdList->SetPipelineState1(d3d.renderScenePSO);
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.renderSceneRootSig);
         d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
     }
@@ -2655,9 +2668,9 @@ void render() {
 
         void* missIDs[1] = {d3d.collisionDetectionMissID};
         void* hitGroupIDs[1] = {d3d.collisionDetectionHitGroupID};
-        D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantBufferPtr, d3d.constantBuffer->GetResource(), &constantBufferOffset, d3d.collisionDetectionRayGenID, missIDs, hitGroupIDs);
+        D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantBufferPtr, d3d.constantBuffer->GetResource(), &d3d.constantBufferOffset, d3d.collisionDetectionRayGenID, missIDs, hitGroupIDs);
         dispatchDesc.Width = 1, dispatchDesc.Height = 1, dispatchDesc.Depth = 1;
-        assert(constantBufferOffset < d3d.constantBuffer->GetSize());
+        assert(d3d.constantBufferOffset < d3d.constantBuffer->GetSize());
 
         d3d.graphicsCmdList->SetPipelineState1(d3d.collisionDetection);
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.collisionDetectionRootSig);
@@ -2683,7 +2696,7 @@ void render() {
         d3d.graphicsCmdList->RSSetViewports(1, &viewport);
         d3d.graphicsCmdList->RSSetScissorRects(1, &scissor);
         {
-            d3d.graphicsCmdList->SetPipelineState(d3d.postProcess);
+            d3d.graphicsCmdList->SetPipelineState(d3d.postProcessPSO);
             d3d.graphicsCmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.postProcessRootSig);
             std::swap(renderTextureTransition.Transition.StateBefore, renderTextureTransition.Transition.StateAfter);
@@ -2691,7 +2704,7 @@ void render() {
             d3d.graphicsCmdList->DrawInstanced(3, 1, 0, 0);
         }
         {
-            d3d.graphicsCmdList->SetPipelineState(d3d.imgui);
+            d3d.graphicsCmdList->SetPipelineState(d3d.imguiPSO);
             float blendFactor[] = {0, 0, 0, 0};
             d3d.graphicsCmdList->OMSetBlendFactor(blendFactor);
             d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.imguiRootSig);

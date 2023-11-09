@@ -1,24 +1,27 @@
 #include "shared.hlsli"
 #include "../sceneStructs.h"
 
-#define rootSig \
-"RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED)"
+#define rootSig "RootFlags(0), SRV(t0), SRV(t1), UAV(u0), RootConstants(num32BitConstants=1, b0)"
 
-StructuredBuffer<float4x4> skinMatsBuffer;
-StructuredBuffer<Vertex> verticesBuffer;
-RWStructuredBuffer<Vertex> verticesBufferWrite;
+StructuredBuffer<float4x4> skinMatsBuffer : register(t0);
+StructuredBuffer<Vertex> verticesBufferSrc : register(t1);
+RWStructuredBuffer<Vertex> verticesBufferDst : register(u0);
+uint verticeCount : register(b0);
 
+[RootSignature(rootSig)]
 [numthreads(32, 1, 1)]
 void main(uint3 groupID : SV_GroupID, uint3 groupThreadID : SV_GroupThreadID) {
     uint vertexIndex = groupID.x * 32 + groupThreadID.x;
-    Vertex vertex = verticesBuffer[vertexIndex];
-    float4x4 jointMat = 
-        skinMatsBuffer[vertex.joints[0]] * vertex.jointWeights[0] + 
-        skinMatsBuffer[vertex.joints[1]] * vertex.jointWeights[1] + 
-        skinMatsBuffer[vertex.joints[2]] * vertex.jointWeights[2] + 
-        skinMatsBuffer[vertex.joints[3]] * vertex.jointWeights[3];
-    vertex.position = mul(jointMat, float4(vertex.position, 0)).xyz;
-    vertex.normal = mul(jointMat, float4(vertex.normal, 0)).xyz;
-    vertex.normal = normalize(vertex.normal);
-    verticesBufferWrite[vertexIndex] = vertex;
+    if (vertexIndex < verticeCount) {
+        Vertex vertex = verticesBufferSrc[vertexIndex];
+        float4x4 jointMat = 
+            skinMatsBuffer[vertex.joints[0]] * vertex.jointWeights[0] + 
+            skinMatsBuffer[vertex.joints[1]] * vertex.jointWeights[1] + 
+            skinMatsBuffer[vertex.joints[2]] * vertex.jointWeights[2] + 
+            skinMatsBuffer[vertex.joints[3]] * vertex.jointWeights[3];
+        vertex.position = mul(float4(vertex.position, 1), jointMat).xyz;
+        vertex.normal = mul(vertex.normal, float3x3(jointMat[0].xyz, jointMat[1].xyz, jointMat[2].xyz));
+        vertex.normal = normalize(vertex.normal);
+        verticesBufferDst[vertexIndex] = vertex;
+    }
 }
