@@ -5,11 +5,11 @@
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
       <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
     </Filter>
-    <Filter Include="Scenes">
-      <UniqueIdentifier>{5c637635-952d-4737-ab6c-7d6a4610fadb}</UniqueIdentifier>
-    </Filter>
     <Filter Include="HLSL">
       <UniqueIdentifier>{326c1cd2-6f59-4128-ba7e-5ad208a564ed}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Worlds">
+      <UniqueIdentifier>{5e709aaa-7469-48b7-9ce8-d5d93a5b86ba}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -18,16 +18,16 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <None Include="src\sceneStructs.h">
+    <None Include="src\sharedStructs.h">
       <Filter>Source Files</Filter>
-    </None>
-    <None Include="assets\scenes\scene.yaml">
-      <Filter>Scenes</Filter>
     </None>
     <None Include="packages.config" />
     <None Include=".clang-format" />
     <None Include="src\hlsl\shared.hlsli">
       <Filter>HLSL</Filter>
+    </None>
+    <None Include="assets\worlds\world.yaml">
+      <Filter>Worlds</Filter>
     </None>
   </ItemGroup>
   <ItemGroup>

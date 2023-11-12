@@ -1,5 +1,5 @@
 #include "shared.hlsli"
-#include "../sceneStructs.h"
+#include "../sharedStructs.h"
 
 #define rootSig "RootFlags(0), SRV(t0), SRV(t1), UAV(u0), RootConstants(num32BitConstants=1, b0)"
 
@@ -20,8 +20,7 @@ void main(uint3 groupID : SV_GroupID, uint3 groupThreadID : SV_GroupThreadID) {
             skinMatsBuffer[vertex.joints[2]] * vertex.jointWeights[2] + 
             skinMatsBuffer[vertex.joints[3]] * vertex.jointWeights[3];
         vertex.position = mul(float4(vertex.position, 1), jointMat).xyz;
-        vertex.normal = mul(vertex.normal, float3x3(jointMat[0].xyz, jointMat[1].xyz, jointMat[2].xyz));
-        vertex.normal = normalize(vertex.normal);
+        vertex.normal = normalize(mul(vertex.normal, float3x3(jointMat[0].xyz, jointMat[1].xyz, jointMat[2].xyz)));
         verticesBufferDst[vertexIndex] = vertex;
     }
 }

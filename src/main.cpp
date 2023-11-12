@@ -95,18 +95,6 @@ constexpr uint countof(const T (&)[N]) { return N; }
 template <typename T>
 uint64 vectorSizeof(const std::vector<T>& v) { return v.size() * sizeof(T); }
 
-template <typename T>
-void vectorDeleteElements(std::vector<T>& v) {
-    auto iter = v.begin();
-    while (iter != v.end()) {
-        if (iter->toBeDeleted) {
-            iter = v.erase(iter);
-        } else {
-            iter++;
-        }
-    }
-}
-
 template <typename T, typename T2>
 T align(T x, T2 n) {
     T remainder = x % (T)n;
@@ -195,13 +183,13 @@ struct float4 {
 };
 
 struct Transform {
-    float3 scale = {1, 1, 1};
-    float4 rotate = {0, 0, 0, 1};
-    float3 translate = {0, 0, 0};
+    float3 s = {1, 1, 1};
+    float4 r = {0, 0, 0, 1};
+    float3 t = {0, 0, 0};
 
-    void operator<<(ryml::ConstNodeRef node) { scale << node["scale"], rotate << node["rotate"], translate << node["translate"]; }
-    void operator>>(ryml::NodeRef node) { scale >> node["scale"], rotate >> node["rotate"], translate >> node["translate"]; }
-    XMMATRIX toMat() const { return XMMatrixAffineTransformation(scale.toXMVector(), XMVectorSet(0, 0, 0, 0), rotate.toXMVector(), translate.toXMVector()); }
+    void operator<<(ryml::ConstNodeRef node) { s << node["scale"], r << node["rotate"], t << node["translate"]; }
+    void operator>>(ryml::NodeRef node) { s >> node["scale"], r >> node["rotate"], t >> node["translate"]; }
+    XMMATRIX toMat() const { return XMMatrixAffineTransformation(s.toXMVector(), XMVectorSet(0, 0, 0, 0), r.toXMVector(), t.toXMVector()); }
 };
 
 float3 lerp(const float3& a, const float3& b, float t) { return a + ((b - a) * t); };
@@ -306,93 +294,108 @@ struct Settings {
     uint renderW = 1920, renderH = 1080;
     DXGI_RATIONAL refreshRate = {60, 1};
     bool hdr = false;
+
+    void load() {
+        if (fileExists(exeDir / "settings.yaml")) {
+            std::string yamlStr = fileReadStr(exeDir / "settings.yaml");
+            ryml::Tree yamlTree = ryml::parse_in_arena(ryml::to_csubstr(yamlStr));
+            ryml::ConstNodeRef yamlRoot = yamlTree.rootref();
+            yamlRoot["hdr"] >> hdr;
+            yamlRoot["windowX"] >> windowX;
+            yamlRoot["windowY"] >> windowY;
+            yamlRoot["windowW"] >> windowW;
+            yamlRoot["windowH"] >> windowH;
+        }
+    }
+
+    void save() {
+        ryml::Tree yamlTree;
+        ryml::NodeRef yamlRoot = yamlTree.rootref();
+        yamlRoot |= ryml::MAP;
+        yamlRoot["hdr"] << hdr;
+        yamlRoot["windowX"] << windowX;
+        yamlRoot["windowY"] << windowY;
+        yamlRoot["windowW"] << windowW;
+        yamlRoot["windowH"] << windowH;
+        std::string yamlStr = ryml::emitrs_yaml<std::string>(yamlTree);
+        assert(fileWriteStr(exeDir / "settings.yaml", yamlStr));
+    }
 };
 
 static Settings settings = {};
 
-void settingsLoad() {
-    if (fileExists(exeDir / "settings.yaml")) {
-        std::string yamlStr = fileReadStr(exeDir / "settings.yaml");
-        ryml::Tree yamlTree = ryml::parse_in_arena(ryml::to_csubstr(yamlStr));
-        ryml::ConstNodeRef yamlRoot = yamlTree.rootref();
-        yamlRoot["hdr"] >> settings.hdr;
-        yamlRoot["windowX"] >> settings.windowX;
-        yamlRoot["windowY"] >> settings.windowY;
-        yamlRoot["windowW"] >> settings.windowW;
-        yamlRoot["windowH"] >> settings.windowH;
-    }
-}
-
-void settingsSave() {
-    ryml::Tree yamlTree;
-    ryml::NodeRef yamlRoot = yamlTree.rootref();
-    yamlRoot |= ryml::MAP;
-    yamlRoot["hdr"] << settings.hdr;
-    yamlRoot["windowX"] << settings.windowX;
-    yamlRoot["windowY"] << settings.windowY;
-    yamlRoot["windowW"] << settings.windowW;
-    yamlRoot["windowH"] << settings.windowH;
-    std::string yamlStr = ryml::emitrs_yaml<std::string>(yamlTree);
-    assert(fileWriteStr(exeDir / "settings.yaml", yamlStr));
-}
-
 struct Window {
     HWND hwnd;
+
+    void init() {
+        assert(SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) == S_OK);
+
+        HMODULE instanceHandle = GetModuleHandle(nullptr);
+        WNDCLASSA windowClass = {};
+        windowClass.style = CS_HREDRAW | CS_VREDRAW;
+        LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wparam, LPARAM lparam);
+        windowClass.lpfnWndProc = windowEventHandler;
+        windowClass.hInstance = instanceHandle;
+        windowClass.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
+        windowClass.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        windowClass.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+        windowClass.lpszClassName = "windowClassName";
+        assert(RegisterClassA(&windowClass));
+
+        DWORD windowStyle = WS_OVERLAPPEDWINDOW;
+        hwnd = CreateWindowExA(0, windowClass.lpszClassName, nullptr, windowStyle, settings.windowX, settings.windowY, settings.windowW, settings.windowH, nullptr, nullptr, instanceHandle, nullptr);
+        assert(hwnd);
+
+        updateSizes();
+
+        RAWINPUTDEVICE rawInputDevice = {.usUsagePage = 0x01, .usUsage = 0x02};
+        assert(RegisterRawInputDevices(&rawInputDevice, 1, sizeof(rawInputDevice)));
+    }
+
+    void show() {
+        ShowWindow(hwnd, SW_SHOW);
+    }
+
+    void updateSizes() {
+        RECT windowRect;
+        RECT clientRect;
+        assert(GetWindowRect(hwnd, &windowRect));
+        assert(GetClientRect(hwnd, &clientRect));
+        settings.windowX = windowRect.left;
+        settings.windowY = windowRect.top;
+        settings.windowW = windowRect.right - windowRect.left;
+        settings.windowH = windowRect.bottom - windowRect.top;
+        settings.renderW = clientRect.right - clientRect.left;
+        settings.renderH = clientRect.bottom - clientRect.top;
+    }
 };
 
 static Window window = {};
 
-void windowUpdateSizes() {
-    RECT windowRect;
-    RECT clientRect;
-    assert(GetWindowRect(window.hwnd, &windowRect));
-    assert(GetClientRect(window.hwnd, &clientRect));
-    settings.windowX = windowRect.left;
-    settings.windowY = windowRect.top;
-    settings.windowW = windowRect.right - windowRect.left;
-    settings.windowH = windowRect.bottom - windowRect.top;
-    settings.renderW = clientRect.right - clientRect.left;
-    settings.renderH = clientRect.bottom - clientRect.top;
-}
-
-void windowInit() {
-    assert(SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) == S_OK);
-
-    HMODULE instanceHandle = GetModuleHandle(nullptr);
-    WNDCLASSA windowClass = {};
-    windowClass.style = CS_HREDRAW | CS_VREDRAW;
-    LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wparam, LPARAM lparam);
-    windowClass.lpfnWndProc = windowEventHandler;
-    windowClass.hInstance = instanceHandle;
-    windowClass.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
-    windowClass.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    windowClass.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    windowClass.lpszClassName = "windowClassName";
-    assert(RegisterClassA(&windowClass));
-
-    DWORD windowStyle = WS_OVERLAPPEDWINDOW;
-    window.hwnd = CreateWindowExA(0, windowClass.lpszClassName, nullptr, windowStyle, settings.windowX, settings.windowY, settings.windowW, settings.windowH, nullptr, nullptr, instanceHandle, nullptr);
-    assert(window.hwnd);
-
-    windowUpdateSizes();
-
-    RAWINPUTDEVICE rawInputDevice = {.usUsagePage = 0x01, .usUsage = 0x02, /*.dwFlags = RIDEV_INPUTSINK, .hwndTarget = window.handle*/};
-    assert(RegisterRawInputDevices(&rawInputDevice, 1, sizeof(rawInputDevice)));
-}
-
 struct DisplayMode {
-    struct Resolution {
-        uint width, height;
-    };
-    Resolution resolution;
+    uint resolutionWidth;
+    uint resolutionHeight;
     std::vector<DXGI_RATIONAL> refreshRates;
-    bool operator==(Resolution res) { return res.width == resolution.width && res.height == resolution.height; }
+
     void addRefreshRate(DXGI_RATIONAL rate) {
         for (DXGI_RATIONAL& r : refreshRates) {
             if (r.Numerator == rate.Numerator && r.Denominator == rate.Denominator) { return; }
         }
         refreshRates.push_back(rate);
     }
+};
+
+void d3dMessageCallback(D3D12_MESSAGE_CATEGORY category, D3D12_MESSAGE_SEVERITY severity, D3D12_MESSAGE_ID id, LPCSTR description, void* context) {
+    if (severity == D3D12_MESSAGE_SEVERITY_CORRUPTION || severity == D3D12_MESSAGE_SEVERITY_ERROR) {
+        __debugbreak();
+    }
+}
+
+#include "sharedStructs.h"
+
+struct D3DDescriptor {
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle;
+    D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle;
 };
 
 struct D3D {
@@ -440,9 +443,9 @@ struct D3D {
     uint8* constantBufferPtr;
     uint constantBufferOffset = 0;
 
-    D3D12MA::Allocation* readBackUavBuffer;
+    D3D12MA::Allocation* readBackUAVBuffer;
     D3D12MA::Allocation* readBackBuffer;
-    uint8* readBackBufferPtr;
+    ReadBackBuffer* readBackBufferPtr;
 
     D3D12MA::Allocation* renderTexture;
     DXGI_FORMAT renderTextureFormat;
@@ -496,500 +499,483 @@ struct D3D {
 
     ID3D12PipelineState* imguiPSO;
     ID3D12RootSignature* imguiRootSig;
-};
 
-static D3D d3d = {};
-
-struct D3DDescriptor {
-    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle;
-    D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle;
-};
-
-D3DDescriptor d3dAppendCBVDescriptor(D3D12_CONSTANT_BUFFER_VIEW_DESC* constantBufferViewDesc) {
-    assert(d3d.cbvSrvUavDescriptorCount < d3d.cbvSrvUavDescriptorCapacity);
-    uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
-    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
-    D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + offset};
-    d3d.device->CreateConstantBufferView(constantBufferViewDesc, cpuHandle);
-    d3d.cbvSrvUavDescriptorCount++;
-    return {cpuHandle, gpuHandle};
-}
-
-D3DDescriptor d3dAppendSRVDescriptor(D3D12_SHADER_RESOURCE_VIEW_DESC* resourceViewDesc, ID3D12Resource* resource) {
-    assert(d3d.cbvSrvUavDescriptorCount < d3d.cbvSrvUavDescriptorCapacity);
-    uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
-    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
-    D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + offset};
-    d3d.device->CreateShaderResourceView(resource, resourceViewDesc, cpuHandle);
-    d3d.cbvSrvUavDescriptorCount++;
-    return {cpuHandle, gpuHandle};
-}
-
-D3DDescriptor d3dAppendUAVDescriptor(D3D12_UNORDERED_ACCESS_VIEW_DESC* unorderedAccessViewDesc, ID3D12Resource* resource) {
-    assert(d3d.cbvSrvUavDescriptorCount < d3d.cbvSrvUavDescriptorCapacity);
-    uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
-    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
-    D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + offset};
-    d3d.device->CreateUnorderedAccessView(resource, nullptr, unorderedAccessViewDesc, cpuHandle);
-    d3d.cbvSrvUavDescriptorCount++;
-    return {cpuHandle, gpuHandle};
-}
-
-void d3dGraphicsQueueStartRecording() {
-    assert(d3d.graphicsCmdAllocator->Reset() == S_OK);
-    assert(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr) == S_OK);
-}
-
-void d3dGraphicsQueueSubmitRecording() {
-    assert(d3d.graphicsCmdList->Close() == S_OK);
-    d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
-}
-
-void d3dGraphicsQueueWait() {
-    d3d.graphicsQueueFenceCounter += 1;
-    d3d.graphicsQueue->Signal(d3d.graphicsQueueFence, d3d.graphicsQueueFenceCounter);
-    if (d3d.graphicsQueueFence->GetCompletedValue() < d3d.graphicsQueueFenceCounter) {
-        assert(d3d.graphicsQueueFence->SetEventOnCompletion(d3d.graphicsQueueFenceCounter, d3d.graphicsQueueFenceEvent) == S_OK);
-        assert(WaitForSingleObjectEx(d3d.graphicsQueueFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
-    }
-}
-
-void d3dTransferQueueStartRecording() {
-    assert(d3d.transferCmdAllocator->Reset() == S_OK);
-    assert(d3d.transferCmdList->Reset(d3d.transferCmdAllocator, nullptr) == S_OK);
-}
-
-void d3dTransferQueueSubmitRecording() {
-    assert(d3d.transferCmdList->Close() == S_OK);
-    d3d.transferQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.transferCmdList);
-}
-
-void d3dTransferQueueWait() {
-    d3d.transferQueueFenceCounter += 1;
-    d3d.transferQueue->Signal(d3d.transferQueueFence, d3d.transferQueueFenceCounter);
-    if (d3d.transferQueueFence->GetCompletedValue() < d3d.transferQueueFenceCounter) {
-        assert(d3d.transferQueueFence->SetEventOnCompletion(d3d.transferQueueFenceCounter, d3d.transferQueueFenceEvent) == S_OK);
-        assert(WaitForSingleObjectEx(d3d.transferQueueFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
-    }
-}
-
-void d3dMessageCallback(D3D12_MESSAGE_CATEGORY category, D3D12_MESSAGE_SEVERITY severity, D3D12_MESSAGE_ID id, LPCSTR description, void* context) {
-    if (severity == D3D12_MESSAGE_SEVERITY_CORRUPTION || severity == D3D12_MESSAGE_SEVERITY_ERROR) {
-        __debugbreak();
-    }
-}
-
-D3D12MA::Allocation* d3dCreate2DImage(const D3D12_RESOURCE_DESC& resourceDesc, D3D12_SUBRESOURCE_DATA* imageMips) {
-    D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-    D3D12MA::Allocation* image;
-    assert(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image, {}, nullptr) == S_OK);
-    d3d.stagingBufferOffset = align(d3d.stagingBufferOffset, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT mipFootprints[16];
-    uint rowCounts[16];
-    uint64 rowSizes[16];
-    uint64 requiredSize;
-    d3d.device->GetCopyableFootprints(&resourceDesc, 0, resourceDesc.MipLevels, 0, mipFootprints, rowCounts, rowSizes, &requiredSize);
-    assert(d3d.stagingBufferOffset + requiredSize < d3d.stagingBuffer->GetSize());
-    for (uint mipIndex = 0; mipIndex < resourceDesc.MipLevels; mipIndex++) {
-        mipFootprints[mipIndex].Offset += d3d.stagingBufferOffset;
-    }
-    assert(UpdateSubresources(d3d.transferCmdList, image->GetResource(), d3d.stagingBuffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, imageMips) == requiredSize);
-    d3d.stagingBufferOffset += (uint)requiredSize;
-    return image;
-}
-
-D3D12MA::Allocation* d3dCreate2DImageDDS(const std::filesystem::path& ddsFilePath) {
-    ScratchImage scratchImage;
-    assert(LoadFromDDSFile(ddsFilePath.c_str(), DDS_FLAGS_NONE, nullptr, scratchImage) == S_OK);
-    assert(scratchImage.GetImageCount() == scratchImage.GetMetadata().mipLevels);
-    const TexMetadata& scratchImageInfo = scratchImage.GetMetadata();
-    D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-    D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint)scratchImageInfo.width, .Height = (uint)scratchImageInfo.height, .DepthOrArraySize = (uint16)scratchImageInfo.arraySize, .MipLevels = (uint16)scratchImageInfo.mipLevels, .Format = scratchImageInfo.format, .SampleDesc = {.Count = 1}};
-    D3D12MA::Allocation* image;
-    assert(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image, {}, nullptr) == S_OK);
-    d3d.stagingBufferOffset = align(d3d.stagingBufferOffset, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT mipFootprints[16];
-    uint rowCounts[16];
-    uint64 rowSizes[16];
-    uint64 requiredSize;
-    D3D12_SUBRESOURCE_DATA srcData[16];
-    d3d.device->GetCopyableFootprints(&resourceDesc, 0, resourceDesc.MipLevels, 0, mipFootprints, rowCounts, rowSizes, &requiredSize);
-    assert(d3d.stagingBufferOffset + requiredSize < d3d.stagingBuffer->GetSize());
-    for (uint mipIndex = 0; mipIndex < scratchImageInfo.mipLevels; mipIndex++) {
-        mipFootprints[mipIndex].Offset += d3d.stagingBufferOffset;
-        const Image& image = scratchImage.GetImages()[mipIndex];
-        srcData[mipIndex] = {.pData = image.pixels, .RowPitch = (int64)image.rowPitch, .SlicePitch = (int64)image.slicePitch};
-    }
-    assert(UpdateSubresources(d3d.transferCmdList, image->GetResource(), d3d.stagingBuffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, srcData) == requiredSize);
-    d3d.stagingBufferOffset += (uint)requiredSize;
-    return image;
-}
-
-void d3dInit(bool debug) {
-    uint factoryFlags = 0;
-    if (debug) {
-        factoryFlags = DXGI_CREATE_FACTORY_DEBUG;
-        ID3D12Debug1* debug;
-        assert(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)) == S_OK);
-        debug->EnableDebugLayer();
-        // d3d.debug->SetEnableGPUBasedValidation(true);
-        // d3d.debug->SetEnableSynchronizedCommandQueueValidation(true);
-    }
-
-    IDXGIFactory7* dxgiFactory = nullptr;
-    DXGI_ADAPTER_DESC dxgiAdapterDesc = {};
-    DXGI_OUTPUT_DESC1 dxgiOutputDesc = {};
-
-    assert(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&dxgiFactory)) == S_OK);
-    assert(dxgiFactory->EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&d3d.dxgiAdapter)) == S_OK);
-    assert(D3D12CreateDevice(d3d.dxgiAdapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&d3d.device)) == S_OK);
-    if (debug) {
-        ID3D12InfoQueue1* infoQueue;
-        assert(d3d.device->QueryInterface(IID_PPV_ARGS(&infoQueue)) == S_OK);
-        DWORD callbackCookie;
-        assert(infoQueue->RegisterMessageCallback(d3dMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &callbackCookie) == S_OK);
-    }
-    assert(d3d.dxgiAdapter->GetDesc(&dxgiAdapterDesc) == S_OK);
-    assert(d3d.dxgiAdapter->EnumOutputs(0, (IDXGIOutput**)&d3d.dxgiOutput) == S_OK);
-    assert(d3d.dxgiOutput->GetDesc1(&dxgiOutputDesc) == S_OK);
-    settings.hdr = (dxgiOutputDesc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
-    {
-        D3D12_FEATURE_DATA_D3D12_OPTIONS resourceBindingTier = {};
-        D3D12_FEATURE_DATA_SHADER_MODEL shaderModel = {D3D_SHADER_MODEL_6_6};
-        D3D12_FEATURE_DATA_D3D12_OPTIONS5 rayTracing = {};
-        // D3D12_FEATURE_DATA_D3D12_OPTIONS16 gpuUploadHeap = {};
-        assert(d3d.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &resourceBindingTier, sizeof(resourceBindingTier)) == S_OK);
-        assert(d3d.device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &shaderModel, sizeof(shaderModel)) == S_OK);
-        assert(d3d.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &rayTracing, sizeof(rayTracing)) == S_OK);
-        // assert(d3d.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS16, &gpuUploadHeap, sizeof(gpuUploadHeap)) == S_OK);
-        assert(resourceBindingTier.ResourceBindingTier == D3D12_RESOURCE_BINDING_TIER_3);
-        assert(shaderModel.HighestShaderModel == D3D_SHADER_MODEL_6_6);
-        assert(rayTracing.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1);
-        // d3d.gpuUploadHeapSupported = gpuUploadHeap.GPUUploadHeapSupported;
-    }
-    {
-        D3D12_COMMAND_QUEUE_DESC graphicsQueueDesc = {.Type = D3D12_COMMAND_LIST_TYPE_DIRECT, .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE};
-        assert(d3d.device->CreateCommandQueue(&graphicsQueueDesc, IID_PPV_ARGS(&d3d.graphicsQueue)) == S_OK);
-        D3D12_COMMAND_QUEUE_DESC transferQueueDesc = {.Type = D3D12_COMMAND_LIST_TYPE_DIRECT, .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE};
-        assert(d3d.device->CreateCommandQueue(&transferQueueDesc, IID_PPV_ARGS(&d3d.transferQueue)) == S_OK);
-
-        assert(d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&d3d.graphicsCmdAllocator)) == S_OK);
-        assert(d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&d3d.transferCmdAllocator)) == S_OK);
-
-        assert(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.graphicsCmdAllocator, nullptr, IID_PPV_ARGS(&d3d.graphicsCmdList)) == S_OK);
-        assert(d3d.graphicsCmdList->Close() == S_OK);
-        assert(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.transferCmdAllocator, nullptr, IID_PPV_ARGS(&d3d.transferCmdList)) == S_OK);
-        assert(d3d.transferCmdList->Close() == S_OK);
-
-        assert(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.graphicsQueueFence)) == S_OK);
-        d3d.graphicsQueueFenceEvent = CreateEventA(nullptr, false, false, nullptr);
-        assert(d3d.graphicsQueueFenceEvent);
-        assert(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.transferQueueFence)) == S_OK);
-        d3d.transferQueueFenceEvent = CreateEventA(nullptr, false, false, nullptr);
-        assert(d3d.transferQueueFenceEvent);
-    }
-    {
-        d3d.swapChainFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
-        uint dxgiModeCount = 0;
-        d3d.dxgiOutput->GetDisplayModeList(d3d.swapChainFormat, 0, &dxgiModeCount, nullptr);
-        std::vector<DXGI_MODE_DESC> dxgiModes(dxgiModeCount);
-        d3d.dxgiOutput->GetDisplayModeList(d3d.swapChainFormat, 0, &dxgiModeCount, dxgiModes.data());
-        for (DXGI_MODE_DESC& dxgiMode : dxgiModes) {
-            DisplayMode::Resolution res = {dxgiMode.Width, dxgiMode.Height};
-            auto modeIter = std::find(d3d.displayModes.begin(), d3d.displayModes.end(), res);
-            if (modeIter == d3d.displayModes.end()) {
-                d3d.displayModes.push_back({{dxgiMode.Width, dxgiMode.Height}, {dxgiMode.RefreshRate}});
-            } else {
-                modeIter->addRefreshRate(dxgiMode.RefreshRate);
-            }
-        }
-        DXGI_SWAP_CHAIN_DESC1 desc = {
-            .Width = (uint)settings.renderW,
-            .Height = (uint)settings.renderH,
-            .Format = d3d.swapChainFormat,
-            .SampleDesc = {.Count = 1},
-            .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_BACK_BUFFER,
-            .BufferCount = countof(d3d.swapChainImages),
-            .Scaling = DXGI_SCALING_NONE,
-            .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
-            .AlphaMode = DXGI_ALPHA_MODE_IGNORE,
-            .Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH,
-        };
-        assert(dxgiFactory->CreateSwapChainForHwnd(d3d.graphicsQueue, window.hwnd, &desc, nullptr, nullptr, (IDXGISwapChain1**)&d3d.swapChain) == S_OK);
-
-        DXGI_COLOR_SPACE_TYPE colorSpace = settings.hdr ? DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
-        assert(d3d.swapChain->SetColorSpace1(colorSpace) == S_OK);
-        for (uint imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
-            ID3D12Resource** image = &d3d.swapChainImages[imageIndex];
-            assert(d3d.swapChain->GetBuffer(imageIndex, IID_PPV_ARGS(image)) == S_OK);
-            (*image)->SetName(std::format(L"swapChain{}", imageIndex).c_str());
+    void init(bool debug) {
+        uint factoryFlags = 0;
+        if (debug) {
+            factoryFlags = DXGI_CREATE_FACTORY_DEBUG;
+            ID3D12Debug1* debug;
+            assert(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)) == S_OK);
+            debug->EnableDebugLayer();
+            // debug->SetEnableGPUBasedValidation(true);
+            // debug->SetEnableSynchronizedCommandQueueValidation(true);
         }
 
-        dxgiFactory->MakeWindowAssociation(window.hwnd, DXGI_MWA_NO_WINDOW_CHANGES); // disable alt-enter
-    }
-    {
-        D3D12_DESCRIPTOR_HEAP_DESC rtvDescriptorHeapDesc = {.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV, .NumDescriptors = 16, .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE};
-        assert(d3d.device->CreateDescriptorHeap(&rtvDescriptorHeapDesc, IID_PPV_ARGS(&d3d.rtvDescriptorHeap)) == S_OK);
-        d3d.rtvDescriptorCount = 0;
-        d3d.rtvDescriptorSize = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-        for (uint imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
-            ID3D12Resource** image = &d3d.swapChainImages[imageIndex];
-            uint offset = d3d.rtvDescriptorSize * d3d.rtvDescriptorCount;
-            d3d.swapChainImageRTVDescriptors[imageIndex] = {d3d.rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
-            d3d.device->CreateRenderTargetView(*image, nullptr, d3d.swapChainImageRTVDescriptors[imageIndex]);
-            d3d.rtvDescriptorCount += 1;
-        }
-
-        d3d.cbvSrvUavDescriptorCapacity = 1024;
-        d3d.cbvSrvUavDescriptorSize = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        D3D12_DESCRIPTOR_HEAP_DESC cbvSrvUavDescriptorHeapDesc = {.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, .NumDescriptors = d3d.cbvSrvUavDescriptorCapacity, .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
-        assert(d3d.device->CreateDescriptorHeap(&cbvSrvUavDescriptorHeapDesc, IID_PPV_ARGS(&d3d.cbvSrvUavDescriptorHeap)) == S_OK);
-    }
-    {
-        D3D12MA::ALLOCATOR_DESC allocatorDesc = {.Flags = D3D12MA::ALLOCATOR_FLAG_NONE, .pDevice = d3d.device, .pAdapter = d3d.dxgiAdapter};
-        assert(D3D12MA::CreateAllocator(&allocatorDesc, &d3d.allocator) == S_OK);
-    }
-    {
-        struct BufferDesc {
-            D3D12MA::Allocation** buffer;
-            uint8** bufferPtr;
-            uint size;
-            D3D12_HEAP_TYPE heapType;
-            D3D12_RESOURCE_FLAGS flags;
-            D3D12_RESOURCE_STATES initState;
-            const wchar_t* name;
-        } descs[] = {
-            {&d3d.stagingBuffer, &d3d.stagingBufferPtr, megabytes(256), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_SOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"stagingBuffer"},
-            {&d3d.constantBuffer, &d3d.constantBufferPtr, megabytes(4), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer"},
-            {&d3d.tlasInstancesBuildInfosBuffer, &d3d.tlasInstancesBuildInfosBufferPtr, megabytes(32), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesBuildInfosBuffer"},
-            {&d3d.tlasInstancesInfosBuffer, &d3d.tlasInstancesInfosBufferPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesInfosBuffer"},
-            {&d3d.blasGeometriesInfosBuffer, &d3d.blasGeometriesInfosBufferPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"blasGeometriesInfosBuffer"},
-            {&d3d.tlasBuffer, nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"tlasBuffer"},
-            {&d3d.tlasScratchBuffer, nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"tlasScratchBuffer"},
-            {&d3d.imguiVertexBuffer, &d3d.imguiVertexBufferPtr, megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiVertexBuffer"},
-            {&d3d.imguiIndexBuffer, &d3d.imguiIndexBufferPtr, megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiIndexBuffer"},
-            {&d3d.readBackUavBuffer, nullptr, megabytes(2), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"readBackUavBuffer"},
-            {&d3d.readBackBuffer, &d3d.readBackBufferPtr, megabytes(2), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"readBackBuffer"},
-            {&d3d.collisionQueriesBuffer, &d3d.collisionQueriesBufferPtr, megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, L"collisionQueriesBuffer"},
-            {&d3d.collisionQueryResultsUavBuffer, nullptr, megabytes(1), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"collisionQueryResultsUavBuffer"},
-            {&d3d.collisionQueryResultsBuffer, &d3d.collisionQueryResultsBufferPtr, megabytes(1), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"collisionQueryResultsBuffer"},
-        };
-        for (BufferDesc& desc : descs) {
-            D3D12_RESOURCE_DESC bufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = desc.size, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = desc.flags};
-            D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = desc.heapType};
-            assert(d3d.allocator->CreateResource(&allocationDesc, &bufferDesc, desc.initState, nullptr, desc.buffer, {}, nullptr) == S_OK);
-            (*desc.buffer)->GetResource()->SetName(desc.name);
-            if (desc.bufferPtr) {
-                assert((*desc.buffer)->GetResource()->Map(0, nullptr, (void**)desc.bufferPtr) == S_OK);
-            }
-        }
-    }
-    {
-        D3D12_RESOURCE_DESC renderTextureDesc = {
-            .Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-            .Width = settings.renderW,
-            .Height = settings.renderH,
-            .DepthOrArraySize = 1,
-            .MipLevels = 1,
-            .Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
-            .SampleDesc = {.Count = 1},
-            .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN,
-            .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-        };
-
-        D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-        assert(d3d.allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr) == S_OK);
-        d3d.renderTexture->GetResource()->SetName(L"renderTexture");
-        d3d.renderTextureFormat = renderTextureDesc.Format;
-    }
-    {
-        assert(ImGui::CreateContext());
-        ImGui::StyleColorsDark();
-        // ImGui::StyleColorsLight();
-        // ImGui::StyleColorsClassic();
-        ImGuiIO& io = ImGui::GetIO();
-        io.IniFilename = "imgui.ini";
-        io.FontGlobalScale = (float)settings.renderH / 1000.0f;
-        assert(io.Fonts->AddFontDefault());
-
-        d3dTransferQueueStartRecording();
-        d3d.stagingBufferOffset = 0;
-        {
-            uint8* imguiTextureData;
-            int imguiTextureWidth, imguiTextureHeight;
-            ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&imguiTextureData, &imguiTextureWidth, &imguiTextureHeight);
-            D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint64)imguiTextureWidth, .Height = (uint)imguiTextureHeight, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
-            D3D12_SUBRESOURCE_DATA data = {.pData = imguiTextureData, .RowPitch = imguiTextureWidth * 4, .SlicePitch = imguiTextureWidth * imguiTextureHeight * 4};
-            d3d.imguiImage = d3dCreate2DImage(desc, &data);
-        }
-        {
-            uint8_4 defaultMaterialBaseColorImage[4] = {{255, 255, 255, 255}, {255, 255, 255, 255}, {255, 255, 255, 255}, {255, 255, 255, 255}};
-            D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = 2, .Height = 2, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
-            D3D12_SUBRESOURCE_DATA data = {.pData = defaultMaterialBaseColorImage, .RowPitch = 8, .SlicePitch = 16};
-            d3d.defaultMaterialBaseColorImage = d3dCreate2DImage(desc, &data);
-            d3d.defaultMaterialBaseColorImageSRVDesc = {.Format = desc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = desc.MipLevels}};
-        }
-        D3D12_RESOURCE_BARRIER barriers[2] = {
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.imguiImage->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.defaultMaterialBaseColorImage->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
-        };
-        d3d.transferCmdList->ResourceBarrier(2, barriers);
-        d3dTransferQueueSubmitRecording();
-        d3dTransferQueueWait();
-    }
-}
-
-void d3dCompilePipelines() {
-    {
-        std::vector<uint8> rtByteCode = fileRead(exeDir / "renderScene.cso");
-        assert(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.renderSceneRootSig)) == S_OK);
-        D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"primaryRayMiss"}, {L"primaryRayHitGroup"}, {L"primaryRayClosestHit"}, {L"secondaryRayMiss"}, {L"secondaryRayHitGroup"}, {L"secondaryRayClosestHit"}};
-        D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
-        D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
-        D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
-        assert(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.renderScenePSO)) == S_OK);
-        assert(d3d.renderScenePSO->QueryInterface(IID_PPV_ARGS(&d3d.renderSceneProps)) == S_OK);
-        assert(d3d.renderSceneRayGenID = d3d.renderSceneProps->GetShaderIdentifier(L"rayGen"));
-        assert(d3d.renderScenePrimaryRayMissID = d3d.renderSceneProps->GetShaderIdentifier(L"primaryRayMiss"));
-        assert(d3d.renderScenePrimaryRayHitGroupID = d3d.renderSceneProps->GetShaderIdentifier(L"primaryRayHitGroup"));
-        assert(d3d.renderSceneSecondaryRayMissID = d3d.renderSceneProps->GetShaderIdentifier(L"secondaryRayMiss"));
-        assert(d3d.renderSceneSecondaryRayHitGroupID = d3d.renderSceneProps->GetShaderIdentifier(L"secondaryRayHitGroup"));
-    }
-    {
-        std::vector<uint8> rtByteCode = fileRead(exeDir / "collisionDetection.cso");
-        assert(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.collisionDetectionRootSig)) == S_OK);
-        D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"miss"}, {L"hitGroup"}, {L"closestHit"}};
-        D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
-        D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
-        D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
-        assert(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.collisionDetection)) == S_OK);
-        assert(d3d.collisionDetection->QueryInterface(IID_PPV_ARGS(&d3d.collisionDetectionProps)) == S_OK);
-        assert(d3d.collisionDetectionRayGenID = d3d.collisionDetectionProps->GetShaderIdentifier(L"rayGen"));
-        assert(d3d.collisionDetectionMissID = d3d.collisionDetectionProps->GetShaderIdentifier(L"miss"));
-        assert(d3d.collisionDetectionHitGroupID = d3d.collisionDetectionProps->GetShaderIdentifier(L"hitGroup"));
-    }
-    {
-        std::vector<uint8> vsByteCode = fileRead(exeDir / "postProcessVS.cso");
-        std::vector<uint8> psByteCode = fileRead(exeDir / "postProcessPS.cso");
-        assert(d3d.device->CreateRootSignature(0, psByteCode.data(), psByteCode.size(), IID_PPV_ARGS(&d3d.postProcessRootSig)) == S_OK);
-        D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {
-            .VS = {vsByteCode.data(), vsByteCode.size()},
-            .PS = {psByteCode.data(), psByteCode.size()},
-            .BlendState = {.RenderTarget = {{.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL}}},
-            .SampleMask = 0xffffffff,
-            .RasterizerState = {.FillMode = D3D12_FILL_MODE_SOLID, .CullMode = D3D12_CULL_MODE_BACK},
-            .PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            .NumRenderTargets = 1,
-            .RTVFormats = {d3d.swapChainFormat},
-            .SampleDesc = {.Count = 1},
-        };
-        assert(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.postProcessPSO)) == S_OK);
-    }
-    {
-        std::vector<uint8> vsByteCode = fileRead(exeDir / "ImGuiVS.cso");
-        std::vector<uint8> psByteCode = fileRead(exeDir / "ImGuiPS.cso");
-        assert(d3d.device->CreateRootSignature(0, vsByteCode.data(), vsByteCode.size(), IID_PPV_ARGS(&d3d.imguiRootSig)) == S_OK);
-        D3D12_INPUT_ELEMENT_DESC inputElemDescs[] = {
-            {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-            {"COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 16, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-        };
-        D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {
-            .VS = {vsByteCode.data(), vsByteCode.size()},
-            .PS = {psByteCode.data(), psByteCode.size()},
-            .BlendState = {
-                .RenderTarget = {{
-                    .BlendEnable = true,
-                    .SrcBlend = D3D12_BLEND_SRC_ALPHA,
-                    .DestBlend = D3D12_BLEND_INV_SRC_ALPHA,
-                    .BlendOp = D3D12_BLEND_OP_ADD,
-                    .SrcBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA,
-                    .DestBlendAlpha = D3D12_BLEND_ZERO,
-                    .BlendOpAlpha = D3D12_BLEND_OP_ADD,
-                    .RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL,
-                }}},
-            .SampleMask = 0xffffffff,
-            .RasterizerState = {.FillMode = D3D12_FILL_MODE_SOLID, .CullMode = D3D12_CULL_MODE_NONE, .DepthClipEnable = true},
-            .InputLayout = {inputElemDescs, countof(inputElemDescs)},
-            .PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            .NumRenderTargets = 1,
-            .RTVFormats = {d3d.swapChainFormat},
-            .SampleDesc = {.Count = 1},
-        };
-        assert(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.imguiPSO)) == S_OK);
-    }
-    {
-        std::vector<uint8> csByteCode = fileRead(exeDir / "vertexSkinning.cso");
-        assert(d3d.device->CreateRootSignature(0, csByteCode.data(), csByteCode.size(), IID_PPV_ARGS(&d3d.vertexSkinningRootSig)) == S_OK);
-        D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {.pRootSignature = d3d.vertexSkinningRootSig, .CS = {.pShaderBytecode = csByteCode.data(), .BytecodeLength = csByteCode.size()}};
-        assert(d3d.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&d3d.vertexSkinningPSO)) == S_OK);
-    }
-}
-
-void d3dResizeSwapChain(uint width, uint height) {
-    d3dGraphicsQueueWait();
-    for (ID3D12Resource* image : d3d.swapChainImages) { image->Release(); }
-    assert(d3d.swapChain->ResizeBuffers(countof(d3d.swapChainImages), width, height, d3d.swapChainFormat, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH) == S_OK);
-    for (uint imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
-        ID3D12Resource** image = &d3d.swapChainImages[imageIndex];
-        assert(d3d.swapChain->GetBuffer(imageIndex, IID_PPV_ARGS(image)) == S_OK);
-        (*image)->SetName(std::format(L"swapChain{}", imageIndex).c_str());
-        d3d.device->CreateRenderTargetView(*image, nullptr, d3d.swapChainImageRTVDescriptors[imageIndex]);
-    }
-    d3d.renderTexture->Release();
-    D3D12_RESOURCE_DESC renderTextureDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = width, .Height = height, .DepthOrArraySize = 1, .MipLevels = 1, .Format = d3d.renderTextureFormat, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
-    D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-    assert(d3d.allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr) == S_OK);
-    d3d.renderTexture->GetResource()->SetName(L"renderTexture");
-}
-
-static const uint64 settingsHDR = 1;
-static const uint64 settingWindowMode = 1 << 1;
-static const uint64 settingAll = ~0;
-
-void applySettings(uint64 settingBits) {
-    if (settingBits & settingsHDR) {
+        IDXGIFactory7* dxgiFactory = nullptr;
+        DXGI_ADAPTER_DESC dxgiAdapterDesc = {};
         DXGI_OUTPUT_DESC1 dxgiOutputDesc = {};
-        assert(d3d.dxgiOutput->GetDesc1(&dxgiOutputDesc) == S_OK);
-        if (settings.hdr && dxgiOutputDesc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) {
-            assert(d3d.swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) == S_OK);
-        } else {
-            assert(d3d.swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709) == S_OK);
+
+        assert(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&dxgiFactory)) == S_OK);
+        assert(dxgiFactory->EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&dxgiAdapter)) == S_OK);
+        assert(D3D12CreateDevice(dxgiAdapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&device)) == S_OK);
+        if (debug) {
+            ID3D12InfoQueue1* infoQueue;
+            assert(device->QueryInterface(IID_PPV_ARGS(&infoQueue)) == S_OK);
+            DWORD callbackCookie;
+            assert(infoQueue->RegisterMessageCallback(d3dMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &callbackCookie) == S_OK);
+        }
+        assert(dxgiAdapter->GetDesc(&dxgiAdapterDesc) == S_OK);
+        assert(dxgiAdapter->EnumOutputs(0, (IDXGIOutput**)&dxgiOutput) == S_OK);
+        assert(dxgiOutput->GetDesc1(&dxgiOutputDesc) == S_OK);
+        settings.hdr = (dxgiOutputDesc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+        {
+            D3D12_FEATURE_DATA_D3D12_OPTIONS resourceBindingTier = {};
+            D3D12_FEATURE_DATA_SHADER_MODEL shaderModel = {D3D_SHADER_MODEL_6_6};
+            D3D12_FEATURE_DATA_D3D12_OPTIONS5 rayTracing = {};
+            // D3D12_FEATURE_DATA_D3D12_OPTIONS16 gpuUploadHeap = {};
+            assert(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &resourceBindingTier, sizeof(resourceBindingTier)) == S_OK);
+            assert(device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &shaderModel, sizeof(shaderModel)) == S_OK);
+            assert(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &rayTracing, sizeof(rayTracing)) == S_OK);
+            // assert(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS16, &gpuUploadHeap, sizeof(gpuUploadHeap)) == S_OK);
+            assert(resourceBindingTier.ResourceBindingTier == D3D12_RESOURCE_BINDING_TIER_3);
+            assert(shaderModel.HighestShaderModel == D3D_SHADER_MODEL_6_6);
+            assert(rayTracing.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1);
+            // gpuUploadHeapSupported = gpuUploadHeap.GPUUploadHeapSupported;
+        }
+        {
+            D3D12_COMMAND_QUEUE_DESC graphicsQueueDesc = {.Type = D3D12_COMMAND_LIST_TYPE_DIRECT, .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE};
+            assert(device->CreateCommandQueue(&graphicsQueueDesc, IID_PPV_ARGS(&graphicsQueue)) == S_OK);
+            D3D12_COMMAND_QUEUE_DESC transferQueueDesc = {.Type = D3D12_COMMAND_LIST_TYPE_DIRECT, .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE};
+            assert(device->CreateCommandQueue(&transferQueueDesc, IID_PPV_ARGS(&transferQueue)) == S_OK);
+
+            assert(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&graphicsCmdAllocator)) == S_OK);
+            assert(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&transferCmdAllocator)) == S_OK);
+
+            assert(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, graphicsCmdAllocator, nullptr, IID_PPV_ARGS(&graphicsCmdList)) == S_OK);
+            assert(graphicsCmdList->Close() == S_OK);
+            assert(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, transferCmdAllocator, nullptr, IID_PPV_ARGS(&transferCmdList)) == S_OK);
+            assert(transferCmdList->Close() == S_OK);
+
+            assert(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&graphicsQueueFence)) == S_OK);
+            graphicsQueueFenceEvent = CreateEventA(nullptr, false, false, nullptr);
+            assert(graphicsQueueFenceEvent);
+            assert(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&transferQueueFence)) == S_OK);
+            transferQueueFenceEvent = CreateEventA(nullptr, false, false, nullptr);
+            assert(transferQueueFenceEvent);
+        }
+        {
+            swapChainFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
+            uint dxgiModeCount = 0;
+            dxgiOutput->GetDisplayModeList(swapChainFormat, 0, &dxgiModeCount, nullptr);
+            std::vector<DXGI_MODE_DESC> dxgiModes(dxgiModeCount);
+            dxgiOutput->GetDisplayModeList(swapChainFormat, 0, &dxgiModeCount, dxgiModes.data());
+            for (DXGI_MODE_DESC& dxgiMode : dxgiModes) {
+                bool hasResolution = false;
+                for (DisplayMode& mode : displayModes) {
+                    if (mode.resolutionWidth == dxgiMode.Width && mode.resolutionHeight == dxgiMode.Height) {
+                        hasResolution = true;
+                        mode.addRefreshRate(dxgiMode.RefreshRate);
+                        break;
+                    }
+                }
+                if (!hasResolution) displayModes.push_back(DisplayMode{dxgiMode.Width, dxgiMode.Height, {dxgiMode.RefreshRate}});
+            }
+            DXGI_SWAP_CHAIN_DESC1 desc = {
+                .Width = (uint)settings.renderW,
+                .Height = (uint)settings.renderH,
+                .Format = swapChainFormat,
+                .SampleDesc = {.Count = 1},
+                .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_BACK_BUFFER,
+                .BufferCount = countof(swapChainImages),
+                .Scaling = DXGI_SCALING_NONE,
+                .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                .AlphaMode = DXGI_ALPHA_MODE_IGNORE,
+                .Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH,
+            };
+            assert(dxgiFactory->CreateSwapChainForHwnd(graphicsQueue, window.hwnd, &desc, nullptr, nullptr, (IDXGISwapChain1**)&swapChain) == S_OK);
+
+            DXGI_COLOR_SPACE_TYPE colorSpace = settings.hdr ? DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+            assert(swapChain->SetColorSpace1(colorSpace) == S_OK);
+            for (uint imageIndex = 0; imageIndex < countof(swapChainImages); imageIndex++) {
+                ID3D12Resource** image = &swapChainImages[imageIndex];
+                assert(swapChain->GetBuffer(imageIndex, IID_PPV_ARGS(image)) == S_OK);
+                (*image)->SetName(std::format(L"swapChain{}", imageIndex).c_str());
+            }
+
+            dxgiFactory->MakeWindowAssociation(window.hwnd, DXGI_MWA_NO_WINDOW_CHANGES); // disable alt-enter
+        }
+        {
+            D3D12_DESCRIPTOR_HEAP_DESC rtvDescriptorHeapDesc = {.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV, .NumDescriptors = 16, .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE};
+            assert(device->CreateDescriptorHeap(&rtvDescriptorHeapDesc, IID_PPV_ARGS(&rtvDescriptorHeap)) == S_OK);
+            rtvDescriptorCount = 0;
+            rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+            for (uint imageIndex = 0; imageIndex < countof(swapChainImages); imageIndex++) {
+                ID3D12Resource** image = &swapChainImages[imageIndex];
+                uint offset = rtvDescriptorSize * rtvDescriptorCount;
+                swapChainImageRTVDescriptors[imageIndex] = {rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
+                device->CreateRenderTargetView(*image, nullptr, swapChainImageRTVDescriptors[imageIndex]);
+                rtvDescriptorCount += 1;
+            }
+
+            cbvSrvUavDescriptorCapacity = 1024;
+            cbvSrvUavDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            D3D12_DESCRIPTOR_HEAP_DESC cbvSrvUavDescriptorHeapDesc = {.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, .NumDescriptors = cbvSrvUavDescriptorCapacity, .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
+            assert(device->CreateDescriptorHeap(&cbvSrvUavDescriptorHeapDesc, IID_PPV_ARGS(&cbvSrvUavDescriptorHeap)) == S_OK);
+        }
+        {
+            D3D12MA::ALLOCATOR_DESC allocatorDesc = {.Flags = D3D12MA::ALLOCATOR_FLAG_NONE, .pDevice = device, .pAdapter = dxgiAdapter};
+            assert(D3D12MA::CreateAllocator(&allocatorDesc, &allocator) == S_OK);
+        }
+        {
+            struct BufferDesc {
+                D3D12MA::Allocation** buffer;
+                uint8** bufferPtr;
+                uint size;
+                D3D12_HEAP_TYPE heapType;
+                D3D12_RESOURCE_FLAGS flags;
+                D3D12_RESOURCE_STATES initState;
+                const wchar_t* name;
+            } descs[] = {
+                {&stagingBuffer, &stagingBufferPtr, megabytes(256), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_SOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"stagingBuffer"},
+                {&constantBuffer, &constantBufferPtr, megabytes(4), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer"},
+                {&tlasInstancesBuildInfosBuffer, &tlasInstancesBuildInfosBufferPtr, megabytes(32), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesBuildInfosBuffer"},
+                {&tlasInstancesInfosBuffer, &tlasInstancesInfosBufferPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesInfosBuffer"},
+                {&blasGeometriesInfosBuffer, &blasGeometriesInfosBufferPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"blasGeometriesInfosBuffer"},
+                {&tlasBuffer, nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"tlasBuffer"},
+                {&tlasScratchBuffer, nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"tlasScratchBuffer"},
+                {&imguiVertexBuffer, &imguiVertexBufferPtr, megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiVertexBuffer"},
+                {&imguiIndexBuffer, &imguiIndexBufferPtr, megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiIndexBuffer"},
+                {&readBackUAVBuffer, nullptr, megabytes(2), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"readBackUavBuffer"},
+                {&readBackBuffer, (uint8**)&readBackBufferPtr, megabytes(2), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"readBackBuffer"},
+                {&collisionQueriesBuffer, &collisionQueriesBufferPtr, megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, L"collisionQueriesBuffer"},
+                {&collisionQueryResultsUavBuffer, nullptr, megabytes(1), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"collisionQueryResultsUavBuffer"},
+                {&collisionQueryResultsBuffer, &collisionQueryResultsBufferPtr, megabytes(1), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"collisionQueryResultsBuffer"},
+            };
+            for (BufferDesc& desc : descs) {
+                D3D12_RESOURCE_DESC bufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = desc.size, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = desc.flags};
+                D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = desc.heapType};
+                assert(allocator->CreateResource(&allocationDesc, &bufferDesc, desc.initState, nullptr, desc.buffer, {}, nullptr) == S_OK);
+                (*desc.buffer)->GetResource()->SetName(desc.name);
+                if (desc.bufferPtr) {
+                    assert((*desc.buffer)->GetResource()->Map(0, nullptr, (void**)desc.bufferPtr) == S_OK);
+                }
+            }
+        }
+        {
+            D3D12_RESOURCE_DESC renderTextureDesc = {
+                .Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+                .Width = settings.renderW,
+                .Height = settings.renderH,
+                .DepthOrArraySize = 1,
+                .MipLevels = 1,
+                .Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
+                .SampleDesc = {.Count = 1},
+                .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN,
+                .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            };
+
+            D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+            assert(allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &renderTexture, {}, nullptr) == S_OK);
+            renderTexture->GetResource()->SetName(L"renderTexture");
+            renderTextureFormat = renderTextureDesc.Format;
+        }
+        {
+            assert(ImGui::CreateContext());
+            ImGui::StyleColorsDark();
+            // ImGui::StyleColorsLight();
+            // ImGui::StyleColorsClassic();
+            ImGuiIO& io = ImGui::GetIO();
+            io.IniFilename = "imgui.ini";
+            io.FontGlobalScale = (float)settings.renderH / 1000.0f;
+            assert(io.Fonts->AddFontDefault());
+
+            transferQueueStartRecording();
+            stagingBufferOffset = 0;
+            {
+                uint8* imguiTextureData;
+                int imguiTextureWidth, imguiTextureHeight;
+                ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&imguiTextureData, &imguiTextureWidth, &imguiTextureHeight);
+                D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint64)imguiTextureWidth, .Height = (uint)imguiTextureHeight, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
+                D3D12_SUBRESOURCE_DATA data = {.pData = imguiTextureData, .RowPitch = imguiTextureWidth * 4, .SlicePitch = imguiTextureWidth * imguiTextureHeight * 4};
+                imguiImage = create2DImage(desc, &data);
+            }
+            {
+                uint8_4 defaultMaterialBaseColorImageData[4] = {{255, 255, 255, 255}, {255, 255, 255, 255}, {255, 255, 255, 255}, {255, 255, 255, 255}};
+                D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = 2, .Height = 2, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
+                D3D12_SUBRESOURCE_DATA data = {.pData = defaultMaterialBaseColorImageData, .RowPitch = 8, .SlicePitch = 16};
+                defaultMaterialBaseColorImage = create2DImage(desc, &data);
+                defaultMaterialBaseColorImageSRVDesc = {.Format = desc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = desc.MipLevels}};
+            }
+            D3D12_RESOURCE_BARRIER barriers[2] = {
+                {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = imguiImage->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
+                {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = defaultMaterialBaseColorImage->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
+            };
+            transferCmdList->ResourceBarrier(2, barriers);
+            transferQueueSubmitRecording();
+            transferQueueWait();
+        }
+
+        compilePipelines();
+    }
+
+    void compilePipelines() {
+        {
+            std::vector<uint8> rtByteCode = fileRead(exeDir / "renderScene.cso");
+            assert(device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&renderSceneRootSig)) == S_OK);
+            D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"primaryRayMiss"}, {L"primaryRayHitGroup"}, {L"primaryRayClosestHit"}, {L"secondaryRayMiss"}, {L"secondaryRayHitGroup"}, {L"secondaryRayClosestHit"}};
+            D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
+            D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
+            D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
+            assert(device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&renderScenePSO)) == S_OK);
+            assert(renderScenePSO->QueryInterface(IID_PPV_ARGS(&renderSceneProps)) == S_OK);
+            assert(renderSceneRayGenID = renderSceneProps->GetShaderIdentifier(L"rayGen"));
+            assert(renderScenePrimaryRayMissID = renderSceneProps->GetShaderIdentifier(L"primaryRayMiss"));
+            assert(renderScenePrimaryRayHitGroupID = renderSceneProps->GetShaderIdentifier(L"primaryRayHitGroup"));
+            assert(renderSceneSecondaryRayMissID = renderSceneProps->GetShaderIdentifier(L"secondaryRayMiss"));
+            assert(renderSceneSecondaryRayHitGroupID = renderSceneProps->GetShaderIdentifier(L"secondaryRayHitGroup"));
+        }
+        {
+            std::vector<uint8> rtByteCode = fileRead(exeDir / "collisionDetection.cso");
+            assert(device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&collisionDetectionRootSig)) == S_OK);
+            D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"miss"}, {L"hitGroup"}, {L"closestHit"}};
+            D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
+            D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
+            D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
+            assert(device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&collisionDetection)) == S_OK);
+            assert(collisionDetection->QueryInterface(IID_PPV_ARGS(&collisionDetectionProps)) == S_OK);
+            assert(collisionDetectionRayGenID = collisionDetectionProps->GetShaderIdentifier(L"rayGen"));
+            assert(collisionDetectionMissID = collisionDetectionProps->GetShaderIdentifier(L"miss"));
+            assert(collisionDetectionHitGroupID = collisionDetectionProps->GetShaderIdentifier(L"hitGroup"));
+        }
+        {
+            std::vector<uint8> vsByteCode = fileRead(exeDir / "postProcessVS.cso");
+            std::vector<uint8> psByteCode = fileRead(exeDir / "postProcessPS.cso");
+            assert(device->CreateRootSignature(0, psByteCode.data(), psByteCode.size(), IID_PPV_ARGS(&postProcessRootSig)) == S_OK);
+            D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {
+                .VS = {vsByteCode.data(), vsByteCode.size()},
+                .PS = {psByteCode.data(), psByteCode.size()},
+                .BlendState = {.RenderTarget = {{.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL}}},
+                .SampleMask = 0xffffffff,
+                .RasterizerState = {.FillMode = D3D12_FILL_MODE_SOLID, .CullMode = D3D12_CULL_MODE_BACK},
+                .PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+                .NumRenderTargets = 1,
+                .RTVFormats = {swapChainFormat},
+                .SampleDesc = {.Count = 1},
+            };
+            assert(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&postProcessPSO)) == S_OK);
+        }
+        {
+            std::vector<uint8> vsByteCode = fileRead(exeDir / "ImGuiVS.cso");
+            std::vector<uint8> psByteCode = fileRead(exeDir / "ImGuiPS.cso");
+            assert(device->CreateRootSignature(0, vsByteCode.data(), vsByteCode.size(), IID_PPV_ARGS(&imguiRootSig)) == S_OK);
+            D3D12_INPUT_ELEMENT_DESC inputElemDescs[] = {
+                {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+                {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+                {"COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 16, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            };
+            D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {
+                .VS = {vsByteCode.data(), vsByteCode.size()},
+                .PS = {psByteCode.data(), psByteCode.size()},
+                .BlendState = {
+                    .RenderTarget = {{
+                        .BlendEnable = true,
+                        .SrcBlend = D3D12_BLEND_SRC_ALPHA,
+                        .DestBlend = D3D12_BLEND_INV_SRC_ALPHA,
+                        .BlendOp = D3D12_BLEND_OP_ADD,
+                        .SrcBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA,
+                        .DestBlendAlpha = D3D12_BLEND_ZERO,
+                        .BlendOpAlpha = D3D12_BLEND_OP_ADD,
+                        .RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL,
+                    }}},
+                .SampleMask = 0xffffffff,
+                .RasterizerState = {.FillMode = D3D12_FILL_MODE_SOLID, .CullMode = D3D12_CULL_MODE_NONE, .DepthClipEnable = true},
+                .InputLayout = {inputElemDescs, countof(inputElemDescs)},
+                .PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+                .NumRenderTargets = 1,
+                .RTVFormats = {swapChainFormat},
+                .SampleDesc = {.Count = 1},
+            };
+            assert(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&imguiPSO)) == S_OK);
+        }
+        {
+            std::vector<uint8> csByteCode = fileRead(exeDir / "vertexSkinning.cso");
+            assert(device->CreateRootSignature(0, csByteCode.data(), csByteCode.size(), IID_PPV_ARGS(&vertexSkinningRootSig)) == S_OK);
+            D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {.pRootSignature = vertexSkinningRootSig, .CS = {.pShaderBytecode = csByteCode.data(), .BytecodeLength = csByteCode.size()}};
+            assert(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&vertexSkinningPSO)) == S_OK);
         }
     }
-    if (settingBits & settingWindowMode) {
+
+    void resizeSwapChain(uint width, uint height) {
+        graphicsQueueWait();
+        for (ID3D12Resource* image : swapChainImages) { image->Release(); }
+        assert(swapChain->ResizeBuffers(countof(swapChainImages), width, height, swapChainFormat, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH) == S_OK);
+        for (uint imageIndex = 0; imageIndex < countof(swapChainImages); imageIndex++) {
+            ID3D12Resource** image = &swapChainImages[imageIndex];
+            assert(swapChain->GetBuffer(imageIndex, IID_PPV_ARGS(image)) == S_OK);
+            (*image)->SetName(std::format(L"swapChain{}", imageIndex).c_str());
+            device->CreateRenderTargetView(*image, nullptr, swapChainImageRTVDescriptors[imageIndex]);
+        }
+        renderTexture->Release();
+        D3D12_RESOURCE_DESC renderTextureDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = width, .Height = height, .DepthOrArraySize = 1, .MipLevels = 1, .Format = renderTextureFormat, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+        D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+        assert(allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &renderTexture, {}, nullptr) == S_OK);
+        renderTexture->GetResource()->SetName(L"renderTexture");
+    }
+
+    void applySettings() {
+        DXGI_OUTPUT_DESC1 dxgiOutputDesc = {};
+        assert(dxgiOutput->GetDesc1(&dxgiOutputDesc) == S_OK);
+        if (settings.hdr && dxgiOutputDesc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) {
+            assert(swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) == S_OK);
+        } else {
+            assert(swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709) == S_OK);
+        }
         if (settings.windowMode == WindowModeWindowed) {
-            assert(d3d.swapChain->SetFullscreenState(false, nullptr) == S_OK);
+            assert(swapChain->SetFullscreenState(false, nullptr) == S_OK);
             DWORD dwStyle = GetWindowLong(window.hwnd, GWL_STYLE);
             MONITORINFO mi = {.cbSize = sizeof(mi)};
             assert(GetMonitorInfo(MonitorFromWindow(window.hwnd, MONITOR_DEFAULTTOPRIMARY), &mi));
             assert(SetWindowLong(window.hwnd, GWL_STYLE, dwStyle | WS_OVERLAPPEDWINDOW) != 0);
             assert(SetWindowPos(window.hwnd, NULL, settings.windowX, settings.windowY, settings.windowW, settings.windowH, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED));
         } else if (settings.windowMode == WindowModeBorderless) {
-            assert(d3d.swapChain->SetFullscreenState(false, nullptr) == S_OK);
+            assert(swapChain->SetFullscreenState(false, nullptr) == S_OK);
             DWORD dwStyle = GetWindowLong(window.hwnd, GWL_STYLE);
             MONITORINFO mi = {.cbSize = sizeof(mi)};
             assert(GetMonitorInfo(MonitorFromWindow(window.hwnd, MONITOR_DEFAULTTOPRIMARY), &mi));
             assert(SetWindowLong(window.hwnd, GWL_STYLE, dwStyle & ~WS_OVERLAPPEDWINDOW) != 0);
             assert(SetWindowPos(window.hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_NOOWNERZORDER | SWP_FRAMECHANGED));
         } else if (settings.windowMode == WindowModeFullscreen) {
-            DXGI_MODE_DESC dxgiMode = {.Width = settings.windowW, .Height = settings.windowH, .RefreshRate = settings.refreshRate, .Format = d3d.swapChainFormat};
-            assert(d3d.swapChain->ResizeTarget(&dxgiMode) == S_OK);
-            assert(d3d.swapChain->SetFullscreenState(true, nullptr) == S_OK);
+            DXGI_MODE_DESC dxgiMode = {.Width = settings.windowW, .Height = settings.windowH, .RefreshRate = settings.refreshRate, .Format = swapChainFormat};
+            assert(swapChain->ResizeTarget(&dxgiMode) == S_OK);
+            assert(swapChain->SetFullscreenState(true, nullptr) == S_OK);
         }
     }
-}
 
-#include "sceneStructs.h"
+    D3DDescriptor appendCBVDescriptor(D3D12_CONSTANT_BUFFER_VIEW_DESC* constantBufferViewDesc) {
+        assert(cbvSrvUavDescriptorCount < cbvSrvUavDescriptorCapacity);
+        uint offset = cbvSrvUavDescriptorSize * cbvSrvUavDescriptorCount;
+        D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = {cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
+        D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = {cbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + offset};
+        device->CreateConstantBufferView(constantBufferViewDesc, cpuHandle);
+        cbvSrvUavDescriptorCount++;
+        return {cpuHandle, gpuHandle};
+    }
+
+    D3DDescriptor appendSRVDescriptor(D3D12_SHADER_RESOURCE_VIEW_DESC* resourceViewDesc, ID3D12Resource* resource) {
+        assert(cbvSrvUavDescriptorCount < cbvSrvUavDescriptorCapacity);
+        uint offset = cbvSrvUavDescriptorSize * cbvSrvUavDescriptorCount;
+        D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = {cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
+        D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = {cbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + offset};
+        device->CreateShaderResourceView(resource, resourceViewDesc, cpuHandle);
+        cbvSrvUavDescriptorCount++;
+        return {cpuHandle, gpuHandle};
+    }
+
+    D3DDescriptor appendUAVDescriptor(D3D12_UNORDERED_ACCESS_VIEW_DESC* unorderedAccessViewDesc, ID3D12Resource* resource) {
+        assert(cbvSrvUavDescriptorCount < cbvSrvUavDescriptorCapacity);
+        uint offset = cbvSrvUavDescriptorSize * cbvSrvUavDescriptorCount;
+        D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = {cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
+        D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = {cbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + offset};
+        device->CreateUnorderedAccessView(resource, nullptr, unorderedAccessViewDesc, cpuHandle);
+        cbvSrvUavDescriptorCount++;
+        return {cpuHandle, gpuHandle};
+    }
+
+    void graphicsQueueStartRecording() {
+        assert(graphicsCmdAllocator->Reset() == S_OK);
+        assert(graphicsCmdList->Reset(graphicsCmdAllocator, nullptr) == S_OK);
+    }
+
+    void graphicsQueueSubmitRecording() {
+        assert(graphicsCmdList->Close() == S_OK);
+        graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&graphicsCmdList);
+    }
+
+    void graphicsQueueWait() {
+        graphicsQueueFenceCounter += 1;
+        graphicsQueue->Signal(graphicsQueueFence, graphicsQueueFenceCounter);
+        if (graphicsQueueFence->GetCompletedValue() < graphicsQueueFenceCounter) {
+            assert(graphicsQueueFence->SetEventOnCompletion(graphicsQueueFenceCounter, graphicsQueueFenceEvent) == S_OK);
+            assert(WaitForSingleObjectEx(graphicsQueueFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
+        }
+    }
+
+    void transferQueueStartRecording() {
+        assert(transferCmdAllocator->Reset() == S_OK);
+        assert(transferCmdList->Reset(transferCmdAllocator, nullptr) == S_OK);
+    }
+
+    void transferQueueSubmitRecording() {
+        assert(transferCmdList->Close() == S_OK);
+        transferQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&transferCmdList);
+    }
+
+    void transferQueueWait() {
+        transferQueueFenceCounter += 1;
+        transferQueue->Signal(transferQueueFence, transferQueueFenceCounter);
+        if (transferQueueFence->GetCompletedValue() < transferQueueFenceCounter) {
+            assert(transferQueueFence->SetEventOnCompletion(transferQueueFenceCounter, transferQueueFenceEvent) == S_OK);
+            assert(WaitForSingleObjectEx(transferQueueFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
+        }
+    }
+
+    D3D12MA::Allocation* create2DImage(const D3D12_RESOURCE_DESC& resourceDesc, D3D12_SUBRESOURCE_DATA* imageMips) {
+        D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+        D3D12MA::Allocation* image;
+        assert(allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image, {}, nullptr) == S_OK);
+        stagingBufferOffset = align(stagingBufferOffset, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT mipFootprints[16];
+        uint rowCounts[16];
+        uint64 rowSizes[16];
+        uint64 requiredSize;
+        device->GetCopyableFootprints(&resourceDesc, 0, resourceDesc.MipLevels, 0, mipFootprints, rowCounts, rowSizes, &requiredSize);
+        assert(stagingBufferOffset + requiredSize < stagingBuffer->GetSize());
+        for (uint mipIndex = 0; mipIndex < resourceDesc.MipLevels; mipIndex++) {
+            mipFootprints[mipIndex].Offset += stagingBufferOffset;
+        }
+        assert(UpdateSubresources(transferCmdList, image->GetResource(), stagingBuffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, imageMips) == requiredSize);
+        stagingBufferOffset += (uint)requiredSize;
+        return image;
+    }
+
+    D3D12MA::Allocation* create2DImageDDS(const std::filesystem::path& ddsFilePath) {
+        ScratchImage scratchImage;
+        assert(LoadFromDDSFile(ddsFilePath.c_str(), DDS_FLAGS_NONE, nullptr, scratchImage) == S_OK);
+        assert(scratchImage.GetImageCount() == scratchImage.GetMetadata().mipLevels);
+        const TexMetadata& scratchImageInfo = scratchImage.GetMetadata();
+        D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+        D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint)scratchImageInfo.width, .Height = (uint)scratchImageInfo.height, .DepthOrArraySize = (uint16)scratchImageInfo.arraySize, .MipLevels = (uint16)scratchImageInfo.mipLevels, .Format = scratchImageInfo.format, .SampleDesc = {.Count = 1}};
+        D3D12MA::Allocation* image;
+        assert(allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image, {}, nullptr) == S_OK);
+        stagingBufferOffset = align(stagingBufferOffset, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT mipFootprints[16];
+        uint rowCounts[16];
+        uint64 rowSizes[16];
+        uint64 requiredSize;
+        D3D12_SUBRESOURCE_DATA srcData[16];
+        device->GetCopyableFootprints(&resourceDesc, 0, resourceDesc.MipLevels, 0, mipFootprints, rowCounts, rowSizes, &requiredSize);
+        assert(stagingBufferOffset + requiredSize < stagingBuffer->GetSize());
+        for (uint mipIndex = 0; mipIndex < scratchImageInfo.mipLevels; mipIndex++) {
+            mipFootprints[mipIndex].Offset += stagingBufferOffset;
+            const Image& image = scratchImage.GetImages()[mipIndex];
+            srcData[mipIndex] = {.pData = image.pixels, .RowPitch = (int64)image.rowPitch, .SlicePitch = (int64)image.slicePitch};
+        }
+        assert(UpdateSubresources(transferCmdList, image->GetResource(), stagingBuffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, srcData) == requiredSize);
+        stagingBufferOffset += (uint)requiredSize;
+        return image;
+    }
+};
+
+static D3D d3d = {};
 
 struct CameraEditor {
-    float3 position;
-    float3 lookAt;
-    float2 pitchYaw;
-    float fovVertical;
-    float sensitivity;
-    float rotationSensitivity;
-    float controllerSensitivity;
+    float3 position = {0, 0, -10};
+    float3 lookAt = {0, 0, 0};
+    float2 pitchYaw = {0, 0};
+    float fovVertical = 50;
+    float sensitivity = 1;
+    float rotationSensitivity = 1;
+    float controllerSensitivity = 1;
 
     void updateLookAt() {
         pitchYaw.x = std::clamp(pitchYaw.x, -pi * 0.4f, pi * 0.4f);
@@ -1114,8 +1100,8 @@ enum ModelAnimationChannelType {
 
 struct ModelAnimationChannel {
     ModelNode* node = nullptr;
-    ModelAnimationChannelType type;
     ModelAnimationSampler* sampler = nullptr;
+    ModelAnimationChannelType type;
 };
 
 struct ModelAnimation {
@@ -1146,6 +1132,13 @@ struct ModelInstanceAnimationState {
     std::vector<D3D12MA::Allocation*> meshVerticesBuffers;
     std::vector<D3D12MA::Allocation*> meshBlases;
     std::vector<D3D12MA::Allocation*> meshBlasScratches;
+
+    void releaseResources() {
+        if (skinJointsBuffer) skinJointsBuffer->Release();
+        for (D3D12MA::Allocation* buffer : meshVerticesBuffers) buffer->Release();
+        for (D3D12MA::Allocation* buffer : meshBlases) buffer->Release();
+        for (D3D12MA::Allocation* buffer : meshBlasScratches) buffer->Release();
+    }
 };
 
 struct ModelInstance {
@@ -1159,6 +1152,8 @@ struct Player {
     float3 velocity;
     float3 acceleration;
     CameraThirdPerson camera;
+
+    void releaseResource() { model.animationState.releaseResources(); }
 };
 
 struct StaticObject {
@@ -1166,6 +1161,8 @@ struct StaticObject {
     ModelInstance model;
     Transform transform;
     bool toBeDeleted;
+
+    void releaseResource() { model.animationState.releaseResources(); }
 };
 
 struct DynamicObject {
@@ -1173,6 +1170,8 @@ struct DynamicObject {
     ModelInstance model;
     Transform transform;
     bool toBeDeleted;
+
+    void releaseResource() { model.animationState.releaseResources(); }
 };
 
 struct Skybox {
@@ -1180,34 +1179,42 @@ struct Skybox {
     D3D12MA::Allocation* hdriTexture;
 };
 
-enum SceneEditorUndoType {
-    SceneEditorUndoTypeObjectDeletion
+enum EditorUndoType {
+    WorldEditorUndoTypeObjectDeletion
 };
 
-struct SceneEditorUndoObjectDeletion {
-    SceneObjectType objectType;
+struct EditorUndoObjectDeletion {
+    WorldObjectType objectType;
     void* object;
 };
 
-struct SceneEditorUndo {
-    SceneEditorUndoType type;
+struct EditorUndo {
+    EditorUndoType type;
     union {
-        SceneEditorUndoObjectDeletion* objectDeletion;
+        EditorUndoObjectDeletion* objectDeletion;
     };
 };
 
-struct SceneEditor {
+struct Editor {
+    bool enable = true;
+    bool active = true;
     CameraEditor camera;
-    bool cameraMoving;
-    SceneObjectType selectedObjectType;
-    uint selectedObjectIndex;
-    std::stack<SceneEditorUndo> undos;
+    bool cameraMoving = false;
+    WorldObjectType selectedObjectType = WorldObjectTypeNone;
+    uint selectedObjectIndex = 0;
+    std::stack<EditorUndo> undos;
+
+    Player player;
+    std::vector<StaticObject> staticObjects;
+    std::vector<DynamicObject> dynamicObjects;
 };
 
-struct Scene {
+Editor editor;
+
+struct World {
     std::filesystem::path filePath;
-    Player player;
     std::vector<Model> models;
+    Player player;
     std::vector<StaticObject> staticObjects;
     std::vector<DynamicObject> dynamicObjects;
     Skybox skybox;
@@ -1217,462 +1224,468 @@ struct Scene {
     std::vector<TLASInstanceInfo> tlasInstancesInfos;
     std::vector<BLASGeometryInfo> blasGeometriesInfos;
 
-    SceneEditor editor;
+    void load(const std::filesystem::path& path) {
+        if (std::filesystem::exists(path)) {
+            std::string yamlStr = fileReadStr(path);
+            ryml::Tree yamlTree = ryml::parse_in_arena(ryml::to_csubstr(yamlStr));
+            ryml::ConstNodeRef yamlRoot = yamlTree.rootref();
+            filePath = path;
+
+            if (editor.enable && yamlRoot.has_child("editorCamera")) {
+                ryml::ConstNodeRef cameraYaml = yamlRoot["editorCamera"];
+                editor.camera.position << cameraYaml["position"];
+                editor.camera.pitchYaw << cameraYaml["pitchYaw"];
+                editor.camera.updateLookAt();
+                cameraYaml["fovVertical"] >> editor.camera.fovVertical;
+                cameraYaml["sensitivity"] >> editor.camera.sensitivity;
+                cameraYaml["rotationSensitivity"] >> editor.camera.rotationSensitivity;
+                cameraYaml["controllerSensitivity"] >> editor.camera.controllerSensitivity;
+            } else {
+                editor.camera = {};
+            }
+            {
+                ryml::ConstNodeRef skyboxYaml = yamlRoot["skybox"];
+                std::string file;
+                skyboxYaml["file"] >> file;
+                skybox.hdriTextureFilePath = file;
+                d3d.transferQueueStartRecording();
+                d3d.stagingBufferOffset = 0;
+                skybox.hdriTexture = d3d.create2DImageDDS(assetsDir / skybox.hdriTextureFilePath);
+                D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = skybox.hdriTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
+                d3d.transferCmdList->ResourceBarrier(1, &barrier);
+                d3d.transferQueueSubmitRecording();
+                d3d.transferQueueWait();
+            }
+            {
+                ryml::ConstNodeRef playerYaml = yamlRoot["player"];
+                std::string file;
+                playerYaml["file"] >> file;
+                player.model = loadModel(file);
+                player.transform << playerYaml;
+                player.velocity << playerYaml["velocity"];
+                player.acceleration << playerYaml["acceleration"];
+                player.camera.lookAtOffset << playerYaml["cameraLookAtOffset"];
+                player.camera.rotation << playerYaml["cameraRotation"];
+                playerYaml["cameraDistance"] >> player.camera.distance;
+                player.camera.lookAt = player.transform.t + player.camera.lookAtOffset;
+                if (editor.enable) editor.player = player;
+            }
+            ryml::ConstNodeRef staticObjectsYaml = yamlRoot["staticObjects"];
+            for (ryml::ConstNodeRef const& staticObjectYaml : staticObjectsYaml) {
+                StaticObject& obj = staticObjects.emplace_back();
+                staticObjectYaml["name"] >> obj.name;
+                std::string file;
+                staticObjectYaml["file"] >> file;
+                obj.model = loadModel(file);
+                obj.transform << staticObjectYaml;
+                if (editor.enable) editor.staticObjects.push_back(obj);
+            }
+            ryml::ConstNodeRef dynamicObjectsYaml = yamlRoot["dynamicObjects"];
+            for (ryml::ConstNodeRef const& dynamicObjectYaml : dynamicObjectsYaml) {
+                DynamicObject& obj = dynamicObjects.emplace_back();
+                dynamicObjectYaml["name"] >> obj.name;
+                std::string file;
+                dynamicObjectYaml["file"] >> file;
+                obj.model = loadModel(file);
+                obj.transform << dynamicObjectYaml;
+                if (editor.enable) editor.dynamicObjects.push_back(obj);
+            }
+        } else {
+            assert(false && "implementation");
+        }
+    }
+
+    void save() {
+        if (!editor.enable) return;
+
+        ryml::Tree yamlTree;
+        ryml::NodeRef yamlRoot = yamlTree.rootref();
+        yamlRoot |= ryml::MAP;
+
+        ryml::NodeRef cameraYaml = yamlRoot["editorCamera"];
+        cameraYaml |= ryml::MAP;
+        editor.camera.position >> cameraYaml["position"];
+        editor.camera.pitchYaw >> cameraYaml["pitchYaw"];
+        cameraYaml["fovVertical"] << editor.camera.fovVertical;
+        cameraYaml["sensitivity"] << editor.camera.sensitivity;
+        cameraYaml["rotationSensitivity"] << editor.camera.rotationSensitivity;
+        cameraYaml["controllerSensitivity"] << editor.camera.controllerSensitivity;
+
+        ryml::NodeRef skyboxYaml = yamlRoot["skybox"];
+        skyboxYaml |= ryml::MAP;
+        skyboxYaml["file"] << skybox.hdriTextureFilePath.string();
+
+        ryml::NodeRef playerYaml = yamlRoot["player"];
+        playerYaml |= ryml::MAP;
+        playerYaml["file"] << models[editor.player.model.index].filePath.string();
+        editor.player.transform >> playerYaml;
+        editor.player.velocity >> playerYaml["velocity"];
+        editor.player.acceleration >> playerYaml["acceleration"];
+        editor.player.camera.lookAtOffset >> playerYaml["cameraLookAtOffset"];
+        editor.player.camera.rotation >> playerYaml["cameraRotation"];
+        playerYaml["cameraDistance"] << editor.player.camera.distance;
+
+        ryml::NodeRef staticObjectsYaml = yamlRoot["staticObjects"];
+        staticObjectsYaml |= ryml::SEQ;
+        for (StaticObject& staticObject : editor.staticObjects) {
+            ryml::NodeRef staticObjectYaml = staticObjectsYaml.append_child();
+            staticObjectYaml |= ryml::MAP;
+            staticObjectYaml["name"] << staticObject.name;
+            staticObjectYaml["file"] << models[staticObject.model.index].filePath.string();
+            staticObject.transform >> staticObjectYaml;
+        }
+
+        ryml::NodeRef dynamicObjectsYaml = yamlRoot["dynamicObjects"];
+        dynamicObjectsYaml |= ryml::SEQ;
+        for (DynamicObject& dynamicObject : editor.dynamicObjects) {
+            ryml::NodeRef dynamicObjectYaml = dynamicObjectsYaml.append_child();
+            dynamicObjectYaml |= ryml::MAP;
+            dynamicObjectYaml["name"] << dynamicObject.name;
+            dynamicObjectYaml["file"] << models[dynamicObject.model.index].filePath.string();
+            dynamicObject.transform >> dynamicObjectYaml;
+        }
+
+        std::string yamlStr = ryml::emitrs_yaml<std::string>(yamlTree);
+        assert(fileWriteStr(filePath, yamlStr));
+    }
+
+    ModelInstance loadModel(const std::filesystem::path& filePath) {
+        if (filePath.extension() != ".gltf") return {.index = UINT_MAX};
+
+        auto modelIter = std::find_if(models.begin(), models.end(), [&](auto& model) { return model.filePath == filePath; });
+        if (modelIter == models.end()) {
+            Model& model = models.emplace_back();
+            modelIter = models.end() - 1;
+
+            const std::filesystem::path gltfFilePath = assetsDir / filePath;
+            const std::filesystem::path gltfFileFolderPath = gltfFilePath.parent_path();
+            cgltf_options gltfOptions = {};
+            cgltf_data* gltfData = nullptr;
+            cgltf_result gltfParseFileResult = cgltf_parse_file(&gltfOptions, gltfFilePath.string().c_str(), &gltfData);
+            assert(gltfParseFileResult == cgltf_result_success);
+            cgltf_result gltfLoadBuffersResult = cgltf_load_buffers(&gltfOptions, gltfData, gltfFilePath.string().c_str());
+            assert(gltfLoadBuffersResult == cgltf_result_success);
+            model.filePath = filePath;
+            model.gltfData = gltfData;
+
+            d3d.transferQueueStartRecording();
+            d3d.stagingBufferOffset = 0;
+
+            model.images.reserve(gltfData->images_count);
+            for (uint imageIndex = 0; imageIndex < gltfData->images_count; imageIndex++) {
+                cgltf_image& gltfImage = gltfData->images[imageIndex];
+                ModelImage& image = model.images.emplace_back();
+                std::filesystem::path imageFilePath = gltfFileFolderPath / gltfImage.uri;
+                std::filesystem::path imageDDSFilePath = imageFilePath;
+                imageDDSFilePath.replace_extension(".dds");
+                assert(std::filesystem::exists(imageDDSFilePath));
+                image.gpuData = d3d.create2DImageDDS(imageDDSFilePath);
+                D3D12_RESOURCE_DESC imageDesc = image.gpuData->GetResource()->GetDesc();
+                image.srvDesc = {.Format = imageDesc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = imageDesc.MipLevels}};
+                D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = image.gpuData->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
+                d3d.transferCmdList->ResourceBarrier(1, &barrier);
+            }
+            model.textures.reserve(gltfData->textures_count);
+            for (uint textureIndex = 0; textureIndex < gltfData->textures_count; textureIndex++) {
+                cgltf_texture& gltfTexture = gltfData->textures[textureIndex];
+                ModelTexture& texture = model.textures.emplace_back();
+                assertDebug(gltfTexture.image && gltfTexture.sampler);
+                texture.image = &model.images[gltfTexture.image - &gltfData->images[0]];
+            }
+            model.materials.reserve(gltfData->materials_count);
+            for (uint materialIndex = 0; materialIndex < gltfData->materials_count; materialIndex++) {
+                cgltf_material& gltfMaterial = gltfData->materials[materialIndex];
+                ModelMaterial& material = model.materials.emplace_back();
+                if (gltfMaterial.name) material.name = gltfMaterial.name;
+                assertDebug(gltfMaterial.has_pbr_metallic_roughness);
+                material.baseColorFactor = float4(gltfMaterial.pbr_metallic_roughness.base_color_factor);
+                if (gltfMaterial.pbr_metallic_roughness.base_color_texture.texture) {
+                    assertDebug(gltfMaterial.pbr_metallic_roughness.base_color_texture.texcoord == 0);
+                    assertDebug(!gltfMaterial.pbr_metallic_roughness.base_color_texture.has_transform);
+                    material.baseColorTexture = &model.textures[gltfMaterial.pbr_metallic_roughness.base_color_texture.texture - &gltfData->textures[0]];
+                }
+            }
+            model.meshes.reserve(gltfData->meshes_count);
+            for (uint meshIndex = 0; meshIndex < gltfData->meshes_count; meshIndex++) {
+                cgltf_mesh& gltfMesh = gltfData->meshes[meshIndex];
+                ModelMesh& mesh = model.meshes.emplace_back();
+                if (gltfMesh.name) mesh.name = gltfMesh.name;
+                mesh.primitives.reserve(gltfMesh.primitives_count);
+                for (cgltf_primitive& gltfPrimitive : std::span(gltfMesh.primitives, gltfMesh.primitives_count)) {
+                    cgltf_accessor* indices = gltfPrimitive.indices;
+                    cgltf_accessor* positions = nullptr;
+                    cgltf_accessor* normals = nullptr;
+                    cgltf_accessor* uvs = nullptr;
+                    cgltf_accessor* jointIndices = nullptr;
+                    cgltf_accessor* jointWeights = nullptr;
+                    for (cgltf_attribute& attribute : std::span(gltfPrimitive.attributes, gltfPrimitive.attributes_count)) {
+                        if (attribute.type == cgltf_attribute_type_position) {
+                            positions = attribute.data;
+                        } else if (attribute.type == cgltf_attribute_type_normal) {
+                            normals = attribute.data;
+                        } else if (attribute.type == cgltf_attribute_type_texcoord) {
+                            uvs = attribute.data;
+                        } else if (attribute.type == cgltf_attribute_type_joints) {
+                            jointIndices = attribute.data;
+                        } else if (attribute.type == cgltf_attribute_type_weights) {
+                            jointWeights = attribute.data;
+                        }
+                    }
+                    assert(gltfPrimitive.type == cgltf_primitive_type_triangles);
+                    assert(indices && positions && normals);
+                    assert(indices->count % 3 == 0 && indices->type == cgltf_type_scalar && (indices->component_type == cgltf_component_type_r_16u || indices->component_type == cgltf_component_type_r_32u));
+                    assert(positions->type == cgltf_type_vec3 && positions->component_type == cgltf_component_type_r_32f);
+                    assert(normals->count == positions->count && normals->type == cgltf_type_vec3 && normals->component_type == cgltf_component_type_r_32f);
+                    if (uvs) assert(uvs->count == positions->count && uvs->component_type == cgltf_component_type_r_32f && uvs->type == cgltf_type_vec2);
+                    if (jointIndices) assert(jointIndices->count == positions->count && (jointIndices->component_type == cgltf_component_type_r_16u || jointIndices->component_type == cgltf_component_type_r_8u) && jointIndices->type == cgltf_type_vec4 && (jointIndices->stride == 8 || jointIndices->stride == 4));
+                    if (jointWeights) assert(jointWeights->count == positions->count && jointWeights->component_type == cgltf_component_type_r_32f && jointWeights->type == cgltf_type_vec4 && jointWeights->stride == 16);
+                    float3* positionsBuffer = (float3*)((uint8*)(positions->buffer_view->buffer->data) + positions->offset + positions->buffer_view->offset);
+                    float3* normalsBuffer = (float3*)((uint8*)(normals->buffer_view->buffer->data) + normals->offset + normals->buffer_view->offset);
+                    void* indicesBuffer = (uint8*)(indices->buffer_view->buffer->data) + indices->offset + indices->buffer_view->offset;
+                    float2* uvsBuffer = uvs ? (float2*)((uint8*)(uvs->buffer_view->buffer->data) + uvs->offset + uvs->buffer_view->offset) : nullptr;
+                    void* jointIndicesBuffer = jointIndices ? (uint8*)(jointIndices->buffer_view->buffer->data) + jointIndices->offset + jointIndices->buffer_view->offset : nullptr;
+                    float4* jointWeightsBuffer = jointWeights ? (float4*)((uint8*)(jointWeights->buffer_view->buffer->data) + jointWeights->offset + jointWeights->buffer_view->offset) : nullptr;
+
+                    ModelPrimitive& primitive = mesh.primitives.emplace_back();
+                    primitive.verticesBufferOffset = (uint)mesh.vertices.size();
+                    primitive.verticesCount = (uint)positions->count;
+                    primitive.indicesBufferOffset = (uint)mesh.indices.size();
+                    primitive.indicesCount = (uint)indices->count;
+                    for (uint vertexIndex = 0; vertexIndex < positions->count; vertexIndex++) {
+                        Vertex vertex = {.position = positionsBuffer[vertexIndex], .normal = normalsBuffer[vertexIndex]};
+                        if (uvsBuffer) vertex.uv = uvsBuffer[vertexIndex];
+                        if (jointIndicesBuffer) {
+                            if (jointIndices->component_type == cgltf_component_type_r_16u) vertex.joints = ((uint16_4*)jointIndicesBuffer)[vertexIndex];
+                            else vertex.joints = ((uint8_4*)jointIndicesBuffer)[vertexIndex];
+                        }
+                        if (jointWeightsBuffer) vertex.jointWeights = jointWeightsBuffer[vertexIndex];
+                        mesh.vertices.push_back(vertex);
+                    }
+                    if (indices->component_type == cgltf_component_type_r_16u) mesh.indices.append_range(std::span((uint16*)indicesBuffer, indices->count));
+                    else if (indices->component_type == cgltf_component_type_r_32u) mesh.indices.append_range(std::span((uint*)indicesBuffer, indices->count));
+                    if (gltfPrimitive.material) primitive.material = &model.materials[gltfPrimitive.material - gltfData->materials];
+                }
+
+                D3D12MA::ALLOCATION_DESC verticeIndicesBuffersAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+                D3D12_RESOURCE_DESC verticeIndicesBuffersDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
+                verticeIndicesBuffersDesc.Width = vectorSizeof(mesh.vertices);
+                assert(d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.verticesBuffer, {}, nullptr) == S_OK);
+                verticeIndicesBuffersDesc.Width = vectorSizeof(mesh.indices);
+                assert(d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.indicesBuffer, {}, nullptr) == S_OK);
+
+                memcpy(d3d.stagingBufferPtr + d3d.stagingBufferOffset, mesh.vertices.data(), vectorSizeof(mesh.vertices));
+                d3d.transferCmdList->CopyBufferRegion(mesh.verticesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(mesh.vertices));
+                d3d.stagingBufferOffset += (uint)vectorSizeof(mesh.vertices);
+                memcpy(d3d.stagingBufferPtr + d3d.stagingBufferOffset, mesh.indices.data(), vectorSizeof(mesh.indices));
+                d3d.transferCmdList->CopyBufferRegion(mesh.indicesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(mesh.indices));
+                d3d.stagingBufferOffset += (uint)vectorSizeof(mesh.indices);
+                assert(d3d.stagingBufferOffset < d3d.stagingBuffer->GetSize());
+                D3D12_RESOURCE_BARRIER bufferBarriers[2] = {
+                    {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = mesh.verticesBuffer->GetResource(), .Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
+                    {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = mesh.indicesBuffer->GetResource(), .Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
+                };
+                d3d.transferCmdList->ResourceBarrier(countof(bufferBarriers), bufferBarriers);
+
+                std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
+                for (ModelPrimitive& primitive : mesh.primitives) {
+                    D3D12_RAYTRACING_GEOMETRY_DESC& geometryDesc = geometryDescs.emplace_back();
+                    geometryDesc = {
+                        .Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
+                        .Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE,
+                        .Triangles = {
+                            .Transform3x4 = 0,
+                            .IndexFormat = DXGI_FORMAT_R32_UINT,
+                            .VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
+                            .IndexCount = (uint)primitive.indicesCount,
+                            .VertexCount = (uint)primitive.verticesCount,
+                            .IndexBuffer = mesh.indicesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.indicesBufferOffset * sizeof(uint),
+                            .VertexBuffer = {mesh.verticesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.verticesBufferOffset * sizeof(struct Vertex), sizeof(Vertex)},
+                        },
+                    };
+                }
+                D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL, .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE, .NumDescs = (uint)geometryDescs.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .pGeometryDescs = geometryDescs.data()};
+                D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
+                d3d.device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
+
+                D3D12MA::ALLOCATION_DESC blasAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+                D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+                blasDesc.Width = prebuildInfo.ResultDataMaxSizeInBytes;
+                assert(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &mesh.blas, {}, nullptr) == S_OK);
+                blasDesc.Width = prebuildInfo.ScratchDataSizeInBytes;
+                assert(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &mesh.blasScratch, {}, nullptr) == S_OK);
+                D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = mesh.blas->GetResource()->GetGPUVirtualAddress(), .Inputs = inputs, .ScratchAccelerationStructureData = mesh.blasScratch->GetResource()->GetGPUVirtualAddress()};
+                d3d.transferCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+            }
+            model.nodes.resize(gltfData->nodes_count);
+            for (uint nodeIndex = 0; nodeIndex < gltfData->nodes_count; nodeIndex++) {
+                cgltf_node& gltfNode = gltfData->nodes[nodeIndex];
+                ModelNode& node = model.nodes[nodeIndex];
+                if (gltfNode.name) node.name = gltfNode.name;
+                if (gltfNode.parent) {
+                    uint parentNodeIndex = (uint)(gltfNode.parent - gltfData->nodes);
+                    assertDebug(parentNodeIndex >= 0 && parentNodeIndex < gltfData->nodes_count);
+                    node.parent = &model.nodes[parentNodeIndex];
+                } else {
+                    node.parent = nullptr;
+                }
+                for (cgltf_node* child : std::span(gltfNode.children, gltfNode.children_count)) {
+                    uint childNodeIndex = (uint)(child - gltfData->nodes);
+                    assertDebug(childNodeIndex >= 0 && childNodeIndex < gltfData->nodes_count);
+                    node.children.push_back(&model.nodes[childNodeIndex]);
+                }
+                float nodeTransform[16];
+                cgltf_node_transform_world(&gltfNode, nodeTransform);
+                node.globalTransform = XMMATRIX(nodeTransform);
+                if (gltfNode.has_matrix) {
+                    node.localTransform = XMMATRIX(gltfNode.matrix);
+                } else {
+                    Transform localTransform = {};
+                    if (gltfNode.has_scale) localTransform.s = float3(gltfNode.scale);
+                    if (gltfNode.has_rotation) localTransform.r = float4(gltfNode.rotation);
+                    if (gltfNode.has_translation) localTransform.t = float3(gltfNode.translation);
+                    node.localTransform = localTransform.toMat();
+                }
+                if (gltfNode.mesh) {
+                    uint meshIndex = (uint)(gltfNode.mesh - gltfData->meshes);
+                    assertDebug(meshIndex >= 0 && meshIndex < gltfData->meshes_count);
+                    node.mesh = &model.meshes[meshIndex];
+                } else {
+                    node.mesh = nullptr;
+                }
+            }
+            assertDebug(gltfData->scenes_count == 1);
+            for (cgltf_node* gltfNode : std::span(gltfData->scenes[0].nodes, gltfData->scenes[0].nodes_count)) {
+                uint nodeIndex = (uint)(gltfNode - gltfData->nodes);
+                assertDebug(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
+                model.rootNodes.push_back(&model.nodes[nodeIndex]);
+            }
+            assertDebug(gltfData->skins_count <= 1);
+            if (gltfData->skins_count == 1) {
+                cgltf_skin& gltfSkin = gltfData->skins[0];
+                assertDebug(gltfSkin.inverse_bind_matrices->type == cgltf_type_mat4);
+                assertDebug(gltfSkin.inverse_bind_matrices->count == gltfSkin.joints_count);
+                assertDebug(gltfSkin.inverse_bind_matrices->stride == 16 * sizeof(float));
+                assertDebug(gltfSkin.inverse_bind_matrices->buffer_view->size == 64 * gltfSkin.joints_count);
+                model.joints.reserve(gltfSkin.joints_count);
+                for (uint jointIndex = 0; jointIndex < gltfSkin.joints_count; jointIndex++) {
+                    cgltf_node* jointNode = gltfSkin.joints[jointIndex];
+                    uint nodeIndex = (uint)(jointNode - gltfData->nodes);
+                    assertDebug(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
+                    float* matsData = (float*)((uint8*)(gltfSkin.inverse_bind_matrices->buffer_view->buffer->data) + gltfSkin.inverse_bind_matrices->offset + gltfSkin.inverse_bind_matrices->buffer_view->offset);
+                    matsData += jointIndex * 16;
+                    model.joints.push_back({.node = &model.nodes[nodeIndex], .inverseBindMat = XMMATRIX(matsData)});
+                }
+            }
+            model.animations.reserve(gltfData->animations_count);
+            for (cgltf_animation& gltfAnimation : std::span(gltfData->animations, gltfData->animations_count)) {
+                ModelAnimation& animation = model.animations.emplace_back();
+                if (gltfAnimation.name) animation.name = gltfAnimation.name;
+                {
+                    cgltf_accessor* input = gltfAnimation.samplers[0].input;
+                    cgltf_size inputSize = gltfAnimation.samplers[0].input->count;
+                    float* keyFrameTimes = (float*)((uint8*)(input->buffer_view->buffer->data) + input->offset + input->buffer_view->offset);
+                    animation.timeLength = keyFrameTimes[inputSize - 1];
+                }
+                animation.samplers.reserve(gltfAnimation.samplers_count);
+                for (cgltf_animation_sampler& gltfSampler : std::span(gltfAnimation.samplers, gltfAnimation.samplers_count)) {
+                    ModelAnimationSampler& sampler = animation.samplers.emplace_back();
+                    if (gltfSampler.interpolation == cgltf_interpolation_type_linear) {
+                        sampler.interpolation = AnimationSamplerInterpolationLinear;
+                    } else if (gltfSampler.interpolation == cgltf_interpolation_type_step) {
+                        sampler.interpolation = AnimationSamplerInterpolationStep;
+                    } else if (gltfSampler.interpolation == cgltf_interpolation_type_cubic_spline) {
+                        sampler.interpolation = AnimationSamplerInterpolationCubicSpline;
+                        assertDebug(false);
+                    } else {
+                        assertDebug(false);
+                    }
+                    assertDebug(gltfSampler.input->component_type == cgltf_component_type_r_32f && gltfSampler.input->type == cgltf_type_scalar);
+                    assertDebug(gltfSampler.output->component_type == cgltf_component_type_r_32f);
+                    assertDebug((gltfSampler.output->type == cgltf_type_vec3 && gltfSampler.output->stride == sizeof(float3)) || (gltfSampler.output->type == cgltf_type_vec4 && gltfSampler.output->stride == sizeof(float4)));
+                    assertDebug(gltfSampler.input->count >= 2 && gltfSampler.input->count == gltfSampler.output->count);
+                    float* inputs = (float*)((uint8*)(gltfSampler.input->buffer_view->buffer->data) + gltfSampler.input->offset + gltfSampler.input->buffer_view->offset);
+                    void* outputs = (uint8*)(gltfSampler.output->buffer_view->buffer->data) + gltfSampler.output->offset + gltfSampler.output->buffer_view->offset;
+                    assertDebug(inputs[0] == 0.0f);
+                    assertDebug(inputs[gltfSampler.input->count - 1] == animation.timeLength);
+                    sampler.keyFrames.reserve(gltfSampler.input->count);
+                    for (uint frameIndex = 0; frameIndex < gltfSampler.input->count; frameIndex++) {
+                        ModelAnimationSamplerKeyFrame& keyFrame = sampler.keyFrames.emplace_back();
+                        keyFrame.time = inputs[frameIndex];
+                        if (gltfSampler.output->type == cgltf_type_vec3) {
+                            keyFrame.xyzw = ((float3*)outputs)[frameIndex];
+                        } else {
+                            keyFrame.xyzw = ((float4*)outputs)[frameIndex];
+                        }
+                    }
+                }
+                animation.channels.reserve(gltfAnimation.channels_count);
+                for (cgltf_animation_channel& gltfChannel : std::span(gltfAnimation.channels, gltfAnimation.channels_count)) {
+                    ModelAnimationChannel& channel = animation.channels.emplace_back();
+                    uint nodeIndex = (uint)(gltfChannel.target_node - gltfData->nodes);
+                    uint samplerIndex = (uint)(gltfChannel.sampler - gltfAnimation.samplers);
+                    assertDebug(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
+                    assertDebug(samplerIndex >= 0 && samplerIndex < gltfAnimation.samplers_count);
+                    channel.node = &model.nodes[nodeIndex];
+                    channel.sampler = &animation.samplers[samplerIndex];
+                    if (gltfChannel.target_path == cgltf_animation_path_type_translation) {
+                        assertDebug(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec3);
+                        channel.type = AnimationChannelTypeTranslate;
+                    } else if (gltfChannel.target_path == cgltf_animation_path_type_rotation) {
+                        assertDebug(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec4);
+                        channel.type = AnimationChannelTypeRotate;
+                    } else if (gltfChannel.target_path == cgltf_animation_path_type_scale) {
+                        assertDebug(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec3);
+                        channel.type = AnimationChannelTypeScale;
+                    } else {
+                        assertDebug(false);
+                    }
+                }
+            }
+
+            d3d.transferQueueSubmitRecording();
+            d3d.transferQueueWait();
+        }
+
+        ModelInstance modelInstance = {};
+        modelInstance.index = (uint)(modelIter - models.begin());
+
+        if (modelIter->joints.size() > 0) {
+            D3D12MA::ALLOCATION_DESC jointBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
+            D3D12_RESOURCE_DESC jointBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = sizeof(struct Joint) * modelIter->joints.size(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
+            assert(d3d.allocator->CreateResource(&jointBufferAllocDesc, &jointBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &modelInstance.animationState.skinJointsBuffer, {}, nullptr) == S_OK);
+            assert(modelInstance.animationState.skinJointsBuffer->GetResource()->Map(0, nullptr, (void**)&modelInstance.animationState.skinJointsBufferPtr) == S_OK);
+            for (ModelMesh& mesh : modelIter->meshes) {
+                D3D12MA::ALLOCATION_DESC verticesBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+                D3D12_RESOURCE_DESC verticesBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = mesh.verticesBuffer->GetSize(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+                D3D12MA::Allocation* verticesBuffer;
+                assert(d3d.allocator->CreateResource(&verticesBufferAllocDesc, &verticesBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &verticesBuffer, {}, nullptr) == S_OK);
+                modelInstance.animationState.meshVerticesBuffers.push_back(verticesBuffer);
+
+                D3D12MA::Allocation* blasBuffer;
+                D3D12MA::Allocation* blasScratchBuffer;
+                D3D12MA::ALLOCATION_DESC blasAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+                D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+                blasDesc.Width = mesh.blas->GetSize();
+                assert(d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &blasBuffer, {}, nullptr) == S_OK);
+                blasDesc.Width = mesh.blasScratch->GetSize();
+                assert(d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &blasScratchBuffer, {}, nullptr) == S_OK);
+                modelInstance.animationState.meshBlases.push_back(blasBuffer);
+                modelInstance.animationState.meshBlasScratches.push_back(blasScratchBuffer);
+            }
+        }
+
+        return modelInstance;
+    }
+
+    void resetObjectsToEditor() {
+        if (!editor.enable) return;
+        player = editor.player;
+        staticObjects = editor.staticObjects;
+        dynamicObjects = editor.dynamicObjects;
+    }
 };
 
-static Scene scene = {};
-
-ModelInstance sceneLoadModelGLTF(const std::filesystem::path& filePath) {
-    auto modelIter = std::find_if(scene.models.begin(), scene.models.end(), [&](auto& model) { return model.filePath == filePath; });
-    if (modelIter == scene.models.end()) {
-        Model& model = scene.models.emplace_back();
-        modelIter = scene.models.end() - 1;
-
-        const std::filesystem::path gltfFilePath = assetsDir / filePath;
-        const std::filesystem::path gltfFileFolderPath = gltfFilePath.parent_path();
-        cgltf_options gltfOptions = {};
-        cgltf_data* gltfData = nullptr;
-        cgltf_result gltfParseFileResult = cgltf_parse_file(&gltfOptions, gltfFilePath.string().c_str(), &gltfData);
-        assert(gltfParseFileResult == cgltf_result_success);
-        cgltf_result gltfLoadBuffersResult = cgltf_load_buffers(&gltfOptions, gltfData, gltfFilePath.string().c_str());
-        assert(gltfLoadBuffersResult == cgltf_result_success);
-        model.filePath = filePath;
-        model.gltfData = gltfData;
-
-        d3dTransferQueueStartRecording();
-        d3d.stagingBufferOffset = 0;
-
-        model.images.reserve(gltfData->images_count);
-        for (uint imageIndex = 0; imageIndex < gltfData->images_count; imageIndex++) {
-            cgltf_image& gltfImage = gltfData->images[imageIndex];
-            ModelImage& image = model.images.emplace_back();
-            std::filesystem::path imageFilePath = gltfFileFolderPath / gltfImage.uri;
-            std::filesystem::path imageDDSFilePath = imageFilePath;
-            imageDDSFilePath.replace_extension(".dds");
-            assert(std::filesystem::exists(imageDDSFilePath));
-            image.gpuData = d3dCreate2DImageDDS(imageDDSFilePath);
-            D3D12_RESOURCE_DESC imageDesc = image.gpuData->GetResource()->GetDesc();
-            image.srvDesc = {.Format = imageDesc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = imageDesc.MipLevels}};
-            D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = image.gpuData->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
-            d3d.transferCmdList->ResourceBarrier(1, &barrier);
-        }
-        model.textures.reserve(gltfData->textures_count);
-        for (uint textureIndex = 0; textureIndex < gltfData->textures_count; textureIndex++) {
-            cgltf_texture& gltfTexture = gltfData->textures[textureIndex];
-            ModelTexture& texture = model.textures.emplace_back();
-            assertDebug(gltfTexture.image && gltfTexture.sampler);
-            texture.image = &model.images[gltfTexture.image - &gltfData->images[0]];
-        }
-        model.materials.reserve(gltfData->materials_count);
-        for (uint materialIndex = 0; materialIndex < gltfData->materials_count; materialIndex++) {
-            cgltf_material& gltfMaterial = gltfData->materials[materialIndex];
-            ModelMaterial& material = model.materials.emplace_back();
-            if (gltfMaterial.name) material.name = gltfMaterial.name;
-            assertDebug(gltfMaterial.has_pbr_metallic_roughness);
-            material.baseColorFactor = float4(gltfMaterial.pbr_metallic_roughness.base_color_factor);
-            if (gltfMaterial.pbr_metallic_roughness.base_color_texture.texture) {
-                assertDebug(gltfMaterial.pbr_metallic_roughness.base_color_texture.texcoord == 0);
-                assertDebug(!gltfMaterial.pbr_metallic_roughness.base_color_texture.has_transform);
-                material.baseColorTexture = &model.textures[gltfMaterial.pbr_metallic_roughness.base_color_texture.texture - &gltfData->textures[0]];
-            }
-        }
-        model.meshes.reserve(gltfData->meshes_count);
-        for (uint meshIndex = 0; meshIndex < gltfData->meshes_count; meshIndex++) {
-            cgltf_mesh& gltfMesh = gltfData->meshes[meshIndex];
-            ModelMesh& mesh = model.meshes.emplace_back();
-            if (gltfMesh.name) mesh.name = gltfMesh.name;
-            mesh.primitives.reserve(gltfMesh.primitives_count);
-            for (cgltf_primitive& gltfPrimitive : std::span(gltfMesh.primitives, gltfMesh.primitives_count)) {
-                cgltf_accessor* indices = gltfPrimitive.indices;
-                cgltf_accessor* positions = nullptr;
-                cgltf_accessor* normals = nullptr;
-                cgltf_accessor* uvs = nullptr;
-                cgltf_accessor* jointIndices = nullptr;
-                cgltf_accessor* jointWeights = nullptr;
-                for (cgltf_attribute& attribute : std::span(gltfPrimitive.attributes, gltfPrimitive.attributes_count)) {
-                    if (attribute.type == cgltf_attribute_type_position) {
-                        positions = attribute.data;
-                    } else if (attribute.type == cgltf_attribute_type_normal) {
-                        normals = attribute.data;
-                    } else if (attribute.type == cgltf_attribute_type_texcoord) {
-                        uvs = attribute.data;
-                    } else if (attribute.type == cgltf_attribute_type_joints) {
-                        jointIndices = attribute.data;
-                    } else if (attribute.type == cgltf_attribute_type_weights) {
-                        jointWeights = attribute.data;
-                    }
-                }
-                assert(gltfPrimitive.type == cgltf_primitive_type_triangles);
-                assert(indices && positions && normals);
-                assert(indices->count % 3 == 0 && indices->type == cgltf_type_scalar && (indices->component_type == cgltf_component_type_r_16u || indices->component_type == cgltf_component_type_r_32u));
-                assert(positions->type == cgltf_type_vec3 && positions->component_type == cgltf_component_type_r_32f);
-                assert(normals->count == positions->count && normals->type == cgltf_type_vec3 && normals->component_type == cgltf_component_type_r_32f);
-                if (uvs) assert(uvs->count == positions->count && uvs->component_type == cgltf_component_type_r_32f && uvs->type == cgltf_type_vec2);
-                if (jointIndices) assert(jointIndices->count == positions->count && (jointIndices->component_type == cgltf_component_type_r_16u || jointIndices->component_type == cgltf_component_type_r_8u) && jointIndices->type == cgltf_type_vec4 && (jointIndices->stride == 8 || jointIndices->stride == 4));
-                if (jointWeights) assert(jointWeights->count == positions->count && jointWeights->component_type == cgltf_component_type_r_32f && jointWeights->type == cgltf_type_vec4 && jointWeights->stride == 16);
-                float3* positionsBuffer = (float3*)((uint8*)(positions->buffer_view->buffer->data) + positions->offset + positions->buffer_view->offset);
-                float3* normalsBuffer = (float3*)((uint8*)(normals->buffer_view->buffer->data) + normals->offset + normals->buffer_view->offset);
-                void* indicesBuffer = (uint8*)(indices->buffer_view->buffer->data) + indices->offset + indices->buffer_view->offset;
-                float2* uvsBuffer = uvs ? (float2*)((uint8*)(uvs->buffer_view->buffer->data) + uvs->offset + uvs->buffer_view->offset) : nullptr;
-                void* jointIndicesBuffer = jointIndices ? (uint8*)(jointIndices->buffer_view->buffer->data) + jointIndices->offset + jointIndices->buffer_view->offset : nullptr;
-                float4* jointWeightsBuffer = jointWeights ? (float4*)((uint8*)(jointWeights->buffer_view->buffer->data) + jointWeights->offset + jointWeights->buffer_view->offset) : nullptr;
-
-                ModelPrimitive& primitive = mesh.primitives.emplace_back();
-                primitive.verticesBufferOffset = (uint)mesh.vertices.size();
-                primitive.verticesCount = (uint)positions->count;
-                primitive.indicesBufferOffset = (uint)mesh.indices.size();
-                primitive.indicesCount = (uint)indices->count;
-                for (uint vertexIndex = 0; vertexIndex < positions->count; vertexIndex++) {
-                    Vertex vertex = {.position = positionsBuffer[vertexIndex], .normal = normalsBuffer[vertexIndex]};
-                    if (uvsBuffer) vertex.uv = uvsBuffer[vertexIndex];
-                    if (jointIndicesBuffer) {
-                        if (jointIndices->component_type == cgltf_component_type_r_16u) vertex.joints = ((uint16_4*)jointIndicesBuffer)[vertexIndex];
-                        else vertex.joints = ((uint8_4*)jointIndicesBuffer)[vertexIndex];
-                    }
-                    if (jointWeightsBuffer) vertex.jointWeights = jointWeightsBuffer[vertexIndex];
-                    mesh.vertices.push_back(vertex);
-                }
-                if (indices->component_type == cgltf_component_type_r_16u) mesh.indices.append_range(std::span((uint16*)indicesBuffer, indices->count));
-                else if (indices->component_type == cgltf_component_type_r_32u) mesh.indices.append_range(std::span((uint*)indicesBuffer, indices->count));
-                if (gltfPrimitive.material) primitive.material = &model.materials[gltfPrimitive.material - gltfData->materials];
-            }
-
-            D3D12MA::ALLOCATION_DESC verticeIndicesBuffersAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-            D3D12_RESOURCE_DESC verticeIndicesBuffersDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
-            verticeIndicesBuffersDesc.Width = vectorSizeof(mesh.vertices);
-            assert(d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.verticesBuffer, {}, nullptr) == S_OK);
-            verticeIndicesBuffersDesc.Width = vectorSizeof(mesh.indices);
-            assert(d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.indicesBuffer, {}, nullptr) == S_OK);
-
-            memcpy(d3d.stagingBufferPtr + d3d.stagingBufferOffset, mesh.vertices.data(), vectorSizeof(mesh.vertices));
-            d3d.transferCmdList->CopyBufferRegion(mesh.verticesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(mesh.vertices));
-            d3d.stagingBufferOffset += (uint)vectorSizeof(mesh.vertices);
-            memcpy(d3d.stagingBufferPtr + d3d.stagingBufferOffset, mesh.indices.data(), vectorSizeof(mesh.indices));
-            d3d.transferCmdList->CopyBufferRegion(mesh.indicesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(mesh.indices));
-            d3d.stagingBufferOffset += (uint)vectorSizeof(mesh.indices);
-            assert(d3d.stagingBufferOffset < d3d.stagingBuffer->GetSize());
-            D3D12_RESOURCE_BARRIER bufferBarriers[2] = {
-                {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = mesh.verticesBuffer->GetResource(), .Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
-                {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = mesh.indicesBuffer->GetResource(), .Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
-            };
-            d3d.transferCmdList->ResourceBarrier(countof(bufferBarriers), bufferBarriers);
-
-            std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
-            for (ModelPrimitive& primitive : mesh.primitives) {
-                D3D12_RAYTRACING_GEOMETRY_DESC& geometryDesc = geometryDescs.emplace_back();
-                geometryDesc = {
-                    .Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
-                    .Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE,
-                    .Triangles = {
-                        .Transform3x4 = 0,
-                        .IndexFormat = DXGI_FORMAT_R32_UINT,
-                        .VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
-                        .IndexCount = (uint)primitive.indicesCount,
-                        .VertexCount = (uint)primitive.verticesCount,
-                        .IndexBuffer = mesh.indicesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.indicesBufferOffset * sizeof(uint),
-                        .VertexBuffer = {mesh.verticesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.verticesBufferOffset * sizeof(struct Vertex), sizeof(Vertex)},
-                    },
-                };
-            }
-            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL, .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE, .NumDescs = (uint)geometryDescs.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .pGeometryDescs = geometryDescs.data()};
-            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
-            d3d.device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
-
-            D3D12MA::ALLOCATION_DESC blasAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-            D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
-            blasDesc.Width = prebuildInfo.ResultDataMaxSizeInBytes;
-            assert(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &mesh.blas, {}, nullptr) == S_OK);
-            blasDesc.Width = prebuildInfo.ScratchDataSizeInBytes;
-            assert(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &mesh.blasScratch, {}, nullptr) == S_OK);
-            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = mesh.blas->GetResource()->GetGPUVirtualAddress(), .Inputs = inputs, .ScratchAccelerationStructureData = mesh.blasScratch->GetResource()->GetGPUVirtualAddress()};
-            d3d.transferCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
-        }
-        model.nodes.resize(gltfData->nodes_count);
-        for (uint nodeIndex = 0; nodeIndex < gltfData->nodes_count; nodeIndex++) {
-            cgltf_node& gltfNode = gltfData->nodes[nodeIndex];
-            ModelNode& node = model.nodes[nodeIndex];
-            if (gltfNode.name) node.name = gltfNode.name;
-            if (gltfNode.parent) {
-                uint parentNodeIndex = (uint)(gltfNode.parent - gltfData->nodes);
-                assertDebug(parentNodeIndex >= 0 && parentNodeIndex < gltfData->nodes_count);
-                node.parent = &model.nodes[parentNodeIndex];
-            } else {
-                node.parent = nullptr;
-            }
-            for (cgltf_node* child : std::span(gltfNode.children, gltfNode.children_count)) {
-                uint childNodeIndex = (uint)(child - gltfData->nodes);
-                assertDebug(childNodeIndex >= 0 && childNodeIndex < gltfData->nodes_count);
-                node.children.push_back(&model.nodes[childNodeIndex]);
-            }
-            float nodeTransform[16];
-            cgltf_node_transform_world(&gltfNode, nodeTransform);
-            node.globalTransform = XMMATRIX(nodeTransform);
-            if (gltfNode.has_matrix) {
-                node.localTransform = XMMATRIX(gltfNode.matrix);
-            } else {
-                Transform localTransform = {};
-                if (gltfNode.has_scale) localTransform.scale = float3(gltfNode.scale);
-                if (gltfNode.has_rotation) localTransform.rotate = float4(gltfNode.rotation);
-                if (gltfNode.has_translation) localTransform.translate = float3(gltfNode.translation);
-                node.localTransform = localTransform.toMat();
-            }
-            if (gltfNode.mesh) {
-                uint meshIndex = (uint)(gltfNode.mesh - gltfData->meshes);
-                assertDebug(meshIndex >= 0 && meshIndex < gltfData->meshes_count);
-                node.mesh = &model.meshes[meshIndex];
-            } else {
-                node.mesh = nullptr;
-            }
-        }
-        assertDebug(gltfData->scenes_count == 1);
-        for (cgltf_node* gltfNode : std::span(gltfData->scene[0].nodes, gltfData->scene[0].nodes_count)) {
-            uint nodeIndex = (uint)(gltfNode - gltfData->nodes);
-            assertDebug(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
-            model.rootNodes.push_back(&model.nodes[nodeIndex]);
-        }
-        assertDebug(gltfData->skins_count <= 1);
-        if (gltfData->skins_count == 1) {
-            cgltf_skin& gltfSkin = gltfData->skins[0];
-            assertDebug(gltfSkin.inverse_bind_matrices->type == cgltf_type_mat4);
-            assertDebug(gltfSkin.inverse_bind_matrices->count == gltfSkin.joints_count);
-            assertDebug(gltfSkin.inverse_bind_matrices->stride == 16 * sizeof(float));
-            assertDebug(gltfSkin.inverse_bind_matrices->buffer_view->size == 64 * gltfSkin.joints_count);
-            model.joints.reserve(gltfSkin.joints_count);
-            for (uint jointIndex = 0; jointIndex < gltfSkin.joints_count; jointIndex++) {
-                cgltf_node* jointNode = gltfSkin.joints[jointIndex];
-                uint nodeIndex = (uint)(jointNode - gltfData->nodes);
-                assertDebug(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
-                float* matsData = (float*)((uint8*)(gltfSkin.inverse_bind_matrices->buffer_view->buffer->data) + gltfSkin.inverse_bind_matrices->offset + gltfSkin.inverse_bind_matrices->buffer_view->offset);
-                matsData += jointIndex * 16;
-                model.joints.push_back({.node = &model.nodes[nodeIndex], .inverseBindMat = XMMATRIX(matsData)});
-            }
-        }
-        model.animations.reserve(gltfData->animations_count);
-        for (cgltf_animation& gltfAnimation : std::span(gltfData->animations, gltfData->animations_count)) {
-            ModelAnimation& animation = model.animations.emplace_back();
-            if (gltfAnimation.name) animation.name = gltfAnimation.name;
-            {
-                cgltf_accessor* input = gltfAnimation.samplers[0].input;
-                cgltf_size inputSize = gltfAnimation.samplers[0].input->count;
-                float* keyFrameTimes = (float*)((uint8*)(input->buffer_view->buffer->data) + input->offset + input->buffer_view->offset);
-                animation.timeLength = keyFrameTimes[inputSize - 1];
-            }
-            animation.samplers.reserve(gltfAnimation.samplers_count);
-            for (cgltf_animation_sampler& gltfSampler : std::span(gltfAnimation.samplers, gltfAnimation.samplers_count)) {
-                ModelAnimationSampler& sampler = animation.samplers.emplace_back();
-                if (gltfSampler.interpolation == cgltf_interpolation_type_linear) {
-                    sampler.interpolation = AnimationSamplerInterpolationLinear;
-                } else if (gltfSampler.interpolation == cgltf_interpolation_type_step) {
-                    sampler.interpolation = AnimationSamplerInterpolationStep;
-                } else if (gltfSampler.interpolation == cgltf_interpolation_type_cubic_spline) {
-                    sampler.interpolation = AnimationSamplerInterpolationCubicSpline;
-                    assertDebug(false);
-                } else {
-                    assertDebug(false);
-                }
-                assertDebug(gltfSampler.input->component_type == cgltf_component_type_r_32f && gltfSampler.input->type == cgltf_type_scalar);
-                assertDebug(gltfSampler.output->component_type == cgltf_component_type_r_32f);
-                assertDebug((gltfSampler.output->type == cgltf_type_vec3 && gltfSampler.output->stride == sizeof(float3)) || (gltfSampler.output->type == cgltf_type_vec4 && gltfSampler.output->stride == sizeof(float4)));
-                assertDebug(gltfSampler.input->count >= 2 && gltfSampler.input->count == gltfSampler.output->count);
-                float* inputs = (float*)((uint8*)(gltfSampler.input->buffer_view->buffer->data) + gltfSampler.input->offset + gltfSampler.input->buffer_view->offset);
-                void* outputs = (uint8*)(gltfSampler.output->buffer_view->buffer->data) + gltfSampler.output->offset + gltfSampler.output->buffer_view->offset;
-                assertDebug(inputs[0] == 0.0f);
-                assertDebug(inputs[gltfSampler.input->count - 1] == animation.timeLength);
-                sampler.keyFrames.reserve(gltfSampler.input->count);
-                for (uint frameIndex = 0; frameIndex < gltfSampler.input->count; frameIndex++) {
-                    ModelAnimationSamplerKeyFrame& keyFrame = sampler.keyFrames.emplace_back();
-                    keyFrame.time = inputs[frameIndex];
-                    if (gltfSampler.output->type == cgltf_type_vec3) {
-                        keyFrame.xyzw = ((float3*)outputs)[frameIndex];
-                    } else {
-                        keyFrame.xyzw = ((float4*)outputs)[frameIndex];
-                    }
-                }
-            }
-            animation.channels.reserve(gltfAnimation.channels_count);
-            for (cgltf_animation_channel& gltfChannel : std::span(gltfAnimation.channels, gltfAnimation.channels_count)) {
-                ModelAnimationChannel& channel = animation.channels.emplace_back();
-                uint nodeIndex = (uint)(gltfChannel.target_node - gltfData->nodes);
-                uint samplerIndex = (uint)(gltfChannel.sampler - gltfAnimation.samplers);
-                assertDebug(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
-                assertDebug(samplerIndex >= 0 && samplerIndex < gltfAnimation.samplers_count);
-                channel.node = &model.nodes[nodeIndex];
-                channel.sampler = &animation.samplers[samplerIndex];
-                if (gltfChannel.target_path == cgltf_animation_path_type_translation) {
-                    assertDebug(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec3);
-                    channel.type = AnimationChannelTypeTranslate;
-                } else if (gltfChannel.target_path == cgltf_animation_path_type_rotation) {
-                    assertDebug(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec4);
-                    channel.type = AnimationChannelTypeRotate;
-                } else if (gltfChannel.target_path == cgltf_animation_path_type_scale) {
-                    assertDebug(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec3);
-                    channel.type = AnimationChannelTypeScale;
-                } else {
-                    assertDebug(false);
-                }
-            }
-        }
-
-        d3dTransferQueueSubmitRecording();
-        d3dTransferQueueWait();
-    }
-
-    ModelInstance modelInstance = {};
-    modelInstance.index = (uint)(modelIter - scene.models.begin());
-
-    if (modelIter->joints.size() > 0) {
-        D3D12MA::ALLOCATION_DESC jointBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
-        D3D12_RESOURCE_DESC jointBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = sizeof(struct Joint) * modelIter->joints.size(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
-        assert(d3d.allocator->CreateResource(&jointBufferAllocDesc, &jointBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &modelInstance.animationState.skinJointsBuffer, {}, nullptr) == S_OK);
-        assert(modelInstance.animationState.skinJointsBuffer->GetResource()->Map(0, nullptr, (void**)&modelInstance.animationState.skinJointsBufferPtr) == S_OK);
-        for (ModelMesh& mesh : modelIter->meshes) {
-            D3D12MA::ALLOCATION_DESC verticesBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-            D3D12_RESOURCE_DESC verticesBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = mesh.verticesBuffer->GetSize(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
-            D3D12MA::Allocation* verticesBuffer;
-            assert(d3d.allocator->CreateResource(&verticesBufferAllocDesc, &verticesBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &verticesBuffer, {}, nullptr) == S_OK);
-            modelInstance.animationState.meshVerticesBuffers.push_back(verticesBuffer);
-
-            D3D12MA::Allocation* blasBuffer;
-            D3D12MA::Allocation* blasScratchBuffer;
-            D3D12MA::ALLOCATION_DESC blasAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-            D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
-            blasDesc.Width = mesh.blas->GetSize();
-            assert(d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &blasBuffer, {}, nullptr) == S_OK);
-            blasDesc.Width = mesh.blasScratch->GetSize();
-            assert(d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &blasScratchBuffer, {}, nullptr) == S_OK);
-            modelInstance.animationState.meshBlases.push_back(blasBuffer);
-            modelInstance.animationState.meshBlasScratches.push_back(blasScratchBuffer);
-        }
-    }
-
-    return modelInstance;
-}
-
-ModelInstance sceneLoadModel(const std::filesystem::path& filePath) {
-    if (filePath.extension() == ".gltf") {
-        return sceneLoadModelGLTF(filePath);
-    } else {
-        assert(false);
-        return {};
-    }
-}
-
-void sceneLoad(const std::filesystem::path& path) {
-    std::string yamlStr = fileReadStr(path);
-    ryml::Tree yamlTree = ryml::parse_in_arena(ryml::to_csubstr(yamlStr));
-    ryml::ConstNodeRef yamlRoot = yamlTree.rootref();
-    scene.filePath = path;
-    {
-        ryml::ConstNodeRef cameraYaml = yamlRoot["editorCamera"];
-        scene.editor.camera.position << cameraYaml["position"];
-        scene.editor.camera.pitchYaw << cameraYaml["pitchYaw"];
-        scene.editor.camera.updateLookAt();
-        cameraYaml["fovVertical"] >> scene.editor.camera.fovVertical;
-        cameraYaml["sensitivity"] >> scene.editor.camera.sensitivity;
-        cameraYaml["rotationSensitivity"] >> scene.editor.camera.rotationSensitivity;
-        cameraYaml["controllerSensitivity"] >> scene.editor.camera.controllerSensitivity;
-    }
-    {
-        ryml::ConstNodeRef playerYaml = yamlRoot["player"];
-        std::string file;
-        playerYaml["file"] >> file;
-        scene.player.model = sceneLoadModel(file);
-        scene.player.transform << playerYaml;
-        scene.player.velocity << playerYaml["velocity"];
-        scene.player.acceleration << playerYaml["acceleration"];
-        scene.player.camera.lookAtOffset << playerYaml["cameraLookAtOffset"];
-        scene.player.camera.rotation << playerYaml["cameraRotation"];
-        playerYaml["cameraDistance"] >> scene.player.camera.distance;
-        playerYaml["cameraSensitivity"] >> scene.player.camera.sensitivity;
-        playerYaml["cameraControllerSensitivity"] >> scene.player.camera.controllerSensitivity;
-        scene.player.camera.lookAt = scene.player.transform.translate + scene.player.camera.lookAtOffset;
-    }
-    ryml::ConstNodeRef staticObjectsYaml = yamlRoot["staticObjects"];
-    for (ryml::ConstNodeRef const& staticObjectYaml : staticObjectsYaml) {
-        StaticObject& obj = scene.staticObjects.emplace_back();
-        staticObjectYaml["name"] >> obj.name;
-        std::string file;
-        staticObjectYaml["file"] >> file;
-        obj.model = sceneLoadModel(file);
-        obj.transform << staticObjectYaml;
-    }
-    ryml::ConstNodeRef dynamicObjectsYaml = yamlRoot["dynamicObjects"];
-    for (ryml::ConstNodeRef const& dynamicObjectYaml : dynamicObjectsYaml) {
-        DynamicObject& obj = scene.dynamicObjects.emplace_back();
-        dynamicObjectYaml["name"] >> obj.name;
-        std::string file;
-        dynamicObjectYaml["file"] >> file;
-        obj.model = sceneLoadModel(file);
-        obj.transform << dynamicObjectYaml;
-    }
-    {
-        ryml::ConstNodeRef skyboxYaml = yamlRoot["skybox"];
-        std::string file;
-        skyboxYaml["file"] >> file;
-        scene.skybox.hdriTextureFilePath = file;
-        d3dTransferQueueStartRecording();
-        d3d.stagingBufferOffset = 0;
-        scene.skybox.hdriTexture = d3dCreate2DImageDDS(assetsDir / scene.skybox.hdriTextureFilePath);
-        D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = scene.skybox.hdriTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
-        d3d.transferCmdList->ResourceBarrier(1, &barrier);
-        d3dTransferQueueSubmitRecording();
-        d3dTransferQueueWait();
-    }
-}
-
-void sceneSave() {
-    ryml::Tree yamlTree;
-    ryml::NodeRef yamlRoot = yamlTree.rootref();
-    yamlRoot |= ryml::MAP;
-
-    ryml::NodeRef cameraYaml = yamlRoot["editorCamera"];
-    cameraYaml |= ryml::MAP;
-    scene.editor.camera.position >> cameraYaml["position"];
-    scene.editor.camera.pitchYaw >> cameraYaml["pitchYaw"];
-    cameraYaml["fovVertical"] << scene.editor.camera.fovVertical;
-    cameraYaml["sensitivity"] << scene.editor.camera.sensitivity;
-    cameraYaml["rotationSensitivity"] << scene.editor.camera.rotationSensitivity;
-    cameraYaml["controllerSensitivity"] << scene.editor.camera.controllerSensitivity;
-
-    ryml::NodeRef playerYaml = yamlRoot["player"];
-    playerYaml |= ryml::MAP;
-    playerYaml["file"] << scene.models[scene.player.model.index].filePath.string();
-    scene.player.transform >> playerYaml;
-    scene.player.velocity >> playerYaml["velocity"];
-    scene.player.acceleration >> playerYaml["acceleration"];
-    scene.player.camera.lookAtOffset >> playerYaml["cameraLookAtOffset"];
-    scene.player.camera.rotation >> playerYaml["cameraRotation"];
-    playerYaml["cameraDistance"] << scene.player.camera.distance;
-    playerYaml["cameraSensitivity"] << scene.player.camera.sensitivity;
-    playerYaml["cameraControllerSensitivity"] << scene.player.camera.controllerSensitivity;
-
-    ryml::NodeRef skyboxYaml = yamlRoot["skybox"];
-    skyboxYaml |= ryml::MAP;
-    skyboxYaml["file"] << scene.skybox.hdriTextureFilePath.string();
-
-    ryml::NodeRef staticObjectsYaml = yamlRoot["staticObjects"];
-    staticObjectsYaml |= ryml::SEQ;
-    for (StaticObject& staticObject : scene.staticObjects) {
-        ryml::NodeRef staticObjectYaml = staticObjectsYaml.append_child();
-        staticObjectYaml |= ryml::MAP;
-        staticObjectYaml["name"] << staticObject.name;
-        staticObjectYaml["file"] << scene.models[staticObject.model.index].filePath.string();
-        staticObject.transform >> staticObjectYaml;
-    }
-
-    ryml::NodeRef dynamicObjectsYaml = yamlRoot["dynamicObjects"];
-    dynamicObjectsYaml |= ryml::SEQ;
-    for (DynamicObject& dynamicObject : scene.dynamicObjects) {
-        ryml::NodeRef dynamicObjectYaml = dynamicObjectsYaml.append_child();
-        dynamicObjectYaml |= ryml::MAP;
-        dynamicObjectYaml["name"] << dynamicObject.name;
-        dynamicObjectYaml["file"] << scene.models[dynamicObject.model.index].filePath.string();
-        dynamicObject.transform >> dynamicObjectYaml;
-    }
-
-    std::string yamlStr = ryml::emitrs_yaml<std::string>(yamlTree);
-    assert(fileWriteStr(scene.filePath, yamlStr));
-}
+static World world = {};
 
 ImGuiKey toImGuiKey(WPARAM wparam) {
     switch (wparam) {
@@ -1787,14 +1800,13 @@ ImGuiKey toImGuiKey(WPARAM wparam) {
 }
 
 static bool quit = false;
-static bool playing = false;
 static LARGE_INTEGER perfFrequency = {};
 static LARGE_INTEGER perfCounters[2] = {};
 static double frameTime = 0;
-static int mouseDeltaRaw[2] = {};
-static float mouseWheel = 0;
 static uint mouseSelectX = UINT_MAX;
 static uint mouseSelectY = UINT_MAX;
+static int mouseDeltaRaw[2] = {};
+static float mouseWheel = 0;
 
 LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lParam) {
     LRESULT result = 0;
@@ -1807,9 +1819,9 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
     case WM_MOVE: {
         uint prevRenderW = settings.renderW;
         uint prevRenderH = settings.renderH;
-        windowUpdateSizes();
+        window.updateSizes();
         if (d3d.swapChain && settings.renderW > 0 && settings.renderH > 0 && (prevRenderW != settings.renderW || prevRenderH != settings.renderH)) {
-            d3dResizeSwapChain(settings.renderW, settings.renderH);
+            d3d.resizeSwapChain(settings.renderW, settings.renderH);
         }
     } break;
     case WM_CLOSE:
@@ -1872,55 +1884,55 @@ struct Controller {
     float2 lStick;
     float2 rStick;
     float deadZone = 0.25f;
+
+    void getInputs() {
+        static XINPUT_STATE prevState = {};
+        XINPUT_STATE state = {};
+        DWORD result = XInputGetState(0, &state);
+        if (result == ERROR_SUCCESS) {
+            a = state.Gamepad.wButtons & XINPUT_GAMEPAD_A;
+            b = state.Gamepad.wButtons & XINPUT_GAMEPAD_B;
+            x = state.Gamepad.wButtons & XINPUT_GAMEPAD_X;
+            y = state.Gamepad.wButtons & XINPUT_GAMEPAD_Y;
+            up = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP;
+            down = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN;
+            left = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT;
+            right = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT;
+            lb = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER;
+            rb = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER;
+            ls = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB;
+            rs = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB;
+            back = state.Gamepad.wButtons & XINPUT_GAMEPAD_BACK;
+            start = state.Gamepad.wButtons & XINPUT_GAMEPAD_START;
+            lt = state.Gamepad.bLeftTrigger / 255.0f;
+            rt = state.Gamepad.bRightTrigger / 255.0f;
+            lStick.x = state.Gamepad.sThumbLX / 32767.0f;
+            lStick.y = state.Gamepad.sThumbLY / 32767.0f;
+            rStick.x = state.Gamepad.sThumbRX / 32767.0f;
+            rStick.y = state.Gamepad.sThumbRY / 32767.0f;
+
+            float lDistance = lStick.length();
+            if (lDistance > 0) {
+                float lDistanceNew = std::max(0.0f, lDistance - deadZone) / (1.0f - deadZone);
+                lStick = lStick / lDistance * lDistanceNew;
+            }
+            float rDistance = rStick.length();
+            if (rDistance > 0) {
+                float rDistanceNew = std::max(0.0f, rDistance - deadZone) / (1.0f - deadZone);
+                rStick = rStick / rDistance * rDistanceNew;
+            }
+        } else {
+            *this = {};
+        }
+        prevState = state;
+    }
+
+    bool stickMoved() {
+        return lStick != float2(0, 0) || rStick != float2(0, 0);
+    }
 };
 
 static Controller controller = {};
-
-void controllerGetInputs() {
-    static XINPUT_STATE prevState = {};
-    XINPUT_STATE state = {};
-    DWORD result = XInputGetState(0, &state);
-    if (result == ERROR_SUCCESS) {
-        controller.a = state.Gamepad.wButtons & XINPUT_GAMEPAD_A;
-        controller.b = state.Gamepad.wButtons & XINPUT_GAMEPAD_B;
-        controller.x = state.Gamepad.wButtons & XINPUT_GAMEPAD_X;
-        controller.y = state.Gamepad.wButtons & XINPUT_GAMEPAD_Y;
-        controller.up = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP;
-        controller.down = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN;
-        controller.left = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT;
-        controller.right = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT;
-        controller.lb = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER;
-        controller.rb = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER;
-        controller.ls = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB;
-        controller.rs = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB;
-        controller.back = state.Gamepad.wButtons & XINPUT_GAMEPAD_BACK;
-        controller.start = state.Gamepad.wButtons & XINPUT_GAMEPAD_START;
-        controller.lt = state.Gamepad.bLeftTrigger / 255.0f;
-        controller.rt = state.Gamepad.bRightTrigger / 255.0f;
-        controller.lStick.x = state.Gamepad.sThumbLX / 32767.0f;
-        controller.lStick.y = state.Gamepad.sThumbLY / 32767.0f;
-        controller.rStick.x = state.Gamepad.sThumbRX / 32767.0f;
-        controller.rStick.y = state.Gamepad.sThumbRY / 32767.0f;
-
-        float lDistance = controller.lStick.length();
-        if (lDistance > 0) {
-            float lDistanceNew = std::max(0.0f, lDistance - controller.deadZone) / (1.0f - controller.deadZone);
-            controller.lStick = controller.lStick / lDistance * lDistanceNew;
-        }
-        float rDistance = controller.rStick.length();
-        if (rDistance > 0) {
-            float rDistanceNew = std::max(0.0f, rDistance - controller.deadZone) / (1.0f - controller.deadZone);
-            controller.rStick = controller.rStick / rDistance * rDistanceNew;
-        }
-    } else {
-        controller = {};
-    }
-    prevState = state;
-}
-
-bool controllerStickMoved() {
-    return controller.lStick != float2(0, 0) || controller.rStick != float2(0, 0);
-}
 
 void hideCursor(bool hide) {
     if (hide) {
@@ -1935,45 +1947,51 @@ void hideCursor(bool hide) {
     }
 }
 
-void update() {
-    ZoneScoped;
-    ImGui::GetIO().DeltaTime = (float)frameTime;
-    ImGui::GetIO().DisplaySize = ImVec2((float)settings.renderW, (float)settings.renderH);
-    ImGui::NewFrame();
-    ImGuizmo::SetRect(0, 0, (float)settings.renderW, (float)settings.renderH);
-    ImGuizmo::BeginFrame();
+void editorUpdate() {
+    if (!editor.enable) return;
+
+    if (ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
+        editor.active = !editor.active;
+        hideCursor(!editor.active);
+        world.resetObjectsToEditor();
+    }
+    if (!editor.active) return;
+
+    if (d3d.graphicsQueueFenceCounter > 0) {
+        uint mouseSelectInstanceIndex = d3d.readBackBufferPtr->mouseSelectInstanceIndex;
+        if (mouseSelectInstanceIndex < world.tlasInstancesInfos.size()) {
+            TLASInstanceInfo& info = world.tlasInstancesInfos[mouseSelectInstanceIndex];
+            editor.selectedObjectType = info.objectType;
+            editor.selectedObjectIndex = info.objectIndex;
+        } else {
+            if (mouseSelectX != UINT_MAX && mouseSelectY != UINT_MAX) {
+                editor.selectedObjectType = WorldObjectTypeNone;
+            }
+        }
+        // world.player.transform.translate = readBackBuffer->playerPosition;
+        // world.player.velocity = readBackBuffer->playerVelocity;
+        // world.player.acceleration = readBackBuffer->playerAcceleration;
+    }
+    {
+        auto advanceAnimation = [](ModelInstance& modelInstance, float time) {
+            Model& model = world.models[modelInstance.index];
+            if (modelInstance.animationState.index < model.animations.size()) {
+                ModelAnimation& animation = model.animations[modelInstance.animationState.index];
+                modelInstance.animationState.time += time;
+                if (modelInstance.animationState.time > animation.timeLength) {
+                    modelInstance.animationState.time -= animation.timeLength;
+                }
+            }
+        };
+        advanceAnimation(editor.player.model, (float)frameTime);
+        for (StaticObject& obj : editor.staticObjects) advanceAnimation(obj.model, (float)frameTime);
+        for (DynamicObject& obj : editor.dynamicObjects) advanceAnimation(obj.model, (float)frameTime);
+    }
 
     static ImVec2 mousePosPrev = ImGui::GetMousePos();
     ImVec2 mousePos = ImGui::GetMousePos();
     ImVec2 mouseDelta = mousePos - mousePosPrev;
     mousePosPrev = mousePos;
-
-    if (d3d.graphicsQueueFenceCounter > 0) {
-        ReadBackBuffer* readBackBuffer = (ReadBackBuffer*)d3d.readBackBufferPtr;
-        uint mouseSelectInstanceIndex = readBackBuffer->mouseSelectInstanceIndex;
-        if (mouseSelectInstanceIndex < scene.tlasInstancesInfos.size()) {
-            TLASInstanceInfo& info = scene.tlasInstancesInfos[mouseSelectInstanceIndex];
-            scene.editor.selectedObjectType = info.objectType;
-            scene.editor.selectedObjectIndex = info.objectIndex;
-        } else {
-            if (mouseSelectX != UINT_MAX && mouseSelectY != UINT_MAX) {
-                scene.editor.selectedObjectType = SceneObjectTypeNone;
-            }
-        }
-        // scene.player.transform.translate = readBackBuffer->playerPosition;
-        // scene.player.velocity = readBackBuffer->playerVelocity;
-        // scene.player.acceleration = readBackBuffer->playerAcceleration;
-    }
-    {
-        Model& model = scene.models[scene.player.model.index];
-        if (scene.player.model.animationState.index < model.animations.size()) {
-            ModelAnimation& animation = model.animations[scene.player.model.animationState.index];
-            scene.player.model.animationState.time += frameTime;
-            if (scene.player.model.animationState.time > animation.timeLength) {
-                scene.player.model.animationState.time -= animation.timeLength;
-            }
-        }
-    }
 
     static std::vector<std::string> logs = {};
     static bool addObjectPopup = false;
@@ -1984,17 +2002,15 @@ void update() {
         mainMenuBarSize = ImGui::GetWindowSize();
         if (ImGui::BeginMenu("File")) {
             if (ImGui::BeginMenu("New")) {
-                if (ImGui::MenuItem("Scene")) {
-                    // addScene("New Scene", "");
+                if (ImGui::MenuItem("World")) {
                 }
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Open")) {
-                if (ImGui::MenuItem("Scene")) {
+                if (ImGui::MenuItem("World")) {
                     char filePath[256] = {};
                     OPENFILENAMEA openFileName = {.lStructSize = sizeof(openFileName), .hwndOwner = window.hwnd, .lpstrFile = filePath, .nMaxFile = sizeof(filePath)};
                     if (GetOpenFileNameA(&openFileName)) {
-                        // addScene("New Scene", filePath);
                     } else {
                         DWORD error = CommDlgExtendedError();
                         if (error == FNERR_BUFFERTOOSMALL) {
@@ -2012,27 +2028,27 @@ void update() {
         if (ImGui::BeginMenu("Display")) {
             if (ImGui::MenuItem(settings.hdr ? "HDR (On)" : "HDR (Off)")) {
                 settings.hdr = !settings.hdr;
-                applySettings(settingsHDR);
+                d3d.applySettings();
             } else if (ImGui::MenuItem("Windowed")) {
                 settings.windowMode = WindowModeWindowed;
-                applySettings(settingWindowMode);
+                d3d.applySettings();
             } else if (ImGui::MenuItem("Borderless Fullscreen")) {
                 settings.windowMode = WindowModeBorderless;
-                applySettings(settingWindowMode);
+                d3d.applySettings();
             }
             ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal);
             ImGui::Text("Exclusive Fullscreen");
             for (DisplayMode& mode : d3d.displayModes) {
-                std::string text = std::format("{}x{}", mode.resolution.width, mode.resolution.height);
+                std::string text = std::format("{}x{}", mode.resolutionWidth, mode.resolutionHeight);
                 if (ImGui::BeginMenu(text.c_str())) {
                     for (DXGI_RATIONAL& refreshRate : mode.refreshRates) {
                         text = std::format("{:.2f}hz", (float)refreshRate.Numerator / (float)refreshRate.Denominator);
                         if (ImGui::MenuItem(text.c_str())) {
                             settings.windowMode = WindowModeFullscreen;
-                            settings.windowW = mode.resolution.width;
-                            settings.windowH = mode.resolution.height;
+                            settings.windowW = mode.resolutionWidth;
+                            settings.windowH = mode.resolutionHeight;
                             settings.refreshRate = refreshRate;
-                            applySettings(settingWindowMode);
+                            d3d.applySettings();
                         }
                     }
                     ImGui::EndMenu();
@@ -2042,8 +2058,8 @@ void update() {
         }
         if (ImGui::BeginMenu("Editor")) {
             if (ImGui::BeginMenu("Camera")) {
-                ImGui::SliderFloat("Sensitivity", &scene.editor.camera.sensitivity, 0.0f, 100.0f);
-                ImGui::SliderFloat("RotationSensitivity", &scene.editor.camera.rotationSensitivity, 0.1f, 10.0f);
+                ImGui::SliderFloat("Sensitivity", &editor.camera.sensitivity, 0.0f, 100.0f);
+                ImGui::SliderFloat("RotationSensitivity", &editor.camera.rotationSensitivity, 0.1f, 10.0f);
                 ImGui::EndMenu();
             }
             ImGui::Separator();
@@ -2054,100 +2070,116 @@ void update() {
         }
         if (ImGui::BeginMenu("Game")) {
             if (ImGui::MenuItem("Play", "CTRL+P")) {
-                playing = !playing;
-                hideCursor(playing);
+                editor.active = false;
+                hideCursor(false);
+                world.resetObjectsToEditor();
             }
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
     }
-    ImVec2 objectWindowPos = ImVec2(settings.renderW * 0.8f, mainMenuBarSize.y);
-    ImVec2 objectWindowSize = ImVec2(settings.renderW * 0.2f, settings.renderH * 0.3f);
+    ImVec2 objectWindowPos = ImVec2(settings.renderW * 0.85f, mainMenuBarSize.y);
+    ImVec2 objectWindowSize = ImVec2(settings.renderW * 0.15f, settings.renderH * 0.3f);
     ImGui::SetNextWindowPos(objectWindowPos);
     ImGui::SetNextWindowSize(objectWindowSize);
     if (ImGui::Begin("Objects")) {
-        if (ImGui::Selectable("Player", scene.editor.selectedObjectType == SceneObjectTypePlayer)) {
-            scene.editor.selectedObjectType = SceneObjectTypePlayer;
+        if (ImGui::Selectable("Player", editor.selectedObjectType == WorldObjectTypePlayer)) {
+            editor.selectedObjectType = WorldObjectTypePlayer;
+            editor.selectedObjectIndex = 0;
         }
-        if (scene.editor.selectedObjectType == SceneObjectTypePlayer && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        if (editor.selectedObjectType == WorldObjectTypePlayer && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
             ImGui::OpenPopup("player edit");
         }
-        if (scene.editor.selectedObjectType == SceneObjectTypePlayer && ImGui::BeginPopup("player edit")) {
-            if (ImGui::Selectable("focus")) scene.editor.camera.focus(scene.player.transform.translate, 1);
+        if (editor.selectedObjectType == WorldObjectTypePlayer && ImGui::BeginPopup("player edit")) {
+            if (ImGui::Selectable("focus")) editor.camera.focus(editor.player.transform.t, 1);
             ImGui::EndPopup();
         }
+        ImGui::SetNextItemOpen(true);
         if (ImGui::TreeNode("Static Objects")) {
-            for (uint index = 0; StaticObject & object : scene.staticObjects) {
-                if (ImGui::Selectable(object.name.c_str(), scene.editor.selectedObjectType == SceneObjectTypeStaticObject && scene.editor.selectedObjectIndex == index)) {
-                    scene.editor.selectedObjectType = SceneObjectTypeStaticObject;
-                    scene.editor.selectedObjectIndex = index;
+            int objID = 0;
+            for (uint objIndex = 0; objIndex < editor.staticObjects.size(); objIndex++) {
+                StaticObject& object = editor.staticObjects[objIndex];
+                ImGui::PushID(objID++);
+                if (ImGui::Selectable(object.name.c_str(), editor.selectedObjectType == WorldObjectTypeStaticObject && editor.selectedObjectIndex == objIndex)) {
+                    editor.selectedObjectType = WorldObjectTypeStaticObject;
+                    editor.selectedObjectIndex = objIndex;
                 }
-                if (scene.editor.selectedObjectType == SceneObjectTypeStaticObject && scene.editor.selectedObjectIndex == index &&
-                    ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                ImGui::PopID();
+                if (editor.selectedObjectType == WorldObjectTypeStaticObject && editor.selectedObjectIndex == objIndex && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
                     ImGui::OpenPopup("static object edit");
                 }
-                if (scene.editor.selectedObjectType == SceneObjectTypeStaticObject && scene.editor.selectedObjectIndex == index && ImGui::BeginPopup("static object edit")) {
-                    if (ImGui::Selectable("focus")) scene.editor.camera.focus(object.transform.translate, 1);
+                if (editor.selectedObjectType == WorldObjectTypeStaticObject && editor.selectedObjectIndex == objIndex && ImGui::BeginPopup("static object edit")) {
+                    if (ImGui::Selectable("focus")) {
+                        editor.camera.focus(object.transform.t, 1);
+                    }
                     if (ImGui::Selectable("delete")) {
                         object.toBeDeleted = true;
-                        scene.editor.selectedObjectType = SceneObjectTypeNone;
+                        editor.selectedObjectType = WorldObjectTypeNone;
                     }
                     ImGui::EndPopup();
                 }
-                index += 1;
             }
             ImGui::TreePop();
         }
+        ImGui::SetNextItemOpen(true);
         if (ImGui::TreeNode("Dyanmic Objects")) {
-            for (uint index = 0; DynamicObject & object : scene.dynamicObjects) {
-                if (ImGui::Selectable(object.name.c_str(), scene.editor.selectedObjectType == SceneObjectTypeDynamicObject && scene.editor.selectedObjectIndex == index)) {
-                    scene.editor.selectedObjectType = SceneObjectTypeDynamicObject;
-                    scene.editor.selectedObjectIndex = index;
+            int objID = 0;
+            for (uint objIndex = 0; objIndex < editor.dynamicObjects.size(); objIndex++) {
+                DynamicObject& object = editor.dynamicObjects[objIndex];
+                ImGui::PushID(objID++);
+                if (ImGui::Selectable(object.name.c_str(), editor.selectedObjectType == WorldObjectTypeDynamicObject && editor.selectedObjectIndex == objIndex)) {
+                    editor.selectedObjectType = WorldObjectTypeDynamicObject;
+                    editor.selectedObjectIndex = objIndex;
                 }
-                if (scene.editor.selectedObjectType == SceneObjectTypeDynamicObject && scene.editor.selectedObjectIndex == index &&
-                    ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                ImGui::PopID();
+                if (editor.selectedObjectType == WorldObjectTypeDynamicObject && editor.selectedObjectIndex == objIndex && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
                     ImGui::OpenPopup("dynamic object edit");
                 }
-                if (scene.editor.selectedObjectType == SceneObjectTypeDynamicObject && scene.editor.selectedObjectIndex == index && ImGui::BeginPopup("dynamic object edit")) {
-                    if (ImGui::Selectable("focus")) scene.editor.camera.focus(object.transform.translate, 1);
+                if (editor.selectedObjectType == WorldObjectTypeDynamicObject && editor.selectedObjectIndex == objIndex && ImGui::BeginPopup("dynamic object edit")) {
+                    if (ImGui::Selectable("focus")) {
+                        editor.camera.focus(object.transform.t, 1);
+                    }
                     if (ImGui::Selectable("delete")) {
                         object.toBeDeleted = true;
-                        scene.editor.selectedObjectType = SceneObjectTypeNone;
+                        editor.selectedObjectType = WorldObjectTypeNone;
                     }
                     ImGui::EndPopup();
                 }
-                index += 1;
             }
             ImGui::TreePop();
         }
     }
     ImGui::End();
-    auto propertyTransform = [](Transform* transform) {
+    auto TransformProperties = [](Transform* transform) {
+        ImGui::SetNextItemOpen(true);
         if (ImGui::TreeNode("Transform")) {
-            ImGui::InputFloat3("S", &transform->scale.x);
+            ImGui::InputFloat3("S", &transform->s.x);
             ImGui::SameLine();
-            if (ImGui::Button("reset##scale")) { transform->scale = float3(1, 1, 1); }
-            ImGui::InputFloat4("R", &transform->rotate.x);
+            if (ImGui::Button("reset##scale")) { transform->s = float3(1, 1, 1); }
+            ImGui::InputFloat4("R", &transform->r.x);
             ImGui::SameLine();
-            if (ImGui::Button("reset##rotate")) { transform->rotate = float4(0, 0, 0, 1); }
-            ImGui::InputFloat3("T", &transform->translate.x);
+            if (ImGui::Button("reset##rotate")) { transform->r = float4(0, 0, 0, 1); }
+            ImGui::InputFloat3("T", &transform->t.x);
             ImGui::SameLine();
-            if (ImGui::Button("reset##translate")) { transform->translate = float3(0, 0, 0); }
+            if (ImGui::Button("reset##translate")) { transform->t = float3(0, 0, 0); }
             ImGui::TreePop();
         }
     };
-    auto propertyModel = [](Model* model) {
+    auto ModelProperties = [](ModelInstance& modelInstance) {
+        ImGui::SetNextItemOpen(true);
         if (ImGui::TreeNode("Model")) {
-            ImGui::Text(std::format("File: {}", model->filePath.string()).c_str());
+            Model& model = world.models[modelInstance.index];
+            ImGui::Text(std::format("File: {}", model.filePath.string()).c_str());
+            ImGui::SetNextItemOpen(true);
             if (ImGui::TreeNode("Animations")) {
-                for (uint animationIndex = 0; animationIndex < model->animations.size(); animationIndex++) {
-                    ModelAnimation& animation = model->animations[animationIndex];
+                for (uint animationIndex = 0; animationIndex < model.animations.size(); animationIndex++) {
+                    ModelAnimation& animation = model.animations[animationIndex];
                     ImGui::Text(std::format("#{}: {}", animationIndex, animation.name).c_str());
                     ImGui::SameLine(ImGui::GetWindowWidth() * 0.8f);
                     ImGui::PushID(animationIndex);
                     if (ImGui::Button("play")) {
-                        scene.player.model.animationState.index = animationIndex;
-                        scene.player.model.animationState.time = 0;
+                        modelInstance.animationState.index = animationIndex;
+                        modelInstance.animationState.time = 0;
                     }
                     ImGui::PopID();
                 }
@@ -2161,27 +2193,27 @@ void update() {
     ImGui::SetNextWindowPos(propertiesWindowPos);
     ImGui::SetNextWindowSize(propertiesWindowSize);
     if (ImGui::Begin("Properties")) {
-        if (scene.editor.selectedObjectType == SceneObjectTypePlayer) {
+        if (editor.selectedObjectType == WorldObjectTypePlayer) {
             ImGui::Text("Player");
-            propertyTransform(&scene.player.transform);
+            TransformProperties(&editor.player.transform);
             if (ImGui::TreeNode("Movement")) {
-                ImGui::InputFloat3("Velocity", &scene.player.velocity.x);
-                ImGui::InputFloat3("Acceleration", &scene.player.acceleration.x);
+                ImGui::InputFloat3("Velocity", &editor.player.velocity.x);
+                ImGui::InputFloat3("Acceleration", &editor.player.acceleration.x);
                 ImGui::TreePop();
             }
-            propertyModel(&scene.models[scene.player.model.index]);
-        } else if (scene.editor.selectedObjectType == SceneObjectTypeStaticObject) {
-            StaticObject& staticObject = scene.staticObjects[scene.editor.selectedObjectIndex];
-            ImGui::Text("Static Object #%d", scene.editor.selectedObjectIndex);
-            ImGui::Text("Name \"%s\"", staticObject.name.c_str());
-            propertyTransform(&staticObject.transform);
-            propertyModel(&scene.models[staticObject.model.index]);
-        } else if (scene.editor.selectedObjectType == SceneObjectTypeDynamicObject) {
-            DynamicObject& dynamicObject = scene.dynamicObjects[scene.editor.selectedObjectIndex];
-            ImGui::Text("Dynamic Object #%d", scene.editor.selectedObjectIndex);
-            ImGui::Text("Name \"%s\"", dynamicObject.name.c_str());
-            propertyTransform(&dynamicObject.transform);
-            propertyModel(&scene.models[dynamicObject.model.index]);
+            ModelProperties(editor.player.model);
+        } else if (editor.selectedObjectType == WorldObjectTypeStaticObject) {
+            StaticObject& object = editor.staticObjects[editor.selectedObjectIndex];
+            ImGui::Text("Static Object #%d", editor.selectedObjectIndex);
+            ImGui::Text("Name \"%s\"", object.name.c_str());
+            TransformProperties(&object.transform);
+            ModelProperties(object.model);
+        } else if (editor.selectedObjectType == WorldObjectTypeDynamicObject) {
+            DynamicObject& object = editor.dynamicObjects[editor.selectedObjectIndex];
+            ImGui::Text("Dynamic Object #%d", editor.selectedObjectIndex);
+            ImGui::Text("Name \"%s\"", object.name.c_str());
+            TransformProperties(&object.transform);
+            ModelProperties(object.model);
         }
     }
     ImGui::End();
@@ -2207,7 +2239,7 @@ void update() {
             ImGui::InputText("Name", objectName, sizeof(objectName));
             ImGui::InputText("File", filePath, sizeof(filePath));
             ImGui::SameLine();
-            if (ImGui::Button("browse")) {
+            if (ImGui::Button("Browse")) {
                 OPENFILENAMEA openfileName = {.lStructSize = sizeof(OPENFILENAMEA), .hwndOwner = window.hwnd, .lpstrFile = filePath, .nMaxFile = sizeof(filePath)};
                 GetOpenFileNameA(&openfileName);
             }
@@ -2216,27 +2248,17 @@ void update() {
             if (objectName[0] == '\0') {
                 logs.push_back("error: object name is empty");
             } else {
-                bool duplicatedName = false;
-                for (StaticObject& object : scene.staticObjects) {
-                    if (object.name == objectName) {
-                        duplicatedName = true;
-                    }
-                }
-                for (DynamicObject& object : scene.dynamicObjects) {
-                    if (object.name == objectName) {
-                        duplicatedName = true;
-                    }
-                }
-                if (duplicatedName) {
-                    logs.push_back(std::format("error: object name \"{}\" already exists", objectName));
+                std::filesystem::path path = std::filesystem::relative(filePath, assetsDir);
+                ModelInstance model = world.loadModel(path);
+                if (model.index >= world.models.size()) {
+                    logs.push_back(std::format("error: failed to load model file: \"{}\"", path.string()));
                 } else {
-                    std::filesystem::path path = std::filesystem::relative(filePath, assetsDir);
-                    ModelInstance model = sceneLoadModel(path);
-                    if (model.index >= scene.models.size()) {
-                        logs.push_back(std::format("error: failed to load model file: \"{}\"", path.string()));
-                    } else {
+                    if (objectType == 0) {
                         StaticObject staticObject = {.name = objectName, .model = model};
-                        scene.staticObjects.push_back(std::move(staticObject));
+                        editor.staticObjects.push_back(std::move(staticObject));
+                    } else if (objectType == 1) {
+                        DynamicObject dynamicObject = {.name = objectName, .model = model};
+                        editor.dynamicObjects.push_back(std::move(dynamicObject));
                     }
                 }
             }
@@ -2247,124 +2269,151 @@ void update() {
         ImGui::EndPopup();
     }
 
-    if (ImGui::IsKeyPressed(ImGuiKey_P, false) &&
-        ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
-        playing = !playing;
-        hideCursor(playing);
-    }
-    if (playing) {
-        float xRotate = -mouseDeltaRaw[1] / 500.0f * scene.player.camera.sensitivity;
-        float yRotate = mouseDeltaRaw[0] / 500.0f * scene.player.camera.sensitivity;
-        xRotate += controller.rStick.y * (float)frameTime * scene.player.camera.controllerSensitivity;
-        yRotate += controller.rStick.x * (float)frameTime * scene.player.camera.controllerSensitivity;
-        float zoom = -mouseWheel * (float)frameTime * scene.player.camera.sensitivity;
-        scene.player.camera.distance += zoom;
-        scene.player.camera.rotation.x += xRotate;
-        scene.player.camera.rotation.y += yRotate;
-        scene.player.camera.lookAt = scene.player.transform.translate + scene.player.camera.lookAtOffset;
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().WantCaptureMouse) {
+        mouseSelectX = (uint)mousePos.x;
+        mouseSelectY = (uint)mousePos.y;
     } else {
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().WantCaptureMouse) {
-            mouseSelectX = (uint)mousePos.x;
-            mouseSelectY = (uint)mousePos.y;
-        } else {
-            mouseSelectX = UINT_MAX;
-            mouseSelectY = UINT_MAX;
-        }
-
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !ImGui::GetIO().WantCaptureMouse) {
-            scene.editor.cameraMoving = true;
-            hideCursor(true);
-        }
-        if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
-            scene.editor.cameraMoving = false;
-            hideCursor(false);
-        }
-        if (scene.editor.cameraMoving || controllerStickMoved()) {
-            float pitch = (mouseDeltaRaw[1] / 500.0f * scene.editor.camera.rotationSensitivity) - (controller.rStick.y * (float)frameTime * scene.editor.camera.controllerSensitivity);
-            float yaw = (mouseDeltaRaw[0] / 500.0f * scene.editor.camera.rotationSensitivity) + (controller.rStick.x * (float)frameTime * scene.editor.camera.controllerSensitivity);
-            scene.editor.camera.sensitivity = std::clamp(scene.editor.camera.sensitivity + ImGui::GetIO().MouseWheel, 0.0f, 100.0f);
-            float distance = (float)frameTime / 5.0f * scene.editor.camera.sensitivity;
-            float3 translate = {0, 0, 0};
-            if (ImGui::IsKeyDown(ImGuiKey_W)) translate.z = distance;
-            if (ImGui::IsKeyDown(ImGuiKey_S)) translate.z = -distance;
-            if (ImGui::IsKeyDown(ImGuiKey_A)) translate.x = distance;
-            if (ImGui::IsKeyDown(ImGuiKey_D)) translate.x = -distance;
-            if (ImGui::IsKeyDown(ImGuiKey_Q)) translate.y = distance;
-            if (ImGui::IsKeyDown(ImGuiKey_E)) translate.y = -distance;
-            // scene.editor.camera.position += scene.editor.camera.dir.cross(float3(0, 1, 0)) * distance * -controller.lStick.x;
-            // scene.editor.camera.position += scene.editor.camera.dir * distance * controller.lStick.y;
-            scene.editor.camera.rotate(pitch, yaw);
-            scene.editor.camera.translate(translate);
-        }
-
-        static ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
-        static ImGuizmo::MODE gizmoMode = ImGuizmo::WORLD;
-        if (ImGui::IsKeyPressed(ImGuiKey_Space) && ImGui::IsKeyDown(ImGuiKey_LeftShift)) {
-            ImGui::OpenPopup("gizmo selection");
-        }
-        if (ImGui::BeginPopup("gizmo selection")) {
-            if (ImGui::Selectable("world")) {
-                gizmoMode = ImGuizmo::WORLD;
-                ImGui::CloseCurrentPopup();
-            }
-            if (ImGui::Selectable("local")) {
-                gizmoMode = ImGuizmo::LOCAL;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::Separator();
-            if (ImGui::Selectable("scale")) {
-                gizmoOperation = ImGuizmo::SCALE;
-                ImGui::CloseCurrentPopup();
-            }
-            if (ImGui::Selectable("rotate")) {
-                gizmoOperation = ImGuizmo::ROTATE;
-                ImGui::CloseCurrentPopup();
-            }
-            if (ImGui::Selectable("translate")) {
-                gizmoOperation = ImGuizmo::TRANSLATE;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-        const XMMATRIX lookAtMat = XMMatrixLookAtLH(scene.editor.camera.position.toXMVector(), scene.editor.camera.lookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
-        const XMMATRIX perspectiveMat = XMMatrixPerspectiveFovLH(radian(scene.editor.camera.fovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f);
-        auto transformGizmo = [&](Transform* transform) {
-            XMMATRIX transformMat = transform->toMat();
-            if (!ImGui::IsAnyItemActive()) {
-                if (ImGui::IsKeyPressed(ImGuiKey_T)) gizmoOperation = ImGuizmo::TRANSLATE;
-                else if (ImGui::IsKeyPressed(ImGuiKey_R)) gizmoOperation = ImGuizmo::ROTATE;
-                else if (ImGui::IsKeyPressed(ImGuiKey_S)) gizmoOperation = ImGuizmo::SCALE;
-            }
-            if (ImGuizmo::Manipulate((const float*)&lookAtMat, (const float*)&perspectiveMat, gizmoOperation, gizmoMode, (float*)&transformMat)) {
-                XMVECTOR scale, rotate, translate;
-                if (XMMatrixDecompose(&scale, &rotate, &translate, transformMat)) {
-                    transform->scale = scale, transform->rotate = rotate, transform->translate = translate;
-                }
-            }
-        };
-        if (scene.editor.selectedObjectType == SceneObjectTypePlayer) {
-            transformGizmo(&scene.player.transform);
-        } else if (scene.editor.selectedObjectType == SceneObjectTypeStaticObject && scene.editor.selectedObjectIndex < scene.staticObjects.size()) {
-            StaticObject& staticObject = scene.staticObjects[scene.editor.selectedObjectIndex];
-            transformGizmo(&staticObject.transform);
-        } else if (scene.editor.selectedObjectType == SceneObjectTypeDynamicObject && scene.editor.selectedObjectIndex < scene.dynamicObjects.size()) {
-            DynamicObject& dynamicObject = scene.dynamicObjects[scene.editor.selectedObjectIndex];
-            transformGizmo(&dynamicObject.transform);
-        }
-        // static const XMMATRIX gridMat = XMMatrixIdentity();
-        // ImGuizmo::DrawGrid((const float*)&lookAtMat, (const float*)&perspectiveMat, (const float*)&gridMat, 10);
+        mouseSelectX = UINT_MAX;
+        mouseSelectY = UINT_MAX;
     }
 
-    vectorDeleteElements(scene.staticObjects);
-    vectorDeleteElements(scene.dynamicObjects);
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !ImGui::GetIO().WantCaptureMouse) {
+        editor.cameraMoving = true;
+        hideCursor(true);
+    }
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+        editor.cameraMoving = false;
+        hideCursor(false);
+    }
+    if (editor.cameraMoving || controller.stickMoved()) {
+        float pitch = (mouseDeltaRaw[1] / 500.0f * editor.camera.rotationSensitivity) - (controller.rStick.y * (float)frameTime * editor.camera.controllerSensitivity);
+        float yaw = (mouseDeltaRaw[0] / 500.0f * editor.camera.rotationSensitivity) + (controller.rStick.x * (float)frameTime * editor.camera.controllerSensitivity);
+        editor.camera.sensitivity = std::clamp(editor.camera.sensitivity + ImGui::GetIO().MouseWheel, 0.0f, 100.0f);
+        float distance = (float)frameTime / 5.0f * editor.camera.sensitivity;
+        float3 translate = {0, 0, 0};
+        if (ImGui::IsKeyDown(ImGuiKey_W)) translate.z = distance;
+        if (ImGui::IsKeyDown(ImGuiKey_S)) translate.z = -distance;
+        if (ImGui::IsKeyDown(ImGuiKey_A)) translate.x = distance;
+        if (ImGui::IsKeyDown(ImGuiKey_D)) translate.x = -distance;
+        if (ImGui::IsKeyDown(ImGuiKey_Q)) translate.y = distance;
+        if (ImGui::IsKeyDown(ImGuiKey_E)) translate.y = -distance;
+        // editor.camera.position += editor.camera.dir.cross(float3(0, 1, 0)) * distance * -controller.lStick.x;
+        // editor.camera.position += editor.camera.dir * distance * controller.lStick.y;
+        editor.camera.rotate(pitch, yaw);
+        editor.camera.translate(translate);
+    }
+
+    static ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
+    static ImGuizmo::MODE gizmoMode = ImGuizmo::WORLD;
+    if (ImGui::IsKeyPressed(ImGuiKey_Space) && ImGui::IsKeyDown(ImGuiKey_LeftShift)) {
+        ImGui::OpenPopup("gizmo selection");
+    }
+    if (ImGui::BeginPopup("gizmo selection")) {
+        if (ImGui::Selectable("world")) {
+            gizmoMode = ImGuizmo::WORLD;
+            ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::Selectable("local")) {
+            gizmoMode = ImGuizmo::LOCAL;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::Separator();
+        if (ImGui::Selectable("scale")) {
+            gizmoOperation = ImGuizmo::SCALE;
+            ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::Selectable("rotate")) {
+            gizmoOperation = ImGuizmo::ROTATE;
+            ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::Selectable("translate")) {
+            gizmoOperation = ImGuizmo::TRANSLATE;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    const XMMATRIX lookAtMat = XMMatrixLookAtLH(editor.camera.position.toXMVector(), editor.camera.lookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
+    const XMMATRIX perspectiveMat = XMMatrixPerspectiveFovLH(radian(editor.camera.fovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f);
+    auto transformGizmo = [&](Transform* transform) {
+        XMMATRIX transformMat = transform->toMat();
+        if (!ImGui::IsAnyItemActive()) {
+            if (ImGui::IsKeyPressed(ImGuiKey_T)) gizmoOperation = ImGuizmo::TRANSLATE;
+            else if (ImGui::IsKeyPressed(ImGuiKey_R)) gizmoOperation = ImGuizmo::ROTATE;
+            else if (ImGui::IsKeyPressed(ImGuiKey_S)) gizmoOperation = ImGuizmo::SCALE;
+        }
+        if (ImGuizmo::Manipulate((const float*)&lookAtMat, (const float*)&perspectiveMat, gizmoOperation, gizmoMode, (float*)&transformMat)) {
+            XMVECTOR scale, rotate, translate;
+            if (XMMatrixDecompose(&scale, &rotate, &translate, transformMat)) {
+                transform->s = scale, transform->r = rotate, transform->t = translate;
+            }
+        }
+    };
+    if (editor.selectedObjectType == WorldObjectTypePlayer) {
+        transformGizmo(&editor.player.transform);
+    } else if (editor.selectedObjectType == WorldObjectTypeStaticObject && editor.selectedObjectIndex < editor.staticObjects.size()) {
+        transformGizmo(&editor.staticObjects[editor.selectedObjectIndex].transform);
+    } else if (editor.selectedObjectType == WorldObjectTypeDynamicObject && editor.selectedObjectIndex < editor.dynamicObjects.size()) {
+        transformGizmo(&editor.dynamicObjects[editor.selectedObjectIndex].transform);
+    }
+    // static const XMMATRIX gridMat = XMMatrixIdentity();
+    // ImGuizmo::DrawGrid((const float*)&lookAtMat, (const float*)&perspectiveMat, (const float*)&gridMat, 10);
+
+    {
+        auto objIter = editor.staticObjects.begin();
+        while (objIter != editor.staticObjects.end()) {
+            if (objIter->toBeDeleted) {
+                objIter->releaseResource();
+                objIter = editor.staticObjects.erase(objIter);
+            } else {
+                objIter++;
+            }
+        }
+    }
+    {
+        auto objIter = editor.dynamicObjects.begin();
+        while (objIter != editor.dynamicObjects.end()) {
+            if (objIter->toBeDeleted) {
+                objIter->releaseResource();
+                objIter = editor.dynamicObjects.erase(objIter);
+            } else {
+                objIter++;
+            }
+        }
+    }
+}
+
+void gameUpdate() {
+    if (editor.enable && editor.active) return;
+    {
+        Model& model = world.models[world.player.model.index];
+        if (world.player.model.animationState.index < model.animations.size()) {
+            ModelAnimation& animation = model.animations[world.player.model.animationState.index];
+            world.player.model.animationState.time += frameTime;
+            if (world.player.model.animationState.time > animation.timeLength) {
+                world.player.model.animationState.time -= animation.timeLength;
+            }
+        }
+    }
+}
+
+void update() {
+    ZoneScoped;
+    ImGui::GetIO().DeltaTime = (float)frameTime;
+    ImGui::GetIO().DisplaySize = ImVec2((float)settings.renderW, (float)settings.renderH);
+    ImGui::NewFrame();
+    ImGuizmo::SetRect(0, 0, (float)settings.renderW, (float)settings.renderH);
+    ImGuizmo::BeginFrame();
+
+    editorUpdate();
+    gameUpdate();
 
     ImGui::Render();
 }
 
 void updateAnimatedModel(ModelInstance& modelInstance) {
     ZoneScoped;
-    Model& model = scene.models[modelInstance.index];
-    if (!modelInstance.animationState.skinJointsBuffer || model.animations.size() == 0) return;
+    Model& model = world.models[modelInstance.index];
+    if (model.joints.empty() || model.animations.size() == 0) return;
     if (modelInstance.animationState.index >= model.animations.size()) return;
     ModelAnimation& animation = model.animations[modelInstance.animationState.index];
 
@@ -2372,67 +2421,71 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
     std::vector<XMMATRIX> nodeLocalTransformMats(model.nodes.size());
     std::vector<XMMATRIX> nodeGlobalTransformMats(model.nodes.size());
     std::vector<XMMATRIX> jointTransformMats(model.joints.size());
-
-    for (ModelAnimationChannel& channel : animation.channels) {
-        float4 frame0 = channel.sampler->keyFrames[0].xyzw;
-        float4 frame1 = channel.sampler->keyFrames[1].xyzw;
-        float progress = 0;
-        for (uint frameIndex = 1; frameIndex < channel.sampler->keyFrames.size(); frameIndex++) {
-            ModelAnimationSamplerKeyFrame& keyFrame = channel.sampler->keyFrames[frameIndex];
-            if (modelInstance.animationState.time <= keyFrame.time) {
-                ModelAnimationSamplerKeyFrame& keyFramePrevious = channel.sampler->keyFrames[frameIndex - 1];
-                frame0 = keyFramePrevious.xyzw;
-                frame1 = keyFrame.xyzw;
-                progress = ((float)modelInstance.animationState.time - keyFramePrevious.time) / (keyFrame.time - keyFramePrevious.time);
-                break;
+    {
+        ZoneScopedN("get nodeLocalTransforms");
+        for (ModelAnimationChannel& channel : animation.channels) {
+            float4 frame0 = channel.sampler->keyFrames[0].xyzw;
+            float4 frame1 = channel.sampler->keyFrames[1].xyzw;
+            float progress = 0;
+            for (uint frameIndex = 1; frameIndex < channel.sampler->keyFrames.size(); frameIndex++) {
+                ModelAnimationSamplerKeyFrame& keyFrame = channel.sampler->keyFrames[frameIndex];
+                if (modelInstance.animationState.time <= keyFrame.time) {
+                    ModelAnimationSamplerKeyFrame& keyFramePrevious = channel.sampler->keyFrames[frameIndex - 1];
+                    frame0 = keyFramePrevious.xyzw;
+                    frame1 = keyFrame.xyzw;
+                    progress = ((float)modelInstance.animationState.time - keyFramePrevious.time) / (keyFrame.time - keyFramePrevious.time);
+                    break;
+                }
+            }
+            int64 nodeIndex = channel.node - &model.nodes[0];
+            if (channel.type == AnimationChannelTypeTranslate) {
+                if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
+                    nodeLocalTransforms[nodeIndex].t = lerp(frame0.xyz(), frame1.xyz(), progress);
+                } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
+                    nodeLocalTransforms[nodeIndex].t = progress < 1.0f ? frame0.xyz() : frame1.xyz();
+                }
+            } else if (channel.type == AnimationChannelTypeRotate) {
+                if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
+                    nodeLocalTransforms[nodeIndex].r = slerp(frame0, frame1, progress);
+                } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
+                    nodeLocalTransforms[nodeIndex].r = progress < 1.0f ? frame0 : frame1;
+                }
+            } else if (channel.type == AnimationChannelTypeScale) {
+                if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
+                    nodeLocalTransforms[nodeIndex].s = lerp(frame0.xyz(), frame1.xyz(), progress);
+                } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
+                    nodeLocalTransforms[nodeIndex].s = progress < 1.0f ? frame0.xyz() : frame1.xyz();
+                }
             }
         }
-        int64 nodeIndex = channel.node - &model.nodes[0];
-        if (channel.type == AnimationChannelTypeTranslate) {
-            if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
-                nodeLocalTransforms[nodeIndex].translate = lerp(frame0.xyz(), frame1.xyz(), progress);
-            } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
-                nodeLocalTransforms[nodeIndex].translate = progress < 1.0f ? frame0.xyz() : frame1.xyz();
-            }
-        } else if (channel.type == AnimationChannelTypeRotate) {
-            if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
-                nodeLocalTransforms[nodeIndex].rotate = slerp(frame0, frame1, progress);
-            } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
-                nodeLocalTransforms[nodeIndex].rotate = progress < 1.0f ? frame0 : frame1;
-            }
-        } else if (channel.type == AnimationChannelTypeScale) {
-            if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
-                nodeLocalTransforms[nodeIndex].scale = lerp(frame0.xyz(), frame1.xyz(), progress);
-            } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
-                nodeLocalTransforms[nodeIndex].scale = progress < 1.0f ? frame0.xyz() : frame1.xyz();
-            }
+        for (uint nodeIndex = 0; nodeIndex < model.nodes.size(); nodeIndex++) {
+            nodeLocalTransformMats[nodeIndex] = nodeLocalTransforms[nodeIndex].toMat();
         }
     }
-    for (uint nodeIndex = 0; nodeIndex < model.nodes.size(); nodeIndex++) {
-        nodeLocalTransformMats[nodeIndex] = nodeLocalTransforms[nodeIndex].toMat();
-        nodeGlobalTransformMats[nodeIndex] = XMMatrixIdentity();
-    }
-    for (ModelNode* rootNode : model.rootNodes) {
-        assertDebug(rootNode->parent == nullptr);
-        struct Node {
-            ModelNode* node;
-            XMMATRIX transformMat;
-        };
-        std::stack<Node> nodeStack;
-        nodeStack.push({rootNode, nodeLocalTransformMats[rootNode - &model.nodes[0]]});
-        while (!nodeStack.empty()) {
-            Node parentNode = nodeStack.top();
-            nodeStack.pop();
-            nodeGlobalTransformMats[parentNode.node - &model.nodes[0]] = parentNode.transformMat;
-            for (ModelNode* childNode : parentNode.node->children) {
-                int64 childNodeIndex = childNode - &model.nodes[0];
-                nodeStack.push({childNode, XMMatrixMultiply(nodeLocalTransformMats[childNodeIndex], parentNode.transformMat)});
+    {
+        ZoneScopedN("get jointTransformMats");
+        for (ModelNode* rootNode : model.rootNodes) {
+            assertDebug(rootNode->parent == nullptr);
+            struct Node {
+                ModelNode* node;
+                XMMATRIX transformMat;
+            };
+            std::stack<Node> nodeStack;
+            nodeStack.push({rootNode, nodeLocalTransformMats[rootNode - &model.nodes[0]]});
+            while (!nodeStack.empty()) {
+                Node parentNode = nodeStack.top();
+                nodeStack.pop();
+                nodeGlobalTransformMats[parentNode.node - &model.nodes[0]] = parentNode.transformMat;
+                for (ModelNode* childNode : parentNode.node->children) {
+                    int64 childNodeIndex = childNode - &model.nodes[0];
+                    nodeStack.push({childNode, XMMatrixMultiply(nodeLocalTransformMats[childNodeIndex], parentNode.transformMat)});
+                }
             }
         }
-    }
-    for (uint jointIndex = 0; jointIndex < model.joints.size(); jointIndex++) {
-        int64 nodeIndex = model.joints[jointIndex].node - &model.nodes[0];
-        jointTransformMats[jointIndex] = XMMatrixTranspose(XMMatrixMultiply(model.joints[jointIndex].inverseBindMat, nodeGlobalTransformMats[nodeIndex]));
+        for (uint jointIndex = 0; jointIndex < model.joints.size(); jointIndex++) {
+            int64 nodeIndex = model.joints[jointIndex].node - &model.nodes[0];
+            jointTransformMats[jointIndex] = XMMatrixTranspose(XMMatrixMultiply(model.joints[jointIndex].inverseBindMat, nodeGlobalTransformMats[nodeIndex]));
+        }
     }
     memcpy(modelInstance.animationState.skinJointsBufferPtr, jointTransformMats.data(), vectorSizeof(jointTransformMats));
 
@@ -2484,10 +2537,12 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
     d3d.graphicsCmdList->ResourceBarrier((uint)barriers.size(), barriers.data());
 }
 
-void addTlasInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransform, SceneObjectType objectType, uint objectIndex, uint selected) {
+void addTlasInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransform, WorldObjectType objectType, uint objectIndex) {
     ZoneScoped;
-    Model& model = scene.models[modelInstance.index];
-    TLASInstanceInfo tlasInstanceInfo = {.objectType = objectType, .objectIndex = objectIndex, .selected = selected, .skinJointsDescriptor = UINT32_MAX, .blasGeometriesOffset = (uint)scene.blasGeometriesInfos.size()};
+    Model& model = world.models[modelInstance.index];
+    bool selected = false;
+    if (editor.enable && editor.active) selected = editor.selectedObjectType == objectType && editor.selectedObjectIndex == objectIndex;
+    TLASInstanceInfo tlasInstanceInfo = {.objectType = objectType, .objectIndex = objectIndex, .selected = selected, .skinJointsDescriptor = UINT32_MAX, .blasGeometriesOffset = (uint)world.blasGeometriesInfos.size()};
     bool animatedModel = !model.joints.empty();
     for (ModelNode& node : model.nodes) {
         if (!node.mesh) continue;
@@ -2500,23 +2555,23 @@ void addTlasInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
         transform = XMMatrixMultiply(transform, objectTransform);
         transform = XMMatrixTranspose(transform);
         memcpy(instanceDesc.Transform, &transform, sizeof(instanceDesc.Transform));
-        scene.tlasInstancesBuildInfos.push_back(instanceDesc);
-        scene.tlasInstancesInfos.push_back(tlasInstanceInfo);
+        world.tlasInstancesBuildInfos.push_back(instanceDesc);
+        world.tlasInstancesInfos.push_back(tlasInstanceInfo);
         for (uint primitiveIndex = 0; primitiveIndex < node.mesh->primitives.size(); primitiveIndex++) {
             ModelPrimitive& primitive = node.mesh->primitives[primitiveIndex];
             D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.verticesBufferOffset, .NumElements = primitive.verticesCount, .StructureByteStride = sizeof(struct Vertex)}};
             D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.indicesBufferOffset, .NumElements = primitive.indicesCount, .StructureByteStride = sizeof(uint)}};
-            d3dAppendSRVDescriptor(&vertexBufferDesc, meshVerticesBuffer->GetResource());
-            d3dAppendSRVDescriptor(&indexBufferDesc, node.mesh->indicesBuffer->GetResource());
+            d3d.appendSRVDescriptor(&vertexBufferDesc, meshVerticesBuffer->GetResource());
+            d3d.appendSRVDescriptor(&indexBufferDesc, node.mesh->indicesBuffer->GetResource());
             if (primitive.material) {
-                scene.blasGeometriesInfos.push_back(BLASGeometryInfo{.baseColorFactor = primitive.material->baseColorFactor});
+                world.blasGeometriesInfos.push_back(BLASGeometryInfo{.baseColorFactor = primitive.material->baseColorFactor});
                 if (primitive.material->baseColorTexture) {
-                    d3dAppendSRVDescriptor(&primitive.material->baseColorTexture->image->srvDesc, primitive.material->baseColorTexture->image->gpuData->GetResource());
+                    d3d.appendSRVDescriptor(&primitive.material->baseColorTexture->image->srvDesc, primitive.material->baseColorTexture->image->gpuData->GetResource());
                 } else {
-                    d3dAppendSRVDescriptor(&d3d.defaultMaterialBaseColorImageSRVDesc, d3d.defaultMaterialBaseColorImage->GetResource());
+                    d3d.appendSRVDescriptor(&d3d.defaultMaterialBaseColorImageSRVDesc, d3d.defaultMaterialBaseColorImage->GetResource());
                 }
             } else {
-                scene.blasGeometriesInfos.push_back(BLASGeometryInfo{.baseColorFactor = {1, 1, 1, 1}});
+                world.blasGeometriesInfos.push_back(BLASGeometryInfo{.baseColorFactor = {1, 1, 1, 1}});
                 assert(false);
             }
         }
@@ -2545,7 +2600,7 @@ D3D12_DISPATCH_RAYS_DESC fillRayTracingShaderTable(uint8* buffer, ID3D12Resource
 
 void render() {
     ZoneScoped;
-    d3dGraphicsQueueStartRecording();
+    d3d.graphicsQueueStartRecording();
 
     D3D12_RESOURCE_BARRIER renderTextureTransition = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.renderTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}};
     d3d.graphicsCmdList->ResourceBarrier(1, &renderTextureTransition);
@@ -2553,9 +2608,9 @@ void render() {
     d3d.cbvSrvUavDescriptorCount = 0;
     d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap);
 
-    scene.tlasInstancesBuildInfos.resize(0);
-    scene.tlasInstancesInfos.resize(0);
-    scene.blasGeometriesInfos.resize(0);
+    world.tlasInstancesBuildInfos.resize(0);
+    world.tlasInstancesInfos.resize(0);
+    world.blasGeometriesInfos.resize(0);
 
     d3d.stagingBufferOffset = 0;
     d3d.constantBufferOffset = 0;
@@ -2570,30 +2625,26 @@ void render() {
         D3D12_SHADER_RESOURCE_VIEW_DESC collisionQueriesDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = 1, .StructureByteStride = sizeof(struct CollisionQuery)}};
         D3D12_UNORDERED_ACCESS_VIEW_DESC collisionQueryResultsDesc = {.ViewDimension = D3D12_UAV_DIMENSION_BUFFER, .Buffer = {.NumElements = 1, .StructureByteStride = sizeof(struct CollisionQueryResult)}};
 
-        D3DDescriptor renderTextureSRVDescriptor = d3dAppendSRVDescriptor(&renderTextureSRVDesc, d3d.renderTexture->GetResource());
-        D3DDescriptor renderTextureUAVDescriptor = d3dAppendUAVDescriptor(&renderTextureUAVDesc, d3d.renderTexture->GetResource());
-        D3DDescriptor renderInfoDescriptor = d3dAppendCBVDescriptor(&renderInfoCBVDesc);
-        D3DDescriptor tlasDescriptor = d3dAppendSRVDescriptor(&tlasViewDesc, nullptr);
-        D3DDescriptor tlasInstancesInfosDescriptor = d3dAppendSRVDescriptor(&tlasInstancesInfosDesc, d3d.tlasInstancesInfosBuffer->GetResource());
-        D3DDescriptor blasGeometriesInfosDescriptor = d3dAppendSRVDescriptor(&blasGeometriesInfosDesc, d3d.blasGeometriesInfosBuffer->GetResource());
-        D3DDescriptor skyboxTextureDescriptor = d3dAppendSRVDescriptor(nullptr, scene.skybox.hdriTexture->GetResource());
-        D3DDescriptor readBackBufferDescriptor = d3dAppendUAVDescriptor(&readBackBufferDesc, d3d.readBackUavBuffer->GetResource());
-        D3DDescriptor imguiImageDescriptor = d3dAppendSRVDescriptor(nullptr, d3d.imguiImage->GetResource());
-        D3DDescriptor collisionQueriesDescriptor = d3dAppendSRVDescriptor(&collisionQueriesDesc, d3d.collisionQueriesBuffer->GetResource());
-        D3DDescriptor collisionQueryResultsDescriptor = d3dAppendUAVDescriptor(&collisionQueryResultsDesc, d3d.collisionQueryResultsUavBuffer->GetResource());
+        D3DDescriptor renderTextureSRVDescriptor = d3d.appendSRVDescriptor(&renderTextureSRVDesc, d3d.renderTexture->GetResource());
+        D3DDescriptor renderTextureUAVDescriptor = d3d.appendUAVDescriptor(&renderTextureUAVDesc, d3d.renderTexture->GetResource());
+        D3DDescriptor renderInfoDescriptor = d3d.appendCBVDescriptor(&renderInfoCBVDesc);
+        D3DDescriptor tlasDescriptor = d3d.appendSRVDescriptor(&tlasViewDesc, nullptr);
+        D3DDescriptor tlasInstancesInfosDescriptor = d3d.appendSRVDescriptor(&tlasInstancesInfosDesc, d3d.tlasInstancesInfosBuffer->GetResource());
+        D3DDescriptor blasGeometriesInfosDescriptor = d3d.appendSRVDescriptor(&blasGeometriesInfosDesc, d3d.blasGeometriesInfosBuffer->GetResource());
+        D3DDescriptor skyboxTextureDescriptor = d3d.appendSRVDescriptor(nullptr, world.skybox.hdriTexture->GetResource());
+        D3DDescriptor readBackBufferDescriptor = d3d.appendUAVDescriptor(&readBackBufferDesc, d3d.readBackUAVBuffer->GetResource());
+        D3DDescriptor imguiImageDescriptor = d3d.appendSRVDescriptor(nullptr, d3d.imguiImage->GetResource());
+        D3DDescriptor collisionQueriesDescriptor = d3d.appendSRVDescriptor(&collisionQueriesDesc, d3d.collisionQueriesBuffer->GetResource());
+        D3DDescriptor collisionQueryResultsDescriptor = d3d.appendUAVDescriptor(&collisionQueryResultsDesc, d3d.collisionQueryResultsUavBuffer->GetResource());
     }
     {
-        float3 cameraPosition;
-        float3 cameraLookAt;
-        float cameraFovVertical;
-        if (playing) {
-            cameraPosition = scene.player.camera.position;
-            cameraLookAt = scene.player.camera.lookAt;
-            cameraFovVertical = 50;
-        } else {
-            cameraPosition = scene.editor.camera.position;
-            cameraLookAt = scene.editor.camera.lookAt;
-            cameraFovVertical = scene.editor.camera.fovVertical;
+        float3 cameraPosition = world.player.camera.position;
+        float3 cameraLookAt = world.player.camera.lookAt;
+        float cameraFovVertical = 50;
+        if (editor.enable && editor.active) {
+            cameraPosition = editor.camera.position;
+            cameraLookAt = editor.camera.lookAt;
+            cameraFovVertical = editor.camera.fovVertical;
         }
         RenderInfo renderInfo = {
             .cameraViewMat = XMMatrixTranspose(XMMatrixInverse(nullptr, XMMatrixLookAtLH(cameraPosition.toXMVector(), cameraLookAt.toXMVector(), XMVectorSet(0, 1, 0, 0)))),
@@ -2602,33 +2653,45 @@ void render() {
             .mouseSelectPosition = {mouseSelectX, mouseSelectY},
             .hdr = settings.hdr,
             .frameTime = (float)frameTime,
-            .playerPosition = scene.player.transform.translate,
-            .playerVelocity = scene.player.velocity,
-            .playerAcceleration = scene.player.acceleration,
         };
         assertDebug(d3d.constantBufferOffset == 0);
         memcpy(d3d.constantBufferPtr + d3d.constantBufferOffset, &renderInfo, sizeof(renderInfo));
         d3d.constantBufferOffset += sizeof(renderInfo);
     }
     {
-        updateAnimatedModel(scene.player.model);
-        for (StaticObject& obj : scene.staticObjects) updateAnimatedModel(obj.model);
-        for (DynamicObject& obj : scene.dynamicObjects) updateAnimatedModel(obj.model);
-
-        addTlasInstance(scene.player.model, scene.player.transform.toMat(), SceneObjectTypePlayer, 0, scene.editor.selectedObjectType == SceneObjectTypePlayer);
-        for (uint objIndex = 0; objIndex < scene.staticObjects.size(); objIndex++) addTlasInstance(scene.staticObjects[objIndex].model, scene.staticObjects[objIndex].transform.toMat(), SceneObjectTypeStaticObject, objIndex, scene.editor.selectedObjectType == SceneObjectTypeStaticObject && scene.editor.selectedObjectIndex == objIndex);
-        for (uint objIndex = 0; objIndex < scene.dynamicObjects.size(); objIndex++) addTlasInstance(scene.dynamicObjects[objIndex].model, scene.dynamicObjects[objIndex].transform.toMat(), SceneObjectTypeDynamicObject, objIndex, scene.editor.selectedObjectType == SceneObjectTypeDynamicObject && scene.editor.selectedObjectIndex == objIndex);
-
+        if (editor.enable && editor.active) {
+            updateAnimatedModel(editor.player.model);
+            for (StaticObject& obj : editor.staticObjects) updateAnimatedModel(obj.model);
+            for (DynamicObject& obj : editor.dynamicObjects) updateAnimatedModel(obj.model);
+            addTlasInstance(editor.player.model, editor.player.transform.toMat(), WorldObjectTypePlayer, 0);
+            for (uint objIndex = 0; objIndex < editor.staticObjects.size(); objIndex++) {
+                addTlasInstance(editor.staticObjects[objIndex].model, editor.staticObjects[objIndex].transform.toMat(), WorldObjectTypeStaticObject, objIndex);
+            }
+            for (uint objIndex = 0; objIndex < editor.dynamicObjects.size(); objIndex++) {
+                addTlasInstance(editor.dynamicObjects[objIndex].model, editor.dynamicObjects[objIndex].transform.toMat(), WorldObjectTypeDynamicObject, objIndex);
+            }
+        } else {
+            updateAnimatedModel(world.player.model);
+            for (StaticObject& obj : world.staticObjects) updateAnimatedModel(obj.model);
+            for (DynamicObject& obj : world.dynamicObjects) updateAnimatedModel(obj.model);
+            addTlasInstance(world.player.model, world.player.transform.toMat(), WorldObjectTypePlayer, 0);
+            for (uint objIndex = 0; objIndex < world.staticObjects.size(); objIndex++) {
+                addTlasInstance(world.staticObjects[objIndex].model, world.staticObjects[objIndex].transform.toMat(), WorldObjectTypeStaticObject, objIndex);
+            }
+            for (uint objIndex = 0; objIndex < world.dynamicObjects.size(); objIndex++) {
+                addTlasInstance(world.dynamicObjects[objIndex].model, world.dynamicObjects[objIndex].transform.toMat(), WorldObjectTypeDynamicObject, objIndex);
+            }
+        }
         {
             ZoneScopedN("buildTLAS");
-            assert(vectorSizeof(scene.tlasInstancesBuildInfos) < d3d.tlasInstancesBuildInfosBuffer->GetSize());
-            assert(vectorSizeof(scene.tlasInstancesInfos) < d3d.tlasInstancesInfosBuffer->GetSize());
-            assert(vectorSizeof(scene.blasGeometriesInfos) < d3d.blasGeometriesInfosBuffer->GetSize());
-            memcpy(d3d.tlasInstancesBuildInfosBufferPtr, scene.tlasInstancesBuildInfos.data(), vectorSizeof(scene.tlasInstancesBuildInfos));
-            memcpy(d3d.tlasInstancesInfosBufferPtr, scene.tlasInstancesInfos.data(), vectorSizeof(scene.tlasInstancesInfos));
-            memcpy(d3d.blasGeometriesInfosBufferPtr, scene.blasGeometriesInfos.data(), vectorSizeof(scene.blasGeometriesInfos));
+            assert(vectorSizeof(world.tlasInstancesBuildInfos) < d3d.tlasInstancesBuildInfosBuffer->GetSize());
+            assert(vectorSizeof(world.tlasInstancesInfos) < d3d.tlasInstancesInfosBuffer->GetSize());
+            assert(vectorSizeof(world.blasGeometriesInfos) < d3d.blasGeometriesInfosBuffer->GetSize());
+            memcpy(d3d.tlasInstancesBuildInfosBufferPtr, world.tlasInstancesBuildInfos.data(), vectorSizeof(world.tlasInstancesBuildInfos));
+            memcpy(d3d.tlasInstancesInfosBufferPtr, world.tlasInstancesInfos.data(), vectorSizeof(world.tlasInstancesInfos));
+            memcpy(d3d.blasGeometriesInfosBufferPtr, world.blasGeometriesInfos.data(), vectorSizeof(world.blasGeometriesInfos));
 
-            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL, .NumDescs = (uint)scene.tlasInstancesBuildInfos.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .InstanceDescs = d3d.tlasInstancesBuildInfosBuffer->GetResource()->GetGPUVirtualAddress()};
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL, .NumDescs = (uint)world.tlasInstancesBuildInfos.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .InstanceDescs = d3d.tlasInstancesBuildInfosBuffer->GetResource()->GetGPUVirtualAddress()};
             D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
             d3d.device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
             assert(prebuildInfo.ResultDataMaxSizeInBytes < d3d.tlasBuffer->GetSize());
@@ -2653,7 +2716,7 @@ void render() {
         }
     }
     {
-        D3D12_RESOURCE_BARRIER readBackBufferTransition = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.readBackUavBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}};
+        D3D12_RESOURCE_BARRIER readBackBufferTransition = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.readBackUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}};
         D3D12_RESOURCE_BARRIER collisionQueryResultsTransition = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsUavBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}};
         d3d.graphicsCmdList->ResourceBarrier(1, &readBackBufferTransition);
         d3d.graphicsCmdList->ResourceBarrier(1, &collisionQueryResultsTransition);
@@ -2673,7 +2736,7 @@ void render() {
         d3d.graphicsCmdList->ResourceBarrier(1, &readBackBufferTransition);
         d3d.graphicsCmdList->ResourceBarrier(1, &collisionQueryResultsTransition);
 
-        d3d.graphicsCmdList->CopyBufferRegion(d3d.readBackBuffer->GetResource(), 0, d3d.readBackUavBuffer->GetResource(), 0, sizeof(struct ReadBackBuffer));
+        d3d.graphicsCmdList->CopyBufferRegion(d3d.readBackBuffer->GetResource(), 0, d3d.readBackUAVBuffer->GetResource(), 0, sizeof(struct ReadBackBuffer));
         d3d.graphicsCmdList->CopyBufferRegion(d3d.collisionQueryResultsBuffer->GetResource(), 0, d3d.collisionQueryResultsUavBuffer->GetResource(), 0, d3d.collisionQueryResultsBuffer->GetSize());
     }
     {
@@ -2734,38 +2797,37 @@ void render() {
         std::swap(swapChainImageTransition.Transition.StateBefore, swapChainImageTransition.Transition.StateAfter);
         d3d.graphicsCmdList->ResourceBarrier(1, &swapChainImageTransition);
     }
-    d3dGraphicsQueueSubmitRecording();
+    d3d.graphicsQueueSubmitRecording();
     assert(d3d.swapChain->Present(0, 0) == S_OK);
-    d3dGraphicsQueueWait();
+    d3d.graphicsQueueWait();
 }
 
 int main(int argc, char** argv) {
     assert(QueryPerformanceFrequency(&perfFrequency));
     if (commandLineContain(argc, argv, "showConsole")) { showConsole(); }
-    settingsLoad();
-    windowInit();
-    d3dInit(commandLineContain(argc, argv, "d3ddebug"));
-    d3dCompilePipelines();
-    applySettings(settingAll);
-    ShowWindow(window.hwnd, SW_SHOW);
-    sceneLoad(assetsDir / "scenes/scene.yaml");
+    settings.load();
+    window.init();
+    window.show();
+    d3d.init(commandLineContain(argc, argv, "d3ddebug"));
+    d3d.applySettings();
+    world.load(assetsDir / "worlds/world.yaml");
     while (!quit) {
-        ZoneScoped;
         QueryPerformanceCounter(&perfCounters[0]);
+        ZoneScoped;
         mouseDeltaRaw[0] = 0, mouseDeltaRaw[1] = 0, mouseWheel = 0;
         MSG windowMsg;
         while (PeekMessageA(&windowMsg, (HWND)window.hwnd, 0, 0, PM_REMOVE)) {
             TranslateMessage(&windowMsg);
             DispatchMessageA(&windowMsg);
         }
-        controllerGetInputs();
+        controller.getInputs();
         update();
         render();
+        FrameMark;
         QueryPerformanceCounter(&perfCounters[1]);
         frameTime = (double)(perfCounters[1].QuadPart - perfCounters[0].QuadPart) / (double)perfFrequency.QuadPart;
-        FrameMark;
     }
-    sceneSave();
-    settingsSave();
+    world.save();
+    settings.save();
     return EXIT_SUCCESS;
 }

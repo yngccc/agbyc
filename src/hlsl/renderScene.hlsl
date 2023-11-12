@@ -1,5 +1,5 @@
 #include "shared.hlsli"
-#include "../sceneStructs.h"
+#include "../sharedStructs.h"
 
 GlobalRootSignature globalRootSig = {
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED),"
@@ -102,7 +102,6 @@ void primaryRayClosestHit(inout RayPayload payload, in BuiltInTriangleIntersecti
     payload.diffuse = baseColorTexture.SampleLevel(bilinearSampler, uv, 0);
     payload.diffuse *= blasGeometryInfo.baseColorFactor.xyz;
     payload.edge = false;
-    
     if (instanceInfo.selected) {
         payload.edge = barycentricsOnEdge(trigAttribs.barycentrics, 0.02);
     }

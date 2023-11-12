@@ -70,12 +70,6 @@ struct RenderInfo {
     uint hdr;
     float frameTime;
     float padding0[2];
-    float3 playerPosition;
-    float padding1;
-    float3 playerVelocity;
-    float playerVelocityMax;
-    float3 playerAcceleration;
-    float padding2;
 #else
     float4x4 cameraViewMat;
     float4x4 cameraProjMat;
@@ -84,33 +78,27 @@ struct RenderInfo {
     uint hdr;
     float frameTime;
     float2 padding0;
-    float3 playerPosition;
-    float padding1;
-    float3 playerVelocity;
-    float playerVelocityMax;
-    float3 playerAcceleration;
-    float padding2;
 #endif
 };
 
-enum SceneObjectType : uint {
-    SceneObjectTypeNone,
-    SceneObjectTypePlayer,
-    SceneObjectTypeSkybox,
-    SceneObjectTypeStaticObject,
-    SceneObjectTypeDynamicObject,
+enum WorldObjectType : uint {
+    WorldObjectTypeNone,
+    WorldObjectTypePlayer,
+    WorldObjectTypeSkybox,
+    WorldObjectTypeStaticObject,
+    WorldObjectTypeDynamicObject,
 };
 
 struct TLASInstanceInfo {
 #ifdef __cplusplus
-    SceneObjectType objectType;
+    WorldObjectType objectType;
     uint objectIndex;
     uint selected;
     uint skinJointsDescriptor;
     uint blasGeometriesOffset;
     uint padding[3];
 #else
-    SceneObjectType objectType;
+    WorldObjectType objectType;
     uint objectIndex;
     uint selected;
     uint skinJointsDescriptor;
@@ -130,20 +118,10 @@ struct BLASGeometryInfo {
 struct ReadBackBuffer {
 #ifdef __cplusplus
     uint mouseSelectInstanceIndex;
-    float3 playerPosition;
-    float padding0;
-    float3 playerVelocity;
-    float padding1;
-    float3 playerAcceleration;
-    float padding2;
+    float padding0[3];
 #else
     uint mouseSelectInstanceIndex;
-    float3 playerPosition;
-    float padding0;
-    float3 playerVelocity;
-    float padding1;
-    float3 playerAcceleration;
-    float padding2;
+    float padding0[3];
 #endif
 };
 

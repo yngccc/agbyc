@@ -167,10 +167,10 @@
   </ItemGroup>
   <ItemGroup>
     <None Include=".clang-format" />
-    <None Include="assets\scenes\scene.yaml" />
+    <None Include="assets\worlds\world.yaml" />
     <None Include="packages.config" />
     <None Include="src\hlsl\shared.hlsli" />
-    <None Include="src\sceneStructs.h" />
+    <None Include="src\sharedStructs.h" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="src\hlsl\collisionDetection.hlsl">
