@@ -79,16 +79,6 @@ static const float sqrt2 = 1.41421356237309504880f;
 #define radian(d) (d * (pi / 180.0f))
 #define degree(r) (r * (180.0f / pi))
 
-#undef assert
-#define assert(expr) \
-    if (!(expr)) abort();
-#ifdef _DEBUG
-#define assertDebug(expr) \
-    if (!(expr)) abort();
-#else
-#define assertDebug(expr)
-#endif
-
 template <typename T, uint N>
 constexpr uint countof(const T (&)[N]) { return N; }
 
@@ -1062,6 +1052,17 @@ struct ModelMesh {
     D3D12MA::Allocation* blasScratch = nullptr;
 };
 
+struct ModelNode;
+
+struct ModelJoint {
+    ModelNode* node = nullptr;
+    XMMATRIX inverseBindMat;
+};
+
+struct ModelSkin {
+    std::vector<ModelJoint> joints;
+};
+
 struct ModelNode {
     std::string name;
     ModelNode* parent = nullptr;
@@ -1069,11 +1070,7 @@ struct ModelNode {
     XMMATRIX globalTransform;
     XMMATRIX localTransform;
     ModelMesh* mesh = nullptr;
-};
-
-struct ModelJoint {
-    ModelNode* node = nullptr;
-    XMMATRIX inverseBindMat;
+    ModelSkin* skin = nullptr;
 };
 
 enum ModelAnimationSamplerInterpolation {
@@ -1117,24 +1114,43 @@ struct Model {
     std::vector<ModelMesh> meshes;
     std::vector<ModelNode> nodes;
     std::vector<ModelNode*> rootNodes;
-    std::vector<ModelJoint> joints;
+    std::vector<ModelSkin> skins;
     std::vector<ModelAnimation> animations;
     std::vector<ModelMaterial> materials;
     std::vector<ModelTexture> textures;
     std::vector<ModelImage> images;
+
+    void traverseNodeImGui(ModelNode* node) {
+        ImGui::SetNextItemOpen(true);
+        if (ImGui::TreeNode(node->name.c_str())) {
+            for (ModelNode* childNode : node->children) {
+                traverseNodeImGui(childNode);
+            }
+            ImGui::TreePop();
+        }
+    }
+
+    void traverseNodeAndGetGlobalTransforms(ModelNode* node, const XMMATRIX& parentMat, const std::vector<XMMATRIX>& nodeLocalTransformMats, std::vector<XMMATRIX>& nodeGlobalTransformMats) {
+        int64 nodeIndex = node - &nodes[0];
+        XMMATRIX mat = XMMatrixMultiply(nodeLocalTransformMats[nodeIndex], parentMat);
+        nodeGlobalTransformMats[nodeIndex] = mat;
+        for (ModelNode* childNode : node->children) {
+            traverseNodeAndGetGlobalTransforms(childNode, mat, nodeLocalTransformMats, nodeGlobalTransformMats);
+        }
+    }
 };
 
 struct ModelInstanceAnimationState {
     uint index = 0;
     double time = 0;
-    D3D12MA::Allocation* skinJointsBuffer = nullptr;
-    uint8* skinJointsBufferPtr = nullptr;
+    std::vector<D3D12MA::Allocation*> skinJointsBuffers;
+    std::vector<uint8*> skinJointsBuffersPtrs;
     std::vector<D3D12MA::Allocation*> meshVerticesBuffers;
     std::vector<D3D12MA::Allocation*> meshBlases;
     std::vector<D3D12MA::Allocation*> meshBlasScratches;
 
     void releaseResources() {
-        if (skinJointsBuffer) skinJointsBuffer->Release();
+        for (D3D12MA::Allocation* buffer : skinJointsBuffers) buffer->Release();
         for (D3D12MA::Allocation* buffer : meshVerticesBuffers) buffer->Release();
         for (D3D12MA::Allocation* buffer : meshBlases) buffer->Release();
         for (D3D12MA::Allocation* buffer : meshBlasScratches) buffer->Release();
@@ -1371,10 +1387,17 @@ struct World {
             d3d.transferQueueStartRecording();
             d3d.stagingBufferOffset = 0;
 
-            model.images.reserve(gltfData->images_count);
+            model.images.resize(gltfData->images_count);
+            model.textures.resize(gltfData->textures_count);
+            model.materials.resize(gltfData->materials_count);
+            model.nodes.resize(gltfData->nodes_count);
+            model.meshes.resize(gltfData->meshes_count);
+            model.skins.resize(gltfData->skins_count);
+            model.animations.resize(gltfData->animations_count);
+
             for (uint imageIndex = 0; imageIndex < gltfData->images_count; imageIndex++) {
                 cgltf_image& gltfImage = gltfData->images[imageIndex];
-                ModelImage& image = model.images.emplace_back();
+                ModelImage& image = model.images[imageIndex];
                 std::filesystem::path imageFilePath = gltfFileFolderPath / gltfImage.uri;
                 std::filesystem::path imageDDSFilePath = imageFilePath;
                 imageDDSFilePath.replace_extension(".dds");
@@ -1385,30 +1408,76 @@ struct World {
                 D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = image.gpuData->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
                 d3d.transferCmdList->ResourceBarrier(1, &barrier);
             }
-            model.textures.reserve(gltfData->textures_count);
             for (uint textureIndex = 0; textureIndex < gltfData->textures_count; textureIndex++) {
                 cgltf_texture& gltfTexture = gltfData->textures[textureIndex];
-                ModelTexture& texture = model.textures.emplace_back();
-                assertDebug(gltfTexture.image && gltfTexture.sampler);
+                ModelTexture& texture = model.textures[textureIndex];
+                assert(gltfTexture.image && gltfTexture.sampler);
                 texture.image = &model.images[gltfTexture.image - &gltfData->images[0]];
             }
-            model.materials.reserve(gltfData->materials_count);
             for (uint materialIndex = 0; materialIndex < gltfData->materials_count; materialIndex++) {
                 cgltf_material& gltfMaterial = gltfData->materials[materialIndex];
-                ModelMaterial& material = model.materials.emplace_back();
+                ModelMaterial& material = model.materials[materialIndex];
                 if (gltfMaterial.name) material.name = gltfMaterial.name;
-                assertDebug(gltfMaterial.has_pbr_metallic_roughness);
+                assert(gltfMaterial.has_pbr_metallic_roughness);
                 material.baseColorFactor = float4(gltfMaterial.pbr_metallic_roughness.base_color_factor);
                 if (gltfMaterial.pbr_metallic_roughness.base_color_texture.texture) {
-                    assertDebug(gltfMaterial.pbr_metallic_roughness.base_color_texture.texcoord == 0);
-                    assertDebug(!gltfMaterial.pbr_metallic_roughness.base_color_texture.has_transform);
+                    assert(gltfMaterial.pbr_metallic_roughness.base_color_texture.texcoord == 0);
+                    assert(!gltfMaterial.pbr_metallic_roughness.base_color_texture.has_transform);
                     material.baseColorTexture = &model.textures[gltfMaterial.pbr_metallic_roughness.base_color_texture.texture - &gltfData->textures[0]];
                 }
             }
-            model.meshes.reserve(gltfData->meshes_count);
+            for (uint nodeIndex = 0; nodeIndex < gltfData->nodes_count; nodeIndex++) {
+                cgltf_node& gltfNode = gltfData->nodes[nodeIndex];
+                ModelNode& node = model.nodes[nodeIndex];
+                if (gltfNode.name) node.name = gltfNode.name;
+                if (gltfNode.parent) {
+                    uint parentNodeIndex = (uint)(gltfNode.parent - gltfData->nodes);
+                    assert(parentNodeIndex >= 0 && parentNodeIndex < gltfData->nodes_count);
+                    node.parent = &model.nodes[parentNodeIndex];
+                } else {
+                    node.parent = nullptr;
+                }
+                for (cgltf_node* child : std::span(gltfNode.children, gltfNode.children_count)) {
+                    uint childNodeIndex = (uint)(child - gltfData->nodes);
+                    assert(childNodeIndex >= 0 && childNodeIndex < gltfData->nodes_count);
+                    node.children.push_back(&model.nodes[childNodeIndex]);
+                }
+                float nodeTransform[16];
+                cgltf_node_transform_world(&gltfNode, nodeTransform);
+                node.globalTransform = XMMATRIX(nodeTransform);
+                if (gltfNode.has_matrix) {
+                    node.localTransform = XMMATRIX(gltfNode.matrix);
+                } else {
+                    Transform localTransform = {};
+                    if (gltfNode.has_scale) localTransform.s = float3(gltfNode.scale);
+                    if (gltfNode.has_rotation) localTransform.r = float4(gltfNode.rotation);
+                    if (gltfNode.has_translation) localTransform.t = float3(gltfNode.translation);
+                    node.localTransform = localTransform.toMat();
+                }
+                if (gltfNode.mesh) {
+                    uint meshIndex = (uint)(gltfNode.mesh - gltfData->meshes);
+                    assert(meshIndex >= 0 && meshIndex < gltfData->meshes_count);
+                    node.mesh = &model.meshes[meshIndex];
+                } else {
+                    node.mesh = nullptr;
+                }
+                if (gltfNode.skin) {
+                    uint skinIndex = (uint)(gltfNode.skin - gltfData->skins);
+                    assert(skinIndex >= 0 && skinIndex < gltfData->skins_count);
+                    node.skin = &model.skins[skinIndex];
+                } else {
+                    node.skin = nullptr;
+                }
+            }
+            assert(gltfData->scenes_count == 1);
+            for (cgltf_node* gltfNode : std::span(gltfData->scenes[0].nodes, gltfData->scenes[0].nodes_count)) {
+                uint nodeIndex = (uint)(gltfNode - gltfData->nodes);
+                assert(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
+                model.rootNodes.push_back(&model.nodes[nodeIndex]);
+            }
             for (uint meshIndex = 0; meshIndex < gltfData->meshes_count; meshIndex++) {
                 cgltf_mesh& gltfMesh = gltfData->meshes[meshIndex];
-                ModelMesh& mesh = model.meshes.emplace_back();
+                ModelMesh& mesh = model.meshes[meshIndex];
                 if (gltfMesh.name) mesh.name = gltfMesh.name;
                 mesh.primitives.reserve(gltfMesh.primitives_count);
                 for (cgltf_primitive& gltfPrimitive : std::span(gltfMesh.primitives, gltfMesh.primitives_count)) {
@@ -1516,69 +1585,26 @@ struct World {
                 D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = mesh.blas->GetResource()->GetGPUVirtualAddress(), .Inputs = inputs, .ScratchAccelerationStructureData = mesh.blasScratch->GetResource()->GetGPUVirtualAddress()};
                 d3d.transferCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
             }
-            model.nodes.resize(gltfData->nodes_count);
-            for (uint nodeIndex = 0; nodeIndex < gltfData->nodes_count; nodeIndex++) {
-                cgltf_node& gltfNode = gltfData->nodes[nodeIndex];
-                ModelNode& node = model.nodes[nodeIndex];
-                if (gltfNode.name) node.name = gltfNode.name;
-                if (gltfNode.parent) {
-                    uint parentNodeIndex = (uint)(gltfNode.parent - gltfData->nodes);
-                    assertDebug(parentNodeIndex >= 0 && parentNodeIndex < gltfData->nodes_count);
-                    node.parent = &model.nodes[parentNodeIndex];
-                } else {
-                    node.parent = nullptr;
-                }
-                for (cgltf_node* child : std::span(gltfNode.children, gltfNode.children_count)) {
-                    uint childNodeIndex = (uint)(child - gltfData->nodes);
-                    assertDebug(childNodeIndex >= 0 && childNodeIndex < gltfData->nodes_count);
-                    node.children.push_back(&model.nodes[childNodeIndex]);
-                }
-                float nodeTransform[16];
-                cgltf_node_transform_world(&gltfNode, nodeTransform);
-                node.globalTransform = XMMATRIX(nodeTransform);
-                if (gltfNode.has_matrix) {
-                    node.localTransform = XMMATRIX(gltfNode.matrix);
-                } else {
-                    Transform localTransform = {};
-                    if (gltfNode.has_scale) localTransform.s = float3(gltfNode.scale);
-                    if (gltfNode.has_rotation) localTransform.r = float4(gltfNode.rotation);
-                    if (gltfNode.has_translation) localTransform.t = float3(gltfNode.translation);
-                    node.localTransform = localTransform.toMat();
-                }
-                if (gltfNode.mesh) {
-                    uint meshIndex = (uint)(gltfNode.mesh - gltfData->meshes);
-                    assertDebug(meshIndex >= 0 && meshIndex < gltfData->meshes_count);
-                    node.mesh = &model.meshes[meshIndex];
-                } else {
-                    node.mesh = nullptr;
-                }
-            }
-            assertDebug(gltfData->scenes_count == 1);
-            for (cgltf_node* gltfNode : std::span(gltfData->scenes[0].nodes, gltfData->scenes[0].nodes_count)) {
-                uint nodeIndex = (uint)(gltfNode - gltfData->nodes);
-                assertDebug(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
-                model.rootNodes.push_back(&model.nodes[nodeIndex]);
-            }
-            assertDebug(gltfData->skins_count <= 1);
-            if (gltfData->skins_count == 1) {
-                cgltf_skin& gltfSkin = gltfData->skins[0];
-                assertDebug(gltfSkin.inverse_bind_matrices->type == cgltf_type_mat4);
-                assertDebug(gltfSkin.inverse_bind_matrices->count == gltfSkin.joints_count);
-                assertDebug(gltfSkin.inverse_bind_matrices->stride == 16 * sizeof(float));
-                assertDebug(gltfSkin.inverse_bind_matrices->buffer_view->size == 64 * gltfSkin.joints_count);
-                model.joints.reserve(gltfSkin.joints_count);
+            assert(gltfData->skins_count <= 1);
+            for (uint skinIndex = 0; skinIndex < gltfData->skins_count; skinIndex++) {
+                cgltf_skin& gltfSkin = gltfData->skins[skinIndex];
+                ModelSkin& skin = model.skins[skinIndex];
+                assert(gltfSkin.inverse_bind_matrices->type == cgltf_type_mat4);
+                assert(gltfSkin.inverse_bind_matrices->count == gltfSkin.joints_count);
+                assert(gltfSkin.inverse_bind_matrices->stride == 16 * sizeof(float));
+                assert(gltfSkin.inverse_bind_matrices->buffer_view->size == 64 * gltfSkin.joints_count);
+                skin.joints.reserve(gltfSkin.joints_count);
                 for (uint jointIndex = 0; jointIndex < gltfSkin.joints_count; jointIndex++) {
                     cgltf_node* jointNode = gltfSkin.joints[jointIndex];
-                    uint nodeIndex = (uint)(jointNode - gltfData->nodes);
-                    assertDebug(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
+                    ModelNode* node = &model.nodes[jointNode - gltfData->nodes];
                     float* matsData = (float*)((uint8*)(gltfSkin.inverse_bind_matrices->buffer_view->buffer->data) + gltfSkin.inverse_bind_matrices->offset + gltfSkin.inverse_bind_matrices->buffer_view->offset);
                     matsData += jointIndex * 16;
-                    model.joints.push_back({.node = &model.nodes[nodeIndex], .inverseBindMat = XMMATRIX(matsData)});
+                    skin.joints.push_back({.node = node, .inverseBindMat = XMMATRIX(matsData)});
                 }
             }
-            model.animations.reserve(gltfData->animations_count);
-            for (cgltf_animation& gltfAnimation : std::span(gltfData->animations, gltfData->animations_count)) {
-                ModelAnimation& animation = model.animations.emplace_back();
+            for (uint animationIndex = 0; animationIndex < gltfData->animations_count; animationIndex++) {
+                cgltf_animation& gltfAnimation = gltfData->animations[animationIndex];
+                ModelAnimation& animation = model.animations[animationIndex];
                 if (gltfAnimation.name) animation.name = gltfAnimation.name;
                 {
                     cgltf_accessor* input = gltfAnimation.samplers[0].input;
@@ -1595,18 +1621,18 @@ struct World {
                         sampler.interpolation = AnimationSamplerInterpolationStep;
                     } else if (gltfSampler.interpolation == cgltf_interpolation_type_cubic_spline) {
                         sampler.interpolation = AnimationSamplerInterpolationCubicSpline;
-                        assertDebug(false);
+                        assert(false);
                     } else {
-                        assertDebug(false);
+                        assert(false);
                     }
-                    assertDebug(gltfSampler.input->component_type == cgltf_component_type_r_32f && gltfSampler.input->type == cgltf_type_scalar);
-                    assertDebug(gltfSampler.output->component_type == cgltf_component_type_r_32f);
-                    assertDebug((gltfSampler.output->type == cgltf_type_vec3 && gltfSampler.output->stride == sizeof(float3)) || (gltfSampler.output->type == cgltf_type_vec4 && gltfSampler.output->stride == sizeof(float4)));
-                    assertDebug(gltfSampler.input->count >= 2 && gltfSampler.input->count == gltfSampler.output->count);
+                    assert(gltfSampler.input->component_type == cgltf_component_type_r_32f && gltfSampler.input->type == cgltf_type_scalar);
+                    assert(gltfSampler.output->component_type == cgltf_component_type_r_32f);
+                    assert((gltfSampler.output->type == cgltf_type_vec3 && gltfSampler.output->stride == sizeof(float3)) || (gltfSampler.output->type == cgltf_type_vec4 && gltfSampler.output->stride == sizeof(float4)));
+                    assert(gltfSampler.input->count >= 2 && gltfSampler.input->count == gltfSampler.output->count);
                     float* inputs = (float*)((uint8*)(gltfSampler.input->buffer_view->buffer->data) + gltfSampler.input->offset + gltfSampler.input->buffer_view->offset);
                     void* outputs = (uint8*)(gltfSampler.output->buffer_view->buffer->data) + gltfSampler.output->offset + gltfSampler.output->buffer_view->offset;
-                    assertDebug(inputs[0] == 0.0f);
-                    assertDebug(inputs[gltfSampler.input->count - 1] == animation.timeLength);
+                    assert(inputs[0] == 0.0f);
+                    assert(inputs[gltfSampler.input->count - 1] == animation.timeLength);
                     sampler.keyFrames.reserve(gltfSampler.input->count);
                     for (uint frameIndex = 0; frameIndex < gltfSampler.input->count; frameIndex++) {
                         ModelAnimationSamplerKeyFrame& keyFrame = sampler.keyFrames.emplace_back();
@@ -1623,21 +1649,21 @@ struct World {
                     ModelAnimationChannel& channel = animation.channels.emplace_back();
                     uint nodeIndex = (uint)(gltfChannel.target_node - gltfData->nodes);
                     uint samplerIndex = (uint)(gltfChannel.sampler - gltfAnimation.samplers);
-                    assertDebug(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
-                    assertDebug(samplerIndex >= 0 && samplerIndex < gltfAnimation.samplers_count);
+                    assert(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
+                    assert(samplerIndex >= 0 && samplerIndex < gltfAnimation.samplers_count);
                     channel.node = &model.nodes[nodeIndex];
                     channel.sampler = &animation.samplers[samplerIndex];
                     if (gltfChannel.target_path == cgltf_animation_path_type_translation) {
-                        assertDebug(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec3);
+                        assert(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec3);
                         channel.type = AnimationChannelTypeTranslate;
                     } else if (gltfChannel.target_path == cgltf_animation_path_type_rotation) {
-                        assertDebug(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec4);
+                        assert(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec4);
                         channel.type = AnimationChannelTypeRotate;
                     } else if (gltfChannel.target_path == cgltf_animation_path_type_scale) {
-                        assertDebug(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec3);
+                        assert(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec3);
                         channel.type = AnimationChannelTypeScale;
                     } else {
-                        assertDebug(false);
+                        assert(false);
                     }
                 }
             }
@@ -1648,30 +1674,28 @@ struct World {
 
         ModelInstance modelInstance = {};
         modelInstance.index = (uint)(modelIter - models.begin());
-
-        if (modelIter->joints.size() > 0) {
+        modelInstance.animationState.skinJointsBuffers.resize(modelIter->skins.size());
+        modelInstance.animationState.skinJointsBuffersPtrs.resize(modelIter->skins.size());
+        modelInstance.animationState.meshVerticesBuffers.resize(modelIter->meshes.size());
+        modelInstance.animationState.meshBlases.resize(modelIter->meshes.size());
+        modelInstance.animationState.meshBlasScratches.resize(modelIter->meshes.size());
+        for (uint skinIndex = 0; skinIndex < modelIter->skins.size(); skinIndex++) {
             D3D12MA::ALLOCATION_DESC jointBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
-            D3D12_RESOURCE_DESC jointBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = sizeof(struct Joint) * modelIter->joints.size(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
-            assert(d3d.allocator->CreateResource(&jointBufferAllocDesc, &jointBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &modelInstance.animationState.skinJointsBuffer, {}, nullptr) == S_OK);
-            assert(modelInstance.animationState.skinJointsBuffer->GetResource()->Map(0, nullptr, (void**)&modelInstance.animationState.skinJointsBufferPtr) == S_OK);
-            for (ModelMesh& mesh : modelIter->meshes) {
-                D3D12MA::ALLOCATION_DESC verticesBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-                D3D12_RESOURCE_DESC verticesBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = mesh.verticesBuffer->GetSize(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
-                D3D12MA::Allocation* verticesBuffer;
-                assert(d3d.allocator->CreateResource(&verticesBufferAllocDesc, &verticesBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &verticesBuffer, {}, nullptr) == S_OK);
-                modelInstance.animationState.meshVerticesBuffers.push_back(verticesBuffer);
-
-                D3D12MA::Allocation* blasBuffer;
-                D3D12MA::Allocation* blasScratchBuffer;
-                D3D12MA::ALLOCATION_DESC blasAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-                D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
-                blasDesc.Width = mesh.blas->GetSize();
-                assert(d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &blasBuffer, {}, nullptr) == S_OK);
-                blasDesc.Width = mesh.blasScratch->GetSize();
-                assert(d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &blasScratchBuffer, {}, nullptr) == S_OK);
-                modelInstance.animationState.meshBlases.push_back(blasBuffer);
-                modelInstance.animationState.meshBlasScratches.push_back(blasScratchBuffer);
-            }
+            D3D12_RESOURCE_DESC jointBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = sizeof(struct Joint) * modelIter->skins[skinIndex].joints.size(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
+            assert(d3d.allocator->CreateResource(&jointBufferAllocDesc, &jointBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &modelInstance.animationState.skinJointsBuffers[skinIndex], {}, nullptr) == S_OK);
+            assert(modelInstance.animationState.skinJointsBuffers[skinIndex]->GetResource()->Map(0, nullptr, (void**)&modelInstance.animationState.skinJointsBuffersPtrs[skinIndex]) == S_OK);
+        }
+        for (uint meshIndex = 0; meshIndex < modelIter->meshes.size(); meshIndex++) {
+            ModelMesh& mesh = modelIter->meshes[meshIndex];
+            D3D12MA::ALLOCATION_DESC verticesBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+            D3D12_RESOURCE_DESC verticesBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = mesh.verticesBuffer->GetSize(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+            assert(d3d.allocator->CreateResource(&verticesBufferAllocDesc, &verticesBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &modelInstance.animationState.meshVerticesBuffers[meshIndex], {}, nullptr) == S_OK);
+            D3D12MA::ALLOCATION_DESC blasAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+            D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+            blasDesc.Width = mesh.blas->GetSize();
+            assert(d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &modelInstance.animationState.meshBlases[meshIndex], {}, nullptr) == S_OK);
+            blasDesc.Width = mesh.blasScratch->GetSize();
+            assert(d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &modelInstance.animationState.meshBlasScratches[meshIndex], {}, nullptr) == S_OK);
         }
 
         return modelInstance;
@@ -2094,7 +2118,6 @@ void editorUpdate() {
             if (ImGui::Selectable("focus")) editor.camera.focus(editor.player.transform.t, 1);
             ImGui::EndPopup();
         }
-        ImGui::SetNextItemOpen(true);
         if (ImGui::TreeNode("Static Objects")) {
             int objID = 0;
             for (uint objIndex = 0; objIndex < editor.staticObjects.size(); objIndex++) {
@@ -2121,7 +2144,6 @@ void editorUpdate() {
             }
             ImGui::TreePop();
         }
-        ImGui::SetNextItemOpen(true);
         if (ImGui::TreeNode("Dyanmic Objects")) {
             int objID = 0;
             for (uint objIndex = 0; objIndex < editor.dynamicObjects.size(); objIndex++) {
@@ -2151,7 +2173,6 @@ void editorUpdate() {
     }
     ImGui::End();
     auto TransformProperties = [](Transform* transform) {
-        ImGui::SetNextItemOpen(true);
         if (ImGui::TreeNode("Transform")) {
             ImGui::InputFloat3("S", &transform->s.x);
             ImGui::SameLine();
@@ -2166,11 +2187,9 @@ void editorUpdate() {
         }
     };
     auto ModelProperties = [](ModelInstance& modelInstance) {
-        ImGui::SetNextItemOpen(true);
         if (ImGui::TreeNode("Model")) {
             Model& model = world.models[modelInstance.index];
             ImGui::Text(std::format("File: {}", model.filePath.string()).c_str());
-            ImGui::SetNextItemOpen(true);
             if (ImGui::TreeNode("Animations")) {
                 for (uint animationIndex = 0; animationIndex < model.animations.size(); animationIndex++) {
                     ModelAnimation& animation = model.animations[animationIndex];
@@ -2185,13 +2204,19 @@ void editorUpdate() {
                 }
                 ImGui::TreePop();
             }
+            if (ImGui::TreeNode("Hierarchy")) {
+                for (ModelNode* rootNode : model.rootNodes) {
+                    model.traverseNodeImGui(rootNode);
+                }
+                ImGui::TreePop();
+            }
             ImGui::TreePop();
         }
     };
-    ImVec2 propertiesWindowPos = objectWindowPos + ImVec2(0, objectWindowSize.y);
-    ImVec2 propertiesWindowSize = objectWindowSize;
-    ImGui::SetNextWindowPos(propertiesWindowPos);
-    ImGui::SetNextWindowSize(propertiesWindowSize);
+    // ImVec2 propertiesWindowPos = objectWindowPos + ImVec2(0, objectWindowSize.y);
+    // ImVec2 propertiesWindowSize = ImVec2(objectWindowSize.x, objectWindowSize.y * 2);
+    // ImGui::SetNextWindowPos(propertiesWindowPos);
+    // ImGui::SetNextWindowSize(propertiesWindowSize);
     if (ImGui::Begin("Properties")) {
         if (editor.selectedObjectType == WorldObjectTypePlayer) {
             ImGui::Text("Player");
@@ -2217,10 +2242,6 @@ void editorUpdate() {
         }
     }
     ImGui::End();
-    ImVec2 logWindowPos = propertiesWindowPos + ImVec2(0, propertiesWindowSize.y);
-    ImVec2 logWindowSize = propertiesWindowSize;
-    ImGui::SetNextWindowPos(logWindowPos);
-    ImGui::SetNextWindowSize(logWindowSize);
     if (ImGui::Begin("Logs")) {
         for (std::string& log : logs) { ImGui::BulletText(log.c_str()); }
     }
@@ -2413,14 +2434,14 @@ void update() {
 void updateAnimatedModel(ModelInstance& modelInstance) {
     ZoneScoped;
     Model& model = world.models[modelInstance.index];
-    if (model.joints.empty() || model.animations.size() == 0) return;
+    if (model.skins.empty() || model.animations.size() == 0) return;
     if (modelInstance.animationState.index >= model.animations.size()) return;
     ModelAnimation& animation = model.animations[modelInstance.animationState.index];
 
     std::vector<Transform> nodeLocalTransforms(model.nodes.size());
     std::vector<XMMATRIX> nodeLocalTransformMats(model.nodes.size());
     std::vector<XMMATRIX> nodeGlobalTransformMats(model.nodes.size());
-    std::vector<XMMATRIX> jointTransformMats(model.joints.size());
+    std::vector<XMMATRIX> jointTransformMats(model.skins[0].joints.size());
     {
         ZoneScopedN("get nodeLocalTransforms");
         for (ModelAnimationChannel& channel : animation.channels) {
@@ -2463,31 +2484,16 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
         }
     }
     {
-        ZoneScopedN("get jointTransformMats");
+        ZoneScopedN("get nodeGlobalTransformMats");
         for (ModelNode* rootNode : model.rootNodes) {
-            assertDebug(rootNode->parent == nullptr);
-            struct Node {
-                ModelNode* node;
-                XMMATRIX transformMat;
-            };
-            std::stack<Node> nodeStack;
-            nodeStack.push({rootNode, nodeLocalTransformMats[rootNode - &model.nodes[0]]});
-            while (!nodeStack.empty()) {
-                Node parentNode = nodeStack.top();
-                nodeStack.pop();
-                nodeGlobalTransformMats[parentNode.node - &model.nodes[0]] = parentNode.transformMat;
-                for (ModelNode* childNode : parentNode.node->children) {
-                    int64 childNodeIndex = childNode - &model.nodes[0];
-                    nodeStack.push({childNode, XMMatrixMultiply(nodeLocalTransformMats[childNodeIndex], parentNode.transformMat)});
-                }
-            }
-        }
-        for (uint jointIndex = 0; jointIndex < model.joints.size(); jointIndex++) {
-            int64 nodeIndex = model.joints[jointIndex].node - &model.nodes[0];
-            jointTransformMats[jointIndex] = XMMatrixTranspose(XMMatrixMultiply(model.joints[jointIndex].inverseBindMat, nodeGlobalTransformMats[nodeIndex]));
+            model.traverseNodeAndGetGlobalTransforms(rootNode, XMMatrixIdentity(), nodeLocalTransformMats, nodeGlobalTransformMats);
         }
     }
-    memcpy(modelInstance.animationState.skinJointsBufferPtr, jointTransformMats.data(), vectorSizeof(jointTransformMats));
+    for (uint jointIndex = 0; jointIndex < model.skins[0].joints.size(); jointIndex++) {
+        int64 nodeIndex = model.skins[0].joints[jointIndex].node - &model.nodes[0];
+        jointTransformMats[jointIndex] = XMMatrixTranspose(XMMatrixMultiply(model.skins[0].joints[jointIndex].inverseBindMat, nodeGlobalTransformMats[nodeIndex]));
+    }
+    memcpy(modelInstance.animationState.skinJointsBuffersPtrs[0], jointTransformMats.data(), vectorSizeof(jointTransformMats));
 
     std::vector<D3D12_RESOURCE_BARRIER> barriers;
     for (uint meshIndex = 0; meshIndex < model.meshes.size(); meshIndex++) {
@@ -2500,7 +2506,7 @@ void updateAnimatedModel(ModelInstance& modelInstance) {
         d3d.graphicsCmdList->ResourceBarrier(1, &verticesBufferBarriers[0]);
         d3d.graphicsCmdList->SetPipelineState(d3d.vertexSkinningPSO);
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.vertexSkinningRootSig);
-        d3d.graphicsCmdList->SetComputeRootShaderResourceView(0, modelInstance.animationState.skinJointsBuffer->GetResource()->GetGPUVirtualAddress());
+        d3d.graphicsCmdList->SetComputeRootShaderResourceView(0, modelInstance.animationState.skinJointsBuffers[0]->GetResource()->GetGPUVirtualAddress());
         d3d.graphicsCmdList->SetComputeRootShaderResourceView(1, mesh.verticesBuffer->GetResource()->GetGPUVirtualAddress());
         d3d.graphicsCmdList->SetComputeRootUnorderedAccessView(2, verticesBuffer->GetResource()->GetGPUVirtualAddress());
         d3d.graphicsCmdList->SetComputeRoot32BitConstant(3, (uint)mesh.vertices.size(), 0);
@@ -2543,7 +2549,7 @@ void addTlasInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
     bool selected = false;
     if (editor.enable && editor.active) selected = editor.selectedObjectType == objectType && editor.selectedObjectIndex == objectIndex;
     TLASInstanceInfo tlasInstanceInfo = {.objectType = objectType, .objectIndex = objectIndex, .selected = selected, .skinJointsDescriptor = UINT32_MAX, .blasGeometriesOffset = (uint)world.blasGeometriesInfos.size()};
-    bool animatedModel = !model.joints.empty();
+    bool animatedModel = !model.skins.empty();
     for (ModelNode& node : model.nodes) {
         if (!node.mesh) continue;
         int64 meshIndex = node.mesh - &model.meshes[0];
@@ -2654,7 +2660,7 @@ void render() {
             .hdr = settings.hdr,
             .frameTime = (float)frameTime,
         };
-        assertDebug(d3d.constantBufferOffset == 0);
+        assert(d3d.constantBufferOffset == 0);
         memcpy(d3d.constantBufferPtr + d3d.constantBufferOffset, &renderInfo, sizeof(renderInfo));
         d3d.constantBufferOffset += sizeof(renderInfo);
     }

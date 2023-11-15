@@ -1,6 +1,6 @@
 editorCamera:
-  position: [6.0235953,8.712093,17.5474]
-  pitchYaw: [0.35400197,-3.0591636]
+  position: [3.9489605,7.665435,23.343624]
+  pitchYaw: [0.22200194,2.8580222]
   fovVertical: 50
   sensitivity: 60.278
   rotationSensitivity: 1
@@ -28,14 +28,14 @@ staticObjects:
     scale: [6.4241996,6.4241996,6.4241996]
     rotate: [-0,0,-0,1]
     translate: [6.690608,-1.6880183,-3.88344]
-  - name: Object0
-    file: models\xbot\xbot.gltf
-    scale: [5.4199996,5.4199996,5.4199996]
-    rotate: [-0,0,-0,1]
-    translate: [16.116356,-1.7772968,2.2058601]
 dynamicObjects:
   - name: Object0
     file: models\xbot\xbot.gltf
     scale: [5.3679605,5.3679605,5.3679605]
     rotate: [-0,0,-0,1]
     translate: [-5.7511835,-1.8415341,0]
+  - name: girl_with_holster
+    file: models\girl_with_holster\girl_with_holster.gltf
+    scale: [0.063581474,0.063581474,0.063581474]
+    rotate: [-0,0,-0,1]
+    translate: [14.925448,3.071661,7.0771923]
