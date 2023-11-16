@@ -1,17 +1,17 @@
 editorCamera:
-  position: [3.9489605,7.665435,23.343624]
-  pitchYaw: [0.22200194,2.8580222]
+  position: [0.07071227,0.21471733,-0.678934]
+  pitchYaw: [0.25136116,0.17562217]
   fovVertical: 50
-  sensitivity: 60.278
+  sensitivity: 6.401
   rotationSensitivity: 1
   controllerSensitivity: 1
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
 player:
   file: models\girl\girl.gltf
-  scale: [0.07300001,0.07300001,0.07300001]
+  scale: [1,1,1]
   rotate: [-0,0,-0,1]
-  translate: [0,3.6993876,-14.187271]
+  translate: [0,-0.0013817772,0]
   velocity: [0,0,0]
   acceleration: [0,0,0]
   cameraLookAtOffset: [0,0.02,0]
@@ -19,23 +19,13 @@ player:
   cameraDistance: 0.08
 staticObjects:
   - name: Floor
-    file: models\cube\cube.gltf
-    scale: [100,0.1,100]
+    file: models/cube/cube.gltf
+    scale: [100,1,100]
     rotate: [0,0,0,1]
-    translate: [0,-2,0]
-  - name: Object0
-    file: models\cesiumMan\cesiumMan.gltf
-    scale: [6.4241996,6.4241996,6.4241996]
+    translate: [0,-1,0]
+  - name: cubeReference
+    file: models/cube/cube.gltf
+    scale: [0.1,0.1,0.1]
     rotate: [-0,0,-0,1]
-    translate: [6.690608,-1.6880183,-3.88344]
-dynamicObjects:
-  - name: Object0
-    file: models\xbot\xbot.gltf
-    scale: [5.3679605,5.3679605,5.3679605]
-    rotate: [-0,0,-0,1]
-    translate: [-5.7511835,-1.8415341,0]
-  - name: girl_with_holster
-    file: models\girl_with_holster\girl_with_holster.gltf
-    scale: [0.063581474,0.063581474,0.063581474]
-    rotate: [-0,0,-0,1]
-    translate: [14.925448,3.071661,7.0771923]
+    translate: [0.6558792,0.09892969,0]
+dynamicObjects: []
