@@ -1,6 +1,6 @@
 editorCamera:
-  position: [0.07071227,0.21471733,-0.678934]
-  pitchYaw: [0.25136116,0.17562217]
+  position: [0.09411861,0.120978564,-0.636081]
+  pitchYaw: [0.08536324,-0.121192135]
   fovVertical: 50
   sensitivity: 6.401
   rotationSensitivity: 1
@@ -28,4 +28,14 @@ staticObjects:
     scale: [0.1,0.1,0.1]
     rotate: [-0,0,-0,1]
     translate: [0.6558792,0.09892969,0]
+  - name: bot
+    file: models\xbot\xbot.gltf
+    scale: [1,1,1]
+    rotate: [-0,0,-0,1]
+    translate: [0.15663825,0,-0.0056644157]
+  - name: cesiumMan
+    file: models\cesiumMan\cesiumMan.gltf
+    scale: [0.351204,0.351204,0.351204]
+    rotate: [-0,0,-0,1]
+    translate: [-0.14981389,0.0013596565,0]
 dynamicObjects: []

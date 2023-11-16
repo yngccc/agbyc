@@ -695,7 +695,7 @@ struct D3D {
             // ImGui::StyleColorsClassic();
             ImGuiIO& io = ImGui::GetIO();
             io.IniFilename = "imgui.ini";
-            io.FontGlobalScale = (float)settings.renderH / 1000.0f;
+            io.FontGlobalScale = (float)settings.renderH / 800.0f;
             assert(io.Fonts->AddFontDefault());
 
             transferQueueStartRecording();
@@ -1764,7 +1764,6 @@ struct World {
                 D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = mesh.blas->GetResource()->GetGPUVirtualAddress(), .Inputs = inputs, .ScratchAccelerationStructureData = mesh.blasScratch->GetResource()->GetGPUVirtualAddress()};
                 d3d.transferCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
             }
-            assert(gltfData->skins_count <= 1);
             for (uint skinIndex = 0; skinIndex < gltfData->skins_count; skinIndex++) {
                 cgltf_skin& gltfSkin = gltfData->skins[skinIndex];
                 ModelSkin& skin = model->skins[skinIndex];
@@ -1778,7 +1777,7 @@ struct World {
                     ModelNode* node = &model->nodes[jointNode - gltfData->nodes];
                     float* matsData = (float*)((uint8*)(gltfSkin.inverse_bind_matrices->buffer_view->buffer->data) + gltfSkin.inverse_bind_matrices->offset + gltfSkin.inverse_bind_matrices->buffer_view->offset);
                     matsData += jointIndex * 16;
-                    skin.joints.push_back({.node = node, .inverseBindMat = XMMATRIX(matsData)});
+                    skin.joints.emplace_back(node, XMMATRIX(matsData));
                 }
             }
             for (uint animationIndex = 0; animationIndex < gltfData->animations_count; animationIndex++) {
@@ -2575,7 +2574,7 @@ void addTLASInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
                     d3d.appendSRVDescriptor(&d3d.defaultMaterialBaseColorImageSRVDesc, d3d.defaultMaterialBaseColorImage->GetResource());
                 }
             } else {
-                world.blasGeometriesInfos.push_back(BLASGeometryInfo{.baseColorFactor = {0.7, 0.7, 0.7, 1.0}});
+                world.blasGeometriesInfos.push_back(BLASGeometryInfo{.baseColorFactor = {0.7f, 0.7f, 0.7f, 1.0f}});
                 d3d.appendSRVDescriptor(&d3d.defaultMaterialBaseColorImageSRVDesc, d3d.defaultMaterialBaseColorImage->GetResource());
             }
         }
