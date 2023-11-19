@@ -9,6 +9,8 @@
 #include <d3dx12.h>
 #include <dxgi1_6.h>
 #include <dxgidebug.h>
+#include <hidsdi.h>
+#include <shellapi.h>
 #include <shellscalingapi.h>
 #include <userenv.h>
 #include <windows.h>
@@ -239,41 +241,34 @@ bool fileExists(const std::filesystem::path& path) {
 }
 
 std::string fileReadStr(const std::filesystem::path& path) {
-    std::ifstream t(path);
-    std::string str((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
+    std::ifstream file(path);
+    std::string str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     return str;
 }
 
-std::vector<uint8> fileRead(const std::filesystem::path& path) {
+std::vector<uint8> fileReadBytes(const std::filesystem::path& path) {
     HANDLE hwnd = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     assert(hwnd != INVALID_HANDLE_VALUE);
     DWORD size = GetFileSize(hwnd, nullptr);
     assert(size != INVALID_FILE_SIZE);
     std::vector<uint8> data(size);
     DWORD byteRead;
-    assert(ReadFile(hwnd, data.data(), size, &byteRead, nullptr) && byteRead == size);
+    assert(ReadFile(hwnd, data.data(), size, &byteRead, nullptr));
+    assert(byteRead == size);
     CloseHandle(hwnd);
     return data;
 }
 
-bool fileWriteStr(const std::filesystem::path& path, const std::string& str) {
-    HANDLE hwnd = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_WRITE, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (hwnd != INVALID_HANDLE_VALUE) {
-        DWORD bytesWritten = 0;
-        if (WriteFile(hwnd, str.c_str(), (DWORD)str.length(), &bytesWritten, nullptr)) {
-            CloseHandle(hwnd);
-            return true;
-        } else {
-            CloseHandle(hwnd);
-            return false;
-        }
-    }
-    return false;
+void fileWriteStr(const std::filesystem::path& path, const std::string& str) {
+    std::ofstream file(path);
+    file << str;
 }
 
-bool commandLineContain(int argc, char** argv, const char* str) {
-    for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], str)) { return true; }
+bool commandLineContain(const wchar_t* arg) {
+    int argsCount;
+    LPWSTR* args = CommandLineToArgvW(GetCommandLineW(), &argsCount);
+    for (int i = 1; i < argsCount; i++) {
+        if (wcscmp(arg, args[i]) == 0) return true;
     }
     return false;
 }
@@ -327,7 +322,7 @@ struct Settings {
         yamlRoot["windowW"] << windowW;
         yamlRoot["windowH"] << windowH;
         std::string yamlStr = ryml::emitrs_yaml<std::string>(yamlTree);
-        assert(fileWriteStr(exeDir / "settings.yaml", yamlStr));
+        fileWriteStr(exeDir / "settings.yaml", yamlStr);
     }
 };
 
@@ -357,8 +352,11 @@ struct Window {
 
         updateSizes();
 
-        RAWINPUTDEVICE rawInputDevice = {.usUsagePage = 0x01, .usUsage = 0x02};
-        assert(RegisterRawInputDevices(&rawInputDevice, 1, sizeof(rawInputDevice)));
+        RAWINPUTDEVICE rawInputDeviceMouse = {.usUsagePage = 0x0001, .usUsage = 0x0002, .hwndTarget = hwnd};
+        assert(RegisterRawInputDevices(&rawInputDeviceMouse, 1, sizeof(rawInputDeviceMouse)));
+
+        RAWINPUTDEVICE rawInputDeviceController = {.usUsagePage = 0x0001, .usUsage = 0x0005, .dwFlags = RIDEV_DEVNOTIFY, .hwndTarget = hwnd};
+        assert(RegisterRawInputDevices(&rawInputDeviceController, 1, sizeof(rawInputDeviceController)));
     }
 
     void show() {
@@ -729,7 +727,7 @@ struct D3D {
 
     void compilePipelines() {
         {
-            std::vector<uint8> rtByteCode = fileRead(exeDir / "renderScene.cso");
+            std::vector<uint8> rtByteCode = fileReadBytes(exeDir / "renderScene.cso");
             assert(device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&renderSceneRootSig)) == S_OK);
             D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"primaryRayMiss"}, {L"primaryRayHitGroup"}, {L"primaryRayClosestHit"}, {L"secondaryRayMiss"}, {L"secondaryRayHitGroup"}, {L"secondaryRayClosestHit"}};
             D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
@@ -744,7 +742,7 @@ struct D3D {
             assert(renderSceneSecondaryRayHitGroupID = renderSceneProps->GetShaderIdentifier(L"secondaryRayHitGroup"));
         }
         {
-            std::vector<uint8> rtByteCode = fileRead(exeDir / "collisionDetection.cso");
+            std::vector<uint8> rtByteCode = fileReadBytes(exeDir / "collisionDetection.cso");
             assert(device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&collisionDetectionRootSig)) == S_OK);
             D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"miss"}, {L"hitGroup"}, {L"closestHit"}};
             D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
@@ -757,8 +755,8 @@ struct D3D {
             assert(collisionDetectionHitGroupID = collisionDetectionProps->GetShaderIdentifier(L"hitGroup"));
         }
         {
-            std::vector<uint8> vsByteCode = fileRead(exeDir / "postProcessVS.cso");
-            std::vector<uint8> psByteCode = fileRead(exeDir / "postProcessPS.cso");
+            std::vector<uint8> vsByteCode = fileReadBytes(exeDir / "postProcessVS.cso");
+            std::vector<uint8> psByteCode = fileReadBytes(exeDir / "postProcessPS.cso");
             assert(device->CreateRootSignature(0, psByteCode.data(), psByteCode.size(), IID_PPV_ARGS(&postProcessRootSig)) == S_OK);
             D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {
                 .VS = {vsByteCode.data(), vsByteCode.size()},
@@ -774,8 +772,8 @@ struct D3D {
             assert(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&postProcessPSO)) == S_OK);
         }
         {
-            std::vector<uint8> vsByteCode = fileRead(exeDir / "ImGuiVS.cso");
-            std::vector<uint8> psByteCode = fileRead(exeDir / "ImGuiPS.cso");
+            std::vector<uint8> vsByteCode = fileReadBytes(exeDir / "ImGuiVS.cso");
+            std::vector<uint8> psByteCode = fileReadBytes(exeDir / "ImGuiPS.cso");
             assert(device->CreateRootSignature(0, vsByteCode.data(), vsByteCode.size(), IID_PPV_ARGS(&imguiRootSig)) == S_OK);
             D3D12_INPUT_ELEMENT_DESC inputElemDescs[] = {
                 {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -807,7 +805,7 @@ struct D3D {
             assert(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&imguiPSO)) == S_OK);
         }
         {
-            std::vector<uint8> csByteCode = fileRead(exeDir / "vertexSkinning.cso");
+            std::vector<uint8> csByteCode = fileReadBytes(exeDir / "vertexSkinning.cso");
             assert(device->CreateRootSignature(0, csByteCode.data(), csByteCode.size(), IID_PPV_ARGS(&vertexSkinningRootSig)) == S_OK);
             D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {.pRootSignature = vertexSkinningRootSig, .CS = {.pShaderBytecode = csByteCode.data(), .BytecodeLength = csByteCode.size()}};
             assert(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&vertexSkinningPSO)) == S_OK);
@@ -1014,12 +1012,12 @@ struct CameraEditor {
 };
 
 struct CameraThirdPerson {
-    float3 lookAtOffset;
-    float3 lookAt;
-    float3 rotation;
-    float distance;
     float3 position;
-    float3 dir;
+    float3 lookAt;
+    float3 lookAtOffset;
+    float distance;
+    float3 rotation;
+    float fovVertical = 50;
     float sensitivity;
     float controllerSensitivity;
 
@@ -1124,7 +1122,7 @@ struct ModelAnimation {
     std::string name;
     std::vector<ModelAnimationChannel> channels;
     std::vector<ModelAnimationSampler> samplers;
-    float timeLength = 0.0f;
+    double timeLength = 0.0f;
 };
 
 struct Model {
@@ -1249,7 +1247,7 @@ struct ModelInstance {
         }
     }
 
-    void updateSkinsMats(float time) {
+    void updateSkinsMats(double time) {
         ZoneScoped;
         if (!animation || skins.size() == 0) return;
 
@@ -1374,6 +1372,8 @@ struct ModelInstance {
 struct Player {
     ModelInstance model;
     Transform transform;
+    float3 spawnPosition;
+    float3 position;
     float3 velocity;
     float3 acceleration;
     CameraThirdPerson camera;
@@ -1421,7 +1421,6 @@ struct EditorUndo {
 };
 
 struct Editor {
-    bool enable = true;
     bool active = true;
     CameraEditor camera;
     bool cameraMoving = false;
@@ -1434,7 +1433,11 @@ struct Editor {
     std::vector<DynamicObject> dynamicObjects;
 };
 
-Editor editor;
+#ifndef NO_EDITOR
+Editor* editor = new Editor();
+#else
+Editor* editor = nullptr;
+#endif
 
 struct World {
     std::filesystem::path filePath;
@@ -1458,17 +1461,16 @@ struct World {
         ryml::ConstNodeRef yamlRoot = yamlTree.rootref();
         filePath = path;
 
-        if (editor.enable && yamlRoot.has_child("editorCamera")) {
+        if (editor && yamlRoot.has_child("editorCamera")) {
             ryml::ConstNodeRef cameraYaml = yamlRoot["editorCamera"];
-            editor.camera.position << cameraYaml["position"];
-            editor.camera.pitchYaw << cameraYaml["pitchYaw"];
-            editor.camera.updateLookAt();
-            cameraYaml["fovVertical"] >> editor.camera.fovVertical;
-            cameraYaml["sensitivity"] >> editor.camera.sensitivity;
-            cameraYaml["rotationSensitivity"] >> editor.camera.rotationSensitivity;
-            cameraYaml["controllerSensitivity"] >> editor.camera.controllerSensitivity;
+            editor->camera.position << cameraYaml["position"];
+            editor->camera.pitchYaw << cameraYaml["pitchYaw"];
+            editor->camera.updateLookAt();
+            cameraYaml["sensitivity"] >> editor->camera.sensitivity;
+            cameraYaml["rotationSensitivity"] >> editor->camera.rotationSensitivity;
+            cameraYaml["controllerSensitivity"] >> editor->camera.controllerSensitivity;
         } else {
-            editor.camera = {};
+            editor->camera = {};
         }
         {
             ryml::ConstNodeRef skyboxYaml = yamlRoot["skybox"];
@@ -1489,13 +1491,15 @@ struct World {
             playerYaml["file"] >> file;
             player.model = loadModel(file);
             player.transform << playerYaml;
+            player.spawnPosition << playerYaml["spawnPosition"];
+            player.position = player.spawnPosition;
             player.velocity << playerYaml["velocity"];
             player.acceleration << playerYaml["acceleration"];
             player.camera.lookAtOffset << playerYaml["cameraLookAtOffset"];
             player.camera.rotation << playerYaml["cameraRotation"];
             playerYaml["cameraDistance"] >> player.camera.distance;
             player.camera.lookAt = player.transform.t + player.camera.lookAtOffset;
-            if (editor.enable) editor.player = player;
+            if (editor) editor->player = player;
         }
         ryml::ConstNodeRef staticObjectsYaml = yamlRoot["staticObjects"];
         for (ryml::ConstNodeRef const& staticObjectYaml : staticObjectsYaml) {
@@ -1505,7 +1509,7 @@ struct World {
             staticObjectYaml["file"] >> file;
             obj.model = loadModel(file);
             obj.transform << staticObjectYaml;
-            if (editor.enable) editor.staticObjects.push_back(obj);
+            if (editor) editor->staticObjects.push_back(obj);
         }
         ryml::ConstNodeRef dynamicObjectsYaml = yamlRoot["dynamicObjects"];
         for (ryml::ConstNodeRef const& dynamicObjectYaml : dynamicObjectsYaml) {
@@ -1515,12 +1519,12 @@ struct World {
             dynamicObjectYaml["file"] >> file;
             obj.model = loadModel(file);
             obj.transform << dynamicObjectYaml;
-            if (editor.enable) editor.dynamicObjects.push_back(obj);
+            if (editor) editor->dynamicObjects.push_back(obj);
         }
     }
 
     void save() {
-        if (!editor.enable) return;
+        if (!editor) return;
 
         ryml::Tree yamlTree;
         ryml::NodeRef yamlRoot = yamlTree.rootref();
@@ -1528,12 +1532,11 @@ struct World {
 
         ryml::NodeRef cameraYaml = yamlRoot["editorCamera"];
         cameraYaml |= ryml::MAP;
-        editor.camera.position >> cameraYaml["position"];
-        editor.camera.pitchYaw >> cameraYaml["pitchYaw"];
-        cameraYaml["fovVertical"] << editor.camera.fovVertical;
-        cameraYaml["sensitivity"] << editor.camera.sensitivity;
-        cameraYaml["rotationSensitivity"] << editor.camera.rotationSensitivity;
-        cameraYaml["controllerSensitivity"] << editor.camera.controllerSensitivity;
+        editor->camera.position >> cameraYaml["position"];
+        editor->camera.pitchYaw >> cameraYaml["pitchYaw"];
+        cameraYaml["sensitivity"] << editor->camera.sensitivity;
+        cameraYaml["rotationSensitivity"] << editor->camera.rotationSensitivity;
+        cameraYaml["controllerSensitivity"] << editor->camera.controllerSensitivity;
 
         ryml::NodeRef skyboxYaml = yamlRoot["skybox"];
         skyboxYaml |= ryml::MAP;
@@ -1541,17 +1544,18 @@ struct World {
 
         ryml::NodeRef playerYaml = yamlRoot["player"];
         playerYaml |= ryml::MAP;
-        playerYaml["file"] << editor.player.model.model->filePath.string();
-        editor.player.transform >> playerYaml;
-        editor.player.velocity >> playerYaml["velocity"];
-        editor.player.acceleration >> playerYaml["acceleration"];
-        editor.player.camera.lookAtOffset >> playerYaml["cameraLookAtOffset"];
-        editor.player.camera.rotation >> playerYaml["cameraRotation"];
-        playerYaml["cameraDistance"] << editor.player.camera.distance;
+        playerYaml["file"] << editor->player.model.model->filePath.string();
+        editor->player.transform >> playerYaml;
+        editor->player.spawnPosition >> playerYaml["spawnPosition"];
+        editor->player.velocity >> playerYaml["velocity"];
+        editor->player.acceleration >> playerYaml["acceleration"];
+        editor->player.camera.lookAtOffset >> playerYaml["cameraLookAtOffset"];
+        editor->player.camera.rotation >> playerYaml["cameraRotation"];
+        playerYaml["cameraDistance"] << editor->player.camera.distance;
 
         ryml::NodeRef staticObjectsYaml = yamlRoot["staticObjects"];
         staticObjectsYaml |= ryml::SEQ;
-        for (StaticObject& staticObject : editor.staticObjects) {
+        for (StaticObject& staticObject : editor->staticObjects) {
             ryml::NodeRef staticObjectYaml = staticObjectsYaml.append_child();
             staticObjectYaml |= ryml::MAP;
             staticObjectYaml["name"] << staticObject.name;
@@ -1561,7 +1565,7 @@ struct World {
 
         ryml::NodeRef dynamicObjectsYaml = yamlRoot["dynamicObjects"];
         dynamicObjectsYaml |= ryml::SEQ;
-        for (DynamicObject& dynamicObject : editor.dynamicObjects) {
+        for (DynamicObject& dynamicObject : editor->dynamicObjects) {
             ryml::NodeRef dynamicObjectYaml = dynamicObjectsYaml.append_child();
             dynamicObjectYaml |= ryml::MAP;
             dynamicObjectYaml["name"] << dynamicObject.name;
@@ -1570,7 +1574,7 @@ struct World {
         }
 
         std::string yamlStr = ryml::emitrs_yaml<std::string>(yamlTree);
-        assert(fileWriteStr(filePath, yamlStr));
+        fileWriteStr(filePath, yamlStr);
     }
 
     ModelInstance loadModel(const std::filesystem::path& filePath) {
@@ -1885,14 +1889,148 @@ struct World {
     }
 
     void resetObjectsToEditor() {
-        if (!editor.enable) return;
-        player = editor.player;
-        staticObjects = editor.staticObjects;
-        dynamicObjects = editor.dynamicObjects;
+        if (!editor) return;
+        player = editor->player;
+        staticObjects = editor->staticObjects;
+        dynamicObjects = editor->dynamicObjects;
     }
 };
 
 static World world = {};
+
+struct Controller {
+    bool back, start;
+    bool a, b, x, y;
+    bool up, down, left, right;
+    bool lb, rb;
+    float lt, rt;
+    bool ls, rs;
+    float lsX, lsY, rsX, rsY;
+
+    float deadZone = 0.25f;
+
+    HANDLE dualSenseHID;
+
+    void reset() {
+        back = start = false;
+        a = b = x = y = false;
+        up = down = left = right = false;
+        lb = rb = false;
+        lt = rt = 0;
+        ls = rs = false;
+        lsX = lsY = rsX = rsY = 0;
+    }
+
+    void applyDeadZone() {
+        float lDistance = sqrtf(lsX * lsX + lsY * lsY);
+        if (lDistance > 0) {
+            float lDistanceNew = std::max(0.0f, lDistance - deadZone) / (1.0f - deadZone);
+            lsX = lsX / lDistance * lDistanceNew;
+            lsY = lsY / lDistance * lDistanceNew;
+        }
+        float rDistance = sqrtf(rsX * rsX + rsY * rsY);
+        if (rDistance > 0) {
+            float rDistanceNew = std::max(0.0f, rDistance - deadZone) / (1.0f - deadZone);
+            rsX = rsX / rDistance * rDistanceNew;
+            rsY = rsY / rDistance * rDistanceNew;
+        }
+    }
+
+    bool stickMoved() {
+        return lsX != 0 || lsY != 0 || rsX != 0 || rsY != 0;
+    }
+
+    std::string toString() {
+        std::string s = std::format("ls({}, {}) rs({}, {})\nlt({}) rt({})\n", lsX, lsY, rsX, rsY, lt, rt);
+        if (a) s += "A ";
+        if (b) s += "B ";
+        if (x) s += "X ";
+        if (y) s += "Y ";
+        if (up) s += "up ";
+        if (down) s += "down ";
+        if (left) s += "left ";
+        if (right) s += "right ";
+        if (lb) s += "lb ";
+        if (rb) s += "rb ";
+        if (ls) s += "ls ";
+        if (rs) s += "rs ";
+        if (back) s += "back ";
+        if (start) s += "start ";
+        s += '\n';
+        return s;
+    }
+
+    void getStateDualSense(uint8* packet, uint packetSize) {
+        reset();
+        uint n = (packetSize == 64) ? 0 : 1;
+        lsX = (packet[n + 1] / 255.0f) * 2.0f - 1.0f;
+        lsY = -((packet[n + 2] / 255.0f) * 2.0f - 1.0f);
+        rsX = (packet[n + 3] / 255.0f) * 2.0f - 1.0f;
+        rsY = -((packet[n + 4] / 255.0f) * 2.0f - 1.0f);
+        lt = packet[n + 5] / 255.0f;
+        rt = packet[n + 6] / 255.0f;
+        switch (packet[n + 8] & 0x0f) {
+        case 0x0: up = true; break;
+        case 0x1: up = right = true; break;
+        case 0x2: right = true; break;
+        case 0x3: down = right = true; break;
+        case 0x4: down = true; break;
+        case 0x5: down = left = true; break;
+        case 0x6: left = true; break;
+        case 0x7: up = left = true; break;
+        }
+        x = packet[n + 8] & 0x10;
+        a = packet[n + 8] & 0x20;
+        b = packet[n + 8] & 0x40;
+        y = packet[n + 8] & 0x80;
+        lb = packet[n + 9] & 0x01;
+        rb = packet[n + 9] & 0x02;
+        back = packet[n + 9] & 0x10;
+        start = packet[n + 9] & 0x20;
+        ls = packet[n + 9] & 0x40;
+        rs = packet[n + 9] & 0x80;
+        applyDeadZone();
+    }
+
+    void getStateXInput() {
+        reset();
+        XINPUT_STATE state;
+        if (XInputGetState(0, &state) == ERROR_SUCCESS) {
+            back = state.Gamepad.wButtons & XINPUT_GAMEPAD_BACK;
+            start = state.Gamepad.wButtons & XINPUT_GAMEPAD_START;
+            a = state.Gamepad.wButtons & XINPUT_GAMEPAD_A;
+            b = state.Gamepad.wButtons & XINPUT_GAMEPAD_B;
+            x = state.Gamepad.wButtons & XINPUT_GAMEPAD_X;
+            y = state.Gamepad.wButtons & XINPUT_GAMEPAD_Y;
+            up = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP;
+            down = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN;
+            left = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT;
+            right = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT;
+            lb = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER;
+            rb = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER;
+            lt = state.Gamepad.bLeftTrigger / 255.0f;
+            rt = state.Gamepad.bRightTrigger / 255.0f;
+            ls = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB;
+            rs = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB;
+            lsX = state.Gamepad.sThumbLX / 32767.0f;
+            lsY = state.Gamepad.sThumbLY / 32767.0f;
+            rsX = state.Gamepad.sThumbRX / 32767.0f;
+            rsY = state.Gamepad.sThumbRY / 32767.0f;
+            applyDeadZone();
+        }
+    }
+};
+
+static Controller controller = {};
+
+static bool quit = false;
+static LARGE_INTEGER perfFrequency = {};
+static LARGE_INTEGER perfCounters[2] = {};
+static double frameTime = 0;
+static uint mouseSelectX = UINT_MAX;
+static uint mouseSelectY = UINT_MAX;
+static int mouseDeltaRaw[2] = {};
+static float mouseWheel = 0;
 
 ImGuiKey toImGuiKey(WPARAM wparam) {
     switch (wparam) {
@@ -2006,15 +2144,6 @@ ImGuiKey toImGuiKey(WPARAM wparam) {
     }
 }
 
-static bool quit = false;
-static LARGE_INTEGER perfFrequency = {};
-static LARGE_INTEGER perfCounters[2] = {};
-static double frameTime = 0;
-static uint mouseSelectX = UINT_MAX;
-static uint mouseSelectY = UINT_MAX;
-static int mouseDeltaRaw[2] = {};
-static float mouseWheel = 0;
-
 LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lParam) {
     LRESULT result = 0;
     switch (eventType) {
@@ -2046,14 +2175,26 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
     case WM_CHAR: {
         ImGui::GetIO().AddInputCharacter(LOWORD(wParam));
     } break;
+    case WM_INPUT_DEVICE_CHANGE: {
+        if (wParam == GIDC_ARRIVAL) {
+            RID_DEVICE_INFO info;
+            uint infoSize = sizeof(info);
+            GetRawInputDeviceInfoA((HANDLE)lParam, RIDI_DEVICEINFO, &info, &infoSize);
+            if (info.dwType == RIM_TYPEHID && info.hid.dwVendorId == 0x054c && info.hid.dwProductId == 0x0ce6) controller.dualSenseHID = (HANDLE)lParam;
+        }
+    } break;
     case WM_INPUT: {
-        static char rawInputBuffer[256];
-        uint size = sizeof(rawInputBuffer);
-        if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, rawInputBuffer, &size, sizeof(RAWINPUTHEADER)) < sizeof(rawInputBuffer)) {
-            RAWINPUT* raw = (RAWINPUT*)rawInputBuffer;
-            if (raw->header.dwType == RIM_TYPEMOUSE) {
-                mouseDeltaRaw[0] += raw->data.mouse.lLastX;
-                mouseDeltaRaw[1] += raw->data.mouse.lLastY;
+        static char rawInputBuffer[1024];
+        uint rawInputBufferSize = sizeof(rawInputBuffer);
+        if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, rawInputBuffer, &rawInputBufferSize, sizeof(RAWINPUTHEADER)) < sizeof(rawInputBuffer)) {
+            RAWINPUT* rawInput = (RAWINPUT*)rawInputBuffer;
+            if (rawInput->header.dwType == RIM_TYPEMOUSE) {
+                mouseDeltaRaw[0] += rawInput->data.mouse.lLastX;
+                mouseDeltaRaw[1] += rawInput->data.mouse.lLastY;
+            } else if (rawInput->header.dwType == RIM_TYPEHID && rawInput->header.hDevice == controller.dualSenseHID) {
+                for (uint packetIndex = 0; packetIndex < rawInput->data.hid.dwCount; packetIndex++) {
+                    controller.getStateDualSense(&rawInput->data.hid.bRawData[rawInput->data.hid.dwSizeHid * packetIndex], rawInput->data.hid.dwSizeHid);
+                }
             }
         }
     } break;
@@ -2081,66 +2222,6 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
     return result;
 }
 
-struct Controller {
-    bool a, b, x, y;
-    bool up, down, left, right;
-    bool lb, rb;
-    bool ls, rs;
-    bool back, start;
-    float lt, rt;
-    float2 lStick;
-    float2 rStick;
-    float deadZone = 0.25f;
-
-    void getInputs() {
-        static XINPUT_STATE prevState = {};
-        XINPUT_STATE state = {};
-        DWORD result = XInputGetState(0, &state);
-        if (result == ERROR_SUCCESS) {
-            a = state.Gamepad.wButtons & XINPUT_GAMEPAD_A;
-            b = state.Gamepad.wButtons & XINPUT_GAMEPAD_B;
-            x = state.Gamepad.wButtons & XINPUT_GAMEPAD_X;
-            y = state.Gamepad.wButtons & XINPUT_GAMEPAD_Y;
-            up = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP;
-            down = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN;
-            left = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT;
-            right = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT;
-            lb = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER;
-            rb = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER;
-            ls = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB;
-            rs = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB;
-            back = state.Gamepad.wButtons & XINPUT_GAMEPAD_BACK;
-            start = state.Gamepad.wButtons & XINPUT_GAMEPAD_START;
-            lt = state.Gamepad.bLeftTrigger / 255.0f;
-            rt = state.Gamepad.bRightTrigger / 255.0f;
-            lStick.x = state.Gamepad.sThumbLX / 32767.0f;
-            lStick.y = state.Gamepad.sThumbLY / 32767.0f;
-            rStick.x = state.Gamepad.sThumbRX / 32767.0f;
-            rStick.y = state.Gamepad.sThumbRY / 32767.0f;
-
-            float lDistance = lStick.length();
-            if (lDistance > 0) {
-                float lDistanceNew = std::max(0.0f, lDistance - deadZone) / (1.0f - deadZone);
-                lStick = lStick / lDistance * lDistanceNew;
-            }
-            float rDistance = rStick.length();
-            if (rDistance > 0) {
-                float rDistanceNew = std::max(0.0f, rDistance - deadZone) / (1.0f - deadZone);
-                rStick = rStick / rDistance * rDistanceNew;
-            }
-        } else {
-            *this = {};
-        }
-        prevState = state;
-    }
-
-    bool stickMoved() {
-        return lStick != float2(0, 0) || rStick != float2(0, 0);
-    }
-};
-
-static Controller controller = {};
-
 void hideCursor(bool hide) {
     if (hide) {
         POINT cursorP;
@@ -2156,7 +2237,7 @@ void hideCursor(bool hide) {
 
 void editorUpdate() {
     if (ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
-        editor.active = false;
+        editor->active = false;
         hideCursor(true);
         world.resetObjectsToEditor();
         return;
@@ -2166,11 +2247,11 @@ void editorUpdate() {
         uint mouseSelectInstanceIndex = d3d.readBackBufferPtr->mouseSelectInstanceIndex;
         if (mouseSelectInstanceIndex < world.tlasInstancesInfos.size()) {
             TLASInstanceInfo& info = world.tlasInstancesInfos[mouseSelectInstanceIndex];
-            editor.selectedObjectType = info.objectType;
-            editor.selectedObjectIndex = info.objectIndex;
+            editor->selectedObjectType = info.objectType;
+            editor->selectedObjectIndex = info.objectIndex;
         } else {
             if (mouseSelectX != UINT_MAX && mouseSelectY != UINT_MAX) {
-                editor.selectedObjectType = WorldObjectTypeNone;
+                editor->selectedObjectType = WorldObjectTypeNone;
             }
         }
         // world.player.transform.translate = readBackBuffer->playerPosition;
@@ -2178,9 +2259,9 @@ void editorUpdate() {
         // world.player.acceleration = readBackBuffer->playerAcceleration;
     }
     {
-        editor.player.model.updateSkinsMats((float)frameTime);
-        for (StaticObject& obj : editor.staticObjects) obj.model.updateSkinsMats((float)frameTime);
-        for (DynamicObject& obj : editor.dynamicObjects) obj.model.updateSkinsMats((float)frameTime);
+        editor->player.model.updateSkinsMats(frameTime);
+        for (StaticObject& obj : editor->staticObjects) obj.model.updateSkinsMats(frameTime);
+        for (DynamicObject& obj : editor->dynamicObjects) obj.model.updateSkinsMats(frameTime);
     }
 
     static ImVec2 mousePosPrev = ImGui::GetMousePos();
@@ -2253,8 +2334,8 @@ void editorUpdate() {
         }
         if (ImGui::BeginMenu("Editor")) {
             if (ImGui::BeginMenu("Camera")) {
-                ImGui::SliderFloat("Sensitivity", &editor.camera.sensitivity, 0.0f, 100.0f);
-                ImGui::SliderFloat("RotationSensitivity", &editor.camera.rotationSensitivity, 0.1f, 10.0f);
+                ImGui::SliderFloat("Sensitivity", &editor->camera.sensitivity, 0.0f, 100.0f);
+                ImGui::SliderFloat("RotationSensitivity", &editor->camera.rotationSensitivity, 0.1f, 10.0f);
                 ImGui::EndMenu();
             }
             ImGui::Separator();
@@ -2265,7 +2346,7 @@ void editorUpdate() {
         }
         if (ImGui::BeginMenu("Game")) {
             if (ImGui::MenuItem("Play", "CTRL+P")) {
-                editor.active = false;
+                editor->active = false;
                 hideCursor(false);
                 world.resetObjectsToEditor();
             }
@@ -2278,37 +2359,37 @@ void editorUpdate() {
     ImGui::SetNextWindowPos(objectWindowPos);
     ImGui::SetNextWindowSize(objectWindowSize);
     if (ImGui::Begin("Objects")) {
-        if (ImGui::Selectable("Player", editor.selectedObjectType == WorldObjectTypePlayer)) {
-            editor.selectedObjectType = WorldObjectTypePlayer;
-            editor.selectedObjectIndex = 0;
+        if (ImGui::Selectable("Player", editor->selectedObjectType == WorldObjectTypePlayer)) {
+            editor->selectedObjectType = WorldObjectTypePlayer;
+            editor->selectedObjectIndex = 0;
         }
-        if (editor.selectedObjectType == WorldObjectTypePlayer && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        if (editor->selectedObjectType == WorldObjectTypePlayer && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
             ImGui::OpenPopup("player edit");
         }
-        if (editor.selectedObjectType == WorldObjectTypePlayer && ImGui::BeginPopup("player edit")) {
-            if (ImGui::Selectable("focus")) editor.camera.focus(editor.player.transform.t, 1);
+        if (editor->selectedObjectType == WorldObjectTypePlayer && ImGui::BeginPopup("player edit")) {
+            if (ImGui::Selectable("focus")) editor->camera.focus(editor->player.transform.t, 1);
             ImGui::EndPopup();
         }
         if (ImGui::TreeNode("Static Objects")) {
             int objID = 0;
-            for (uint objIndex = 0; objIndex < editor.staticObjects.size(); objIndex++) {
-                StaticObject& object = editor.staticObjects[objIndex];
+            for (uint objIndex = 0; objIndex < editor->staticObjects.size(); objIndex++) {
+                StaticObject& object = editor->staticObjects[objIndex];
                 ImGui::PushID(objID++);
-                if (ImGui::Selectable(object.name.c_str(), editor.selectedObjectType == WorldObjectTypeStaticObject && editor.selectedObjectIndex == objIndex)) {
-                    editor.selectedObjectType = WorldObjectTypeStaticObject;
-                    editor.selectedObjectIndex = objIndex;
+                if (ImGui::Selectable(object.name.c_str(), editor->selectedObjectType == WorldObjectTypeStaticObject && editor->selectedObjectIndex == objIndex)) {
+                    editor->selectedObjectType = WorldObjectTypeStaticObject;
+                    editor->selectedObjectIndex = objIndex;
                 }
                 ImGui::PopID();
-                if (editor.selectedObjectType == WorldObjectTypeStaticObject && editor.selectedObjectIndex == objIndex && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                if (editor->selectedObjectType == WorldObjectTypeStaticObject && editor->selectedObjectIndex == objIndex && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
                     ImGui::OpenPopup("static object edit");
                 }
-                if (editor.selectedObjectType == WorldObjectTypeStaticObject && editor.selectedObjectIndex == objIndex && ImGui::BeginPopup("static object edit")) {
+                if (editor->selectedObjectType == WorldObjectTypeStaticObject && editor->selectedObjectIndex == objIndex && ImGui::BeginPopup("static object edit")) {
                     if (ImGui::Selectable("focus")) {
-                        editor.camera.focus(object.transform.t, 1);
+                        editor->camera.focus(object.transform.t, 1);
                     }
                     if (ImGui::Selectable("delete")) {
                         object.toBeDeleted = true;
-                        editor.selectedObjectType = WorldObjectTypeNone;
+                        editor->selectedObjectType = WorldObjectTypeNone;
                     }
                     ImGui::EndPopup();
                 }
@@ -2317,24 +2398,24 @@ void editorUpdate() {
         }
         if (ImGui::TreeNode("Dyanmic Objects")) {
             int objID = 0;
-            for (uint objIndex = 0; objIndex < editor.dynamicObjects.size(); objIndex++) {
-                DynamicObject& object = editor.dynamicObjects[objIndex];
+            for (uint objIndex = 0; objIndex < editor->dynamicObjects.size(); objIndex++) {
+                DynamicObject& object = editor->dynamicObjects[objIndex];
                 ImGui::PushID(objID++);
-                if (ImGui::Selectable(object.name.c_str(), editor.selectedObjectType == WorldObjectTypeDynamicObject && editor.selectedObjectIndex == objIndex)) {
-                    editor.selectedObjectType = WorldObjectTypeDynamicObject;
-                    editor.selectedObjectIndex = objIndex;
+                if (ImGui::Selectable(object.name.c_str(), editor->selectedObjectType == WorldObjectTypeDynamicObject && editor->selectedObjectIndex == objIndex)) {
+                    editor->selectedObjectType = WorldObjectTypeDynamicObject;
+                    editor->selectedObjectIndex = objIndex;
                 }
                 ImGui::PopID();
-                if (editor.selectedObjectType == WorldObjectTypeDynamicObject && editor.selectedObjectIndex == objIndex && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                if (editor->selectedObjectType == WorldObjectTypeDynamicObject && editor->selectedObjectIndex == objIndex && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
                     ImGui::OpenPopup("dynamic object edit");
                 }
-                if (editor.selectedObjectType == WorldObjectTypeDynamicObject && editor.selectedObjectIndex == objIndex && ImGui::BeginPopup("dynamic object edit")) {
+                if (editor->selectedObjectType == WorldObjectTypeDynamicObject && editor->selectedObjectIndex == objIndex && ImGui::BeginPopup("dynamic object edit")) {
                     if (ImGui::Selectable("focus")) {
-                        editor.camera.focus(object.transform.t, 1);
+                        editor->camera.focus(object.transform.t, 1);
                     }
                     if (ImGui::Selectable("delete")) {
                         object.toBeDeleted = true;
-                        editor.selectedObjectType = WorldObjectTypeNone;
+                        editor->selectedObjectType = WorldObjectTypeNone;
                     }
                     ImGui::EndPopup();
                 }
@@ -2348,24 +2429,24 @@ void editorUpdate() {
     // ImGui::SetNextWindowPos(propertiesWindowPos);
     // ImGui::SetNextWindowSize(propertiesWindowSize);
     if (ImGui::Begin("Properties")) {
-        if (editor.selectedObjectType == WorldObjectTypePlayer) {
+        if (editor->selectedObjectType == WorldObjectTypePlayer) {
             ImGui::Text("Player");
-            editor.player.transform.imgui();
+            editor->player.transform.imgui();
             if (ImGui::TreeNode("Movement")) {
-                ImGui::InputFloat3("Velocity", &editor.player.velocity.x);
-                ImGui::InputFloat3("Acceleration", &editor.player.acceleration.x);
+                ImGui::InputFloat3("Velocity", &editor->player.velocity.x);
+                ImGui::InputFloat3("Acceleration", &editor->player.acceleration.x);
                 ImGui::TreePop();
             }
-            editor.player.model.imgui();
-        } else if (editor.selectedObjectType == WorldObjectTypeStaticObject) {
-            StaticObject& object = editor.staticObjects[editor.selectedObjectIndex];
-            ImGui::Text("Static Object #%d", editor.selectedObjectIndex);
+            editor->player.model.imgui();
+        } else if (editor->selectedObjectType == WorldObjectTypeStaticObject) {
+            StaticObject& object = editor->staticObjects[editor->selectedObjectIndex];
+            ImGui::Text("Static Object #%d", editor->selectedObjectIndex);
             ImGui::Text("Name \"%s\"", object.name.c_str());
             object.transform.imgui();
             object.model.imgui();
-        } else if (editor.selectedObjectType == WorldObjectTypeDynamicObject) {
-            DynamicObject& object = editor.dynamicObjects[editor.selectedObjectIndex];
-            ImGui::Text("Dynamic Object #%d", editor.selectedObjectIndex);
+        } else if (editor->selectedObjectType == WorldObjectTypeDynamicObject) {
+            DynamicObject& object = editor->dynamicObjects[editor->selectedObjectIndex];
+            ImGui::Text("Dynamic Object #%d", editor->selectedObjectIndex);
             ImGui::Text("Name \"%s\"", object.name.c_str());
             object.transform.imgui();
             object.model.imgui();
@@ -2402,10 +2483,10 @@ void editorUpdate() {
                 std::filesystem::path path = std::filesystem::relative(filePath, assetsDir);
                 if (objectType == 0) {
                     StaticObject staticObject = {.name = objectName, .model = world.loadModel(path)};
-                    editor.staticObjects.push_back(std::move(staticObject));
+                    editor->staticObjects.push_back(std::move(staticObject));
                 } else if (objectType == 1) {
                     DynamicObject dynamicObject = {.name = objectName, .model = world.loadModel(path)};
-                    editor.dynamicObjects.push_back(std::move(dynamicObject));
+                    editor->dynamicObjects.push_back(std::move(dynamicObject));
                 }
             }
             ImGui::CloseCurrentPopup();
@@ -2424,18 +2505,18 @@ void editorUpdate() {
     }
 
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !ImGui::GetIO().WantCaptureMouse) {
-        editor.cameraMoving = true;
+        editor->cameraMoving = true;
         hideCursor(true);
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
-        editor.cameraMoving = false;
+        editor->cameraMoving = false;
         hideCursor(false);
     }
-    if (editor.cameraMoving || controller.stickMoved()) {
-        float pitch = (mouseDeltaRaw[1] / 500.0f * editor.camera.rotationSensitivity) - (controller.rStick.y * (float)frameTime * editor.camera.controllerSensitivity);
-        float yaw = (mouseDeltaRaw[0] / 500.0f * editor.camera.rotationSensitivity) + (controller.rStick.x * (float)frameTime * editor.camera.controllerSensitivity);
-        editor.camera.sensitivity = std::clamp(editor.camera.sensitivity + ImGui::GetIO().MouseWheel, 0.0f, 100.0f);
-        float distance = (float)frameTime / 5.0f * editor.camera.sensitivity;
+    if (editor->cameraMoving || controller.stickMoved()) {
+        float pitch = (mouseDeltaRaw[1] / 500.0f * editor->camera.rotationSensitivity) - (controller.rsY * (float)frameTime * editor->camera.controllerSensitivity);
+        float yaw = (mouseDeltaRaw[0] / 500.0f * editor->camera.rotationSensitivity) + (controller.rsX * (float)frameTime * editor->camera.controllerSensitivity);
+        editor->camera.sensitivity = std::clamp(editor->camera.sensitivity + ImGui::GetIO().MouseWheel, 0.0f, 100.0f);
+        float distance = (float)frameTime / 5.0f * editor->camera.sensitivity;
         float3 translate = {0, 0, 0};
         if (ImGui::IsKeyDown(ImGuiKey_W)) translate.z = distance;
         if (ImGui::IsKeyDown(ImGuiKey_S)) translate.z = -distance;
@@ -2443,14 +2524,14 @@ void editorUpdate() {
         if (ImGui::IsKeyDown(ImGuiKey_D)) translate.x = -distance;
         if (ImGui::IsKeyDown(ImGuiKey_Q)) translate.y = distance;
         if (ImGui::IsKeyDown(ImGuiKey_E)) translate.y = -distance;
-        // editor.camera.position += editor.camera.dir.cross(float3(0, 1, 0)) * distance * -controller.lStick.x;
-        // editor.camera.position += editor.camera.dir * distance * controller.lStick.y;
-        editor.camera.rotate(pitch, yaw);
-        editor.camera.translate(translate);
+        // editor->camera.position += editor->camera.dir.cross(float3(0, 1, 0)) * distance * -controller.lStick.x;
+        // editor->camera.position += editor->camera.dir * distance * controller.lStick.y;
+        editor->camera.rotate(pitch, yaw);
+        editor->camera.translate(translate);
     }
 
-    const XMMATRIX lookAtMat = XMMatrixLookAtLH(editor.camera.position.toXMVector(), editor.camera.lookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
-    const XMMATRIX perspectiveMat = XMMatrixPerspectiveFovLH(radian(editor.camera.fovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f);
+    const XMMATRIX lookAtMat = XMMatrixLookAtLH(editor->camera.position.toXMVector(), editor->camera.lookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
+    const XMMATRIX perspectiveMat = XMMatrixPerspectiveFovLH(radian(editor->camera.fovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f);
     auto transformGizmo = [&](Transform* transform) {
         static ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
         static ImGuizmo::MODE gizmoMode = ImGuizmo::WORLD;
@@ -2481,32 +2562,32 @@ void editorUpdate() {
             }
         }
     };
-    if (editor.selectedObjectType == WorldObjectTypePlayer) {
-        transformGizmo(&editor.player.transform);
-    } else if (editor.selectedObjectType == WorldObjectTypeStaticObject && editor.selectedObjectIndex < editor.staticObjects.size()) {
-        transformGizmo(&editor.staticObjects[editor.selectedObjectIndex].transform);
-    } else if (editor.selectedObjectType == WorldObjectTypeDynamicObject && editor.selectedObjectIndex < editor.dynamicObjects.size()) {
-        transformGizmo(&editor.dynamicObjects[editor.selectedObjectIndex].transform);
+    if (editor->selectedObjectType == WorldObjectTypePlayer) {
+        transformGizmo(&editor->player.transform);
+    } else if (editor->selectedObjectType == WorldObjectTypeStaticObject && editor->selectedObjectIndex < editor->staticObjects.size()) {
+        transformGizmo(&editor->staticObjects[editor->selectedObjectIndex].transform);
+    } else if (editor->selectedObjectType == WorldObjectTypeDynamicObject && editor->selectedObjectIndex < editor->dynamicObjects.size()) {
+        transformGizmo(&editor->dynamicObjects[editor->selectedObjectIndex].transform);
     }
     // static const XMMATRIX gridMat = XMMatrixIdentity();
     // ImGuizmo::DrawGrid((const float*)&lookAtMat, (const float*)&perspectiveMat, (const float*)&gridMat, 10);
     {
-        auto objIter = editor.staticObjects.begin();
-        while (objIter != editor.staticObjects.end()) {
+        auto objIter = editor->staticObjects.begin();
+        while (objIter != editor->staticObjects.end()) {
             if (objIter->toBeDeleted) {
                 objIter->releaseResource();
-                objIter = editor.staticObjects.erase(objIter);
+                objIter = editor->staticObjects.erase(objIter);
             } else {
                 objIter++;
             }
         }
     }
     {
-        auto objIter = editor.dynamicObjects.begin();
-        while (objIter != editor.dynamicObjects.end()) {
+        auto objIter = editor->dynamicObjects.begin();
+        while (objIter != editor->dynamicObjects.end()) {
             if (objIter->toBeDeleted) {
                 objIter->releaseResource();
-                objIter = editor.dynamicObjects.erase(objIter);
+                objIter = editor->dynamicObjects.erase(objIter);
             } else {
                 objIter++;
             }
@@ -2515,15 +2596,15 @@ void editorUpdate() {
 }
 
 void gameUpdate() {
-    if (ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && editor.enable) {
-        editor.active = true;
+    if (ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && editor) {
+        editor->active = true;
         hideCursor(false);
         return;
     }
 
-    world.player.model.updateSkinsMats((float)frameTime);
-    for (StaticObject& obj : world.staticObjects) obj.model.updateSkinsMats((float)frameTime);
-    for (DynamicObject& obj : world.dynamicObjects) obj.model.updateSkinsMats((float)frameTime);
+    world.player.model.updateSkinsMats(frameTime);
+    for (StaticObject& obj : world.staticObjects) obj.model.updateSkinsMats(frameTime);
+    for (DynamicObject& obj : world.dynamicObjects) obj.model.updateSkinsMats(frameTime);
 }
 
 void update() {
@@ -2534,7 +2615,7 @@ void update() {
     ImGuizmo::SetRect(0, 0, (float)settings.renderW, (float)settings.renderH);
     ImGuizmo::BeginFrame();
 
-    if (editor.enable && editor.active) {
+    if (editor && editor->active) {
         editorUpdate();
     } else {
         gameUpdate();
@@ -2546,17 +2627,17 @@ void update() {
 void addTLASInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransform, WorldObjectType objectType, uint objectIndex) {
     ZoneScoped;
     bool selected = false;
-    if (editor.enable && editor.active) selected = editor.selectedObjectType == objectType && editor.selectedObjectIndex == objectIndex;
+    if (editor && editor->active) selected = editor->selectedObjectType == objectType && editor->selectedObjectIndex == objectIndex;
     TLASInstanceInfo tlasInstanceInfo = {.objectType = objectType, .objectIndex = objectIndex, .selected = selected, .skinJointsDescriptor = UINT32_MAX, .blasGeometriesOffset = (uint)world.blasGeometriesInfos.size()};
     for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance.meshNodes.size(); meshNodeIndex++) {
         ModelNode* meshNode = modelInstance.model->meshNodes[meshNodeIndex];
         ModelInstanceMeshNode& instanceMeshNode = modelInstance.meshNodes[meshNodeIndex];
         uint meshIndex = (uint)(meshNode->mesh - &modelInstance.model->meshes[0]);
-        D3D12_RAYTRACING_INSTANCE_DESC instanceDesc = {.InstanceID = d3d.cbvSrvUavDescriptorCount, .InstanceMask = 0xff, .AccelerationStructure = instanceMeshNode.blas->GetResource()->GetGPUVirtualAddress()};
         XMMATRIX transform = meshNode->globalTransform;
         transform = XMMatrixMultiply(transform, XMMatrixScaling(1, 1, -1)); // convert RH to LH
         transform = XMMatrixMultiply(transform, objectTransform);
         transform = XMMatrixTranspose(transform);
+        D3D12_RAYTRACING_INSTANCE_DESC instanceDesc = {.InstanceID = d3d.cbvSrvUavDescriptorCount, .InstanceMask = 0xff, .AccelerationStructure = instanceMeshNode.blas->GetResource()->GetGPUVirtualAddress()};
         memcpy(instanceDesc.Transform, &transform, sizeof(instanceDesc.Transform));
         world.tlasInstancesBuildInfos.push_back(instanceDesc);
         world.tlasInstancesInfos.push_back(tlasInstanceInfo);
@@ -2581,21 +2662,21 @@ void addTLASInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
     }
 }
 
-D3D12_DISPATCH_RAYS_DESC fillRayTracingShaderTable(uint8* buffer, ID3D12Resource* bufferGPU, uint* bufferOffset, void* rayGenID, std::span<void*> missIDs, std::span<void*> hitGroupIDs) {
+D3D12_DISPATCH_RAYS_DESC fillRayTracingShaderTable(ID3D12Resource* buffer, uint8* bufferPtr, uint* bufferOffset, void* rayGenID, std::span<void*> missIDs, std::span<void*> hitGroupIDs) {
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
     *bufferOffset = align(*bufferOffset, D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
-    memcpy(buffer + *bufferOffset, rayGenID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-    dispatchDesc.RayGenerationShaderRecord = {bufferGPU->GetGPUVirtualAddress() + *bufferOffset, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES};
+    memcpy(bufferPtr + *bufferOffset, rayGenID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+    dispatchDesc.RayGenerationShaderRecord = {buffer->GetGPUVirtualAddress() + *bufferOffset, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES};
     *bufferOffset = align(*bufferOffset + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
-    dispatchDesc.MissShaderTable = {bufferGPU->GetGPUVirtualAddress() + *bufferOffset, missIDs.size() * D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT};
+    dispatchDesc.MissShaderTable = {buffer->GetGPUVirtualAddress() + *bufferOffset, missIDs.size() * D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT};
     for (void* missID : missIDs) {
-        memcpy(buffer + *bufferOffset, missID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+        memcpy(bufferPtr + *bufferOffset, missID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
         *bufferOffset = align(*bufferOffset + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
     }
     *bufferOffset = align(*bufferOffset, D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
-    dispatchDesc.HitGroupTable = {bufferGPU->GetGPUVirtualAddress() + *bufferOffset, hitGroupIDs.size() * D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT};
+    dispatchDesc.HitGroupTable = {buffer->GetGPUVirtualAddress() + *bufferOffset, hitGroupIDs.size() * D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT};
     for (void* hitGroupID : hitGroupIDs) {
-        memcpy(buffer + *bufferOffset, hitGroupID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+        memcpy(bufferPtr + *bufferOffset, hitGroupID, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
         *bufferOffset = align(*bufferOffset + D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
     }
     return dispatchDesc;
@@ -2643,11 +2724,11 @@ void render() {
     {
         float3 cameraPosition = world.player.camera.position;
         float3 cameraLookAt = world.player.camera.lookAt;
-        float cameraFovVertical = 50;
-        if (editor.enable && editor.active) {
-            cameraPosition = editor.camera.position;
-            cameraLookAt = editor.camera.lookAt;
-            cameraFovVertical = editor.camera.fovVertical;
+        float cameraFovVertical = world.player.camera.fovVertical;
+        if (editor && editor->active) {
+            cameraPosition = editor->camera.position;
+            cameraLookAt = editor->camera.lookAt;
+            cameraFovVertical = editor->camera.fovVertical;
         }
         RenderInfo renderInfo = {
             .cameraViewMat = XMMatrixTranspose(XMMatrixInverse(nullptr, XMMatrixLookAtLH(cameraPosition.toXMVector(), cameraLookAt.toXMVector(), XMVectorSet(0, 1, 0, 0)))),
@@ -2662,16 +2743,16 @@ void render() {
         d3d.constantBufferOffset += sizeof(renderInfo);
     }
     {
-        if (editor.enable && editor.active) {
-            editor.player.model.buildSkinnedMeshesBLASs();
-            addTLASInstance(editor.player.model, editor.player.transform.toMat(), WorldObjectTypePlayer, 0);
-            for (uint objIndex = 0; objIndex < editor.staticObjects.size(); objIndex++) {
-                editor.staticObjects[objIndex].model.buildSkinnedMeshesBLASs();
-                addTLASInstance(editor.staticObjects[objIndex].model, editor.staticObjects[objIndex].transform.toMat(), WorldObjectTypeStaticObject, objIndex);
+        if (editor && editor->active) {
+            editor->player.model.buildSkinnedMeshesBLASs();
+            addTLASInstance(editor->player.model, editor->player.transform.toMat(), WorldObjectTypePlayer, 0);
+            for (uint objIndex = 0; objIndex < editor->staticObjects.size(); objIndex++) {
+                editor->staticObjects[objIndex].model.buildSkinnedMeshesBLASs();
+                addTLASInstance(editor->staticObjects[objIndex].model, editor->staticObjects[objIndex].transform.toMat(), WorldObjectTypeStaticObject, objIndex);
             }
-            for (uint objIndex = 0; objIndex < editor.dynamicObjects.size(); objIndex++) {
-                editor.dynamicObjects[objIndex].model.buildSkinnedMeshesBLASs();
-                addTLASInstance(editor.dynamicObjects[objIndex].model, editor.dynamicObjects[objIndex].transform.toMat(), WorldObjectTypeDynamicObject, objIndex);
+            for (uint objIndex = 0; objIndex < editor->dynamicObjects.size(); objIndex++) {
+                editor->dynamicObjects[objIndex].model.buildSkinnedMeshesBLASs();
+                addTLASInstance(editor->dynamicObjects[objIndex].model, editor->dynamicObjects[objIndex].transform.toMat(), WorldObjectTypeDynamicObject, objIndex);
             }
         } else {
             world.player.model.buildSkinnedMeshesBLASs();
@@ -2709,7 +2790,7 @@ void render() {
             ZoneScopedN("renderScene");
             void* missIDs[2] = {d3d.renderScenePrimaryRayMissID, d3d.renderSceneSecondaryRayMissID};
             void* hitGroupIDs[2] = {d3d.renderScenePrimaryRayHitGroupID, d3d.renderSceneSecondaryRayHitGroupID};
-            D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantBufferPtr, d3d.constantBuffer->GetResource(), &d3d.constantBufferOffset, d3d.renderSceneRayGenID, missIDs, hitGroupIDs);
+            D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantBuffer->GetResource(), d3d.constantBufferPtr, &d3d.constantBufferOffset, d3d.renderSceneRayGenID, missIDs, hitGroupIDs);
             dispatchDesc.Width = settings.renderW, dispatchDesc.Height = settings.renderH, dispatchDesc.Depth = 1;
             assert(d3d.constantBufferOffset < d3d.constantBuffer->GetSize());
 
@@ -2719,14 +2800,20 @@ void render() {
         }
     }
     {
-        D3D12_RESOURCE_BARRIER readBackBufferTransition = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.readBackUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}};
-        D3D12_RESOURCE_BARRIER collisionQueryResultsTransition = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsUavBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}};
-        d3d.graphicsCmdList->ResourceBarrier(1, &readBackBufferTransition);
-        d3d.graphicsCmdList->ResourceBarrier(1, &collisionQueryResultsTransition);
+        D3D12_RESOURCE_BARRIER readBackBufferBarriers[2] = {
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.readBackUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.readBackUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS, .StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE}},
+        };
+        D3D12_RESOURCE_BARRIER collisionQueryResultsBarriers[2] = {
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsUavBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsUavBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS, .StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE}},
+        };
+        d3d.graphicsCmdList->ResourceBarrier(1, &readBackBufferBarriers[0]);
+        d3d.graphicsCmdList->ResourceBarrier(1, &collisionQueryResultsBarriers[0]);
 
         void* missIDs[1] = {d3d.collisionDetectionMissID};
         void* hitGroupIDs[1] = {d3d.collisionDetectionHitGroupID};
-        D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantBufferPtr, d3d.constantBuffer->GetResource(), &d3d.constantBufferOffset, d3d.collisionDetectionRayGenID, missIDs, hitGroupIDs);
+        D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantBuffer->GetResource(), d3d.constantBufferPtr, &d3d.constantBufferOffset, d3d.collisionDetectionRayGenID, missIDs, hitGroupIDs);
         dispatchDesc.Width = 1, dispatchDesc.Height = 1, dispatchDesc.Depth = 1;
         assert(d3d.constantBufferOffset < d3d.constantBuffer->GetSize());
 
@@ -2734,10 +2821,8 @@ void render() {
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.collisionDetectionRootSig);
         d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
 
-        std::swap(readBackBufferTransition.Transition.StateBefore, readBackBufferTransition.Transition.StateAfter);
-        std::swap(collisionQueryResultsTransition.Transition.StateBefore, collisionQueryResultsTransition.Transition.StateAfter);
-        d3d.graphicsCmdList->ResourceBarrier(1, &readBackBufferTransition);
-        d3d.graphicsCmdList->ResourceBarrier(1, &collisionQueryResultsTransition);
+        d3d.graphicsCmdList->ResourceBarrier(1, &readBackBufferBarriers[1]);
+        d3d.graphicsCmdList->ResourceBarrier(1, &collisionQueryResultsBarriers[1]);
 
         d3d.graphicsCmdList->CopyBufferRegion(d3d.readBackBuffer->GetResource(), 0, d3d.readBackUAVBuffer->GetResource(), 0, sizeof(struct ReadBackBuffer));
         d3d.graphicsCmdList->CopyBufferRegion(d3d.collisionQueryResultsBuffer->GetResource(), 0, d3d.collisionQueryResultsUavBuffer->GetResource(), 0, d3d.collisionQueryResultsBuffer->GetSize());
@@ -2807,23 +2892,23 @@ void render() {
 
 int main(int argc, char** argv) {
     assert(QueryPerformanceFrequency(&perfFrequency));
-    if (commandLineContain(argc, argv, "showConsole")) { showConsole(); }
+    if (commandLineContain(L"showConsole")) { showConsole(); }
     settings.load();
     window.init();
     window.show();
-    d3d.init(commandLineContain(argc, argv, "d3ddebug"));
+    d3d.init(commandLineContain(L"d3ddebug"));
     d3d.applySettings();
     world.load(assetsDir / "worlds/world.yaml");
     while (!quit) {
         QueryPerformanceCounter(&perfCounters[0]);
         ZoneScoped;
         mouseDeltaRaw[0] = 0, mouseDeltaRaw[1] = 0, mouseWheel = 0;
+        controller.getStateXInput();
         MSG windowMsg;
         while (PeekMessageA(&windowMsg, (HWND)window.hwnd, 0, 0, PM_REMOVE)) {
             TranslateMessage(&windowMsg);
             DispatchMessageA(&windowMsg);
         }
-        controller.getInputs();
         update();
         render();
         FrameMark;
