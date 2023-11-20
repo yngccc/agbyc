@@ -1,9 +1,7 @@
 editorCamera:
-  position: [-0.005196032,0.15790823,-0.38451365]
-  pitchYaw: [0.2189801,-0.14594315]
-  sensitivity: 6.401
-  rotationSensitivity: 1
-  controllerSensitivity: 1
+  position: [-0.40905008,0.17780645,0.25913155]
+  pitchYaw: [0.15605552,1.8274921]
+  moveSpeed: 6.401
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
 player:
@@ -14,9 +12,9 @@ player:
   spawnPosition: [0,0,0]
   velocity: [0,0,0]
   acceleration: [0,0,0]
-  cameraLookAtOffset: [0,0.02,0]
-  cameraRotation: [0.3919999,4.064001,0]
-  cameraDistance: 0.08
+  cameraLookAtOffset: [0,0.1,0]
+  cameraPitchYaw: [0,0]
+  cameraDistance: 0.3
 staticObjects:
   - name: Floor
     file: models/cube/cube.gltf

@@ -899,7 +899,7 @@ struct D3D {
     }
 
     void graphicsQueueWait() {
-        graphicsQueueFenceCounter += 1;
+        graphicsQueueFenceCounter++;
         graphicsQueue->Signal(graphicsQueueFence, graphicsQueueFenceCounter);
         if (graphicsQueueFence->GetCompletedValue() < graphicsQueueFenceCounter) {
             assert(SUCCEEDED(graphicsQueueFence->SetEventOnCompletion(graphicsQueueFenceCounter, graphicsQueueFenceEvent)));
@@ -976,25 +976,20 @@ struct D3D {
 static D3D d3d = {};
 
 struct CameraEditor {
-    float3 position = {0, 0, -10};
-    float3 lookAt = {0, 0, 0};
-    float2 pitchYaw = {0, 0};
+    float3 position;
+    float3 lookAt;
+    float2 pitchYaw;
     float fovVertical = 50;
-    float sensitivity = 1;
-    float rotationSensitivity = 1;
-    float controllerSensitivity = 1;
+    float moveSpeed = 1;
 
-    void updateLookAt() {
+    void rotate(float2 pitchYawDelta) {
+        pitchYaw.x += pitchYawDelta.x;
+        pitchYaw.y += pitchYawDelta.y;
         pitchYaw.x = std::clamp(pitchYaw.x, -pi * 0.4f, pi * 0.4f);
         pitchYaw.y = std::remainderf(pitchYaw.y, pi * 2.0f);
         XMVECTOR quaternion = XMQuaternionRotationRollPitchYaw(pitchYaw.x, pitchYaw.y, 0);
         float3 dir = XMVector3Rotate(XMVectorSet(0, 0, 1, 0), quaternion);
         lookAt = position + dir;
-    }
-    void rotate(float pitchDelta, float yawDelta) {
-        pitchYaw.x += pitchDelta;
-        pitchYaw.y += yawDelta;
-        updateLookAt();
     }
     void translate(float3 translate) {
         float3 dz = (lookAt - position).normalize();
@@ -1007,28 +1002,30 @@ struct CameraEditor {
         position += dz * translate.z;
         lookAt += dz * translate.z;
     }
-    void focus(float3 position, float distance) {
-    }
+    void focus(float3 position, float distance) {}
 };
 
-struct CameraThirdPerson {
+struct CameraPlayer {
     float3 position;
     float3 lookAt;
     float3 lookAtOffset;
+    float2 pitchYaw;
     float distance;
-    float3 rotation;
     float fovVertical = 50;
-    float sensitivity;
-    float controllerSensitivity;
 
-    // void update() {
-    //     rotation.x = std::clamp(rotation.x, -pi * 0.4f, pi * 0.4f);
-    //     rotation.y = std::remainderf(rotation.y, pi * 2.0f);
-    //     XMVECTOR quaternion = XMQuaternionRotationRollPitchYaw(rotation.x, rotation.y, 0);
-    //     float3 d = float3(XMVector3Rotate(XMVectorSet(0, 0, 1, 0), quaternion)).normalize();
-    //     position = lookAt + d * distance;
-    //     dir = -d;
-    // }
+    void rotate(float2 pitchYawDelta) {
+        pitchYaw.x += pitchYawDelta.x;
+        pitchYaw.y += pitchYawDelta.y;
+        pitchYaw.x = std::clamp(pitchYaw.x, 0.0f, pi * 0.4f);
+        pitchYaw.y = std::remainderf(pitchYaw.y, pi * 2.0f);
+        XMVECTOR quaternion = XMQuaternionRotationRollPitchYaw(pitchYaw.x, pitchYaw.y, 0);
+        float3 dir = float3(XMVector3Rotate(XMVectorSet(0, 0, -1, 0), quaternion)).normalize();
+        position = lookAt + dir * distance;
+    }
+    void translate(float3 translate) {
+        position += translate;
+        lookAt += translate;
+    }
 };
 
 struct ModelImage {
@@ -1161,12 +1158,20 @@ struct ModelInstanceSkin {
     std::vector<XMMATRIX> mats;
     D3D12MA::Allocation* matsBuffer;
     uint8* matsBufferPtr;
+
+    void release() { matsBuffer->Release(); }
 };
 
 struct ModelInstanceMeshNode {
     D3D12MA::Allocation* verticesBuffer;
     D3D12MA::Allocation* blas;
     D3D12MA::Allocation* blasScratch;
+
+    void release() {
+        verticesBuffer->Release();
+        blas->Release();
+        blasScratch->Release();
+    }
 };
 
 struct ModelInstance {
@@ -1209,15 +1214,9 @@ struct ModelInstance {
         }
     }
 
-    void releaseGPUResources() {
-        for (ModelInstanceSkin& skin : skins) {
-            skin.matsBuffer->Release();
-        }
-        for (ModelInstanceMeshNode& meshNode : meshNodes) {
-            meshNode.verticesBuffer->Release();
-            meshNode.blas->Release();
-            meshNode.blasScratch->Release();
-        }
+    void release() {
+        for (ModelInstanceSkin& skin : skins) skin.release();
+        for (ModelInstanceMeshNode& meshNode : meshNodes) meshNode.release();
     }
 
     void imgui() {
@@ -1376,9 +1375,9 @@ struct Player {
     float3 position;
     float3 velocity;
     float3 acceleration;
-    CameraThirdPerson camera;
+    CameraPlayer camera;
 
-    void releaseResource() { model.releaseGPUResources(); }
+    void release() { model.release(); }
 };
 
 struct StaticObject {
@@ -1387,7 +1386,7 @@ struct StaticObject {
     Transform transform;
     bool toBeDeleted;
 
-    void releaseResource() { model.releaseGPUResources(); }
+    void release() { model.release(); }
 };
 
 struct DynamicObject {
@@ -1396,7 +1395,7 @@ struct DynamicObject {
     Transform transform;
     bool toBeDeleted;
 
-    void releaseResource() { model.releaseGPUResources(); }
+    void release() { model.release(); }
 };
 
 struct Skybox {
@@ -1433,16 +1432,12 @@ struct Editor {
     std::vector<DynamicObject> dynamicObjects;
 };
 
-#ifndef NO_EDITOR
 Editor* editor = new Editor();
-#else
-Editor* editor = nullptr;
-#endif
+// Editor* editor = nullptr;
 
 struct World {
     std::filesystem::path filePath;
     std::list<Model> models;
-    uint cubeModelIndex;
     Player player;
     std::vector<StaticObject> staticObjects;
     std::vector<DynamicObject> dynamicObjects;
@@ -1461,16 +1456,16 @@ struct World {
         ryml::ConstNodeRef yamlRoot = yamlTree.rootref();
         filePath = path;
 
-        if (editor && yamlRoot.has_child("editorCamera")) {
-            ryml::ConstNodeRef cameraYaml = yamlRoot["editorCamera"];
-            editor->camera.position << cameraYaml["position"];
-            editor->camera.pitchYaw << cameraYaml["pitchYaw"];
-            editor->camera.updateLookAt();
-            cameraYaml["sensitivity"] >> editor->camera.sensitivity;
-            cameraYaml["rotationSensitivity"] >> editor->camera.rotationSensitivity;
-            cameraYaml["controllerSensitivity"] >> editor->camera.controllerSensitivity;
-        } else {
-            editor->camera = {};
+        if (editor) {
+            if (yamlRoot.has_child("editorCamera")) {
+                ryml::ConstNodeRef cameraYaml = yamlRoot["editorCamera"];
+                editor->camera.position << cameraYaml["position"];
+                editor->camera.pitchYaw << cameraYaml["pitchYaw"];
+                editor->camera.rotate({0, 0});
+                cameraYaml["moveSpeed"] >> editor->camera.moveSpeed;
+            } else {
+                editor->camera = {};
+            }
         }
         {
             ryml::ConstNodeRef skyboxYaml = yamlRoot["skybox"];
@@ -1496,9 +1491,10 @@ struct World {
             player.velocity << playerYaml["velocity"];
             player.acceleration << playerYaml["acceleration"];
             player.camera.lookAtOffset << playerYaml["cameraLookAtOffset"];
-            player.camera.rotation << playerYaml["cameraRotation"];
+            player.camera.pitchYaw << playerYaml["cameraPitchYaw"];
             playerYaml["cameraDistance"] >> player.camera.distance;
-            player.camera.lookAt = player.transform.t + player.camera.lookAtOffset;
+            player.camera.lookAt = player.position + player.camera.lookAtOffset;
+            player.camera.rotate({0, 0});
             if (editor) editor->player = player;
         }
         ryml::ConstNodeRef staticObjectsYaml = yamlRoot["staticObjects"];
@@ -1534,9 +1530,7 @@ struct World {
         cameraYaml |= ryml::MAP;
         editor->camera.position >> cameraYaml["position"];
         editor->camera.pitchYaw >> cameraYaml["pitchYaw"];
-        cameraYaml["sensitivity"] << editor->camera.sensitivity;
-        cameraYaml["rotationSensitivity"] << editor->camera.rotationSensitivity;
-        cameraYaml["controllerSensitivity"] << editor->camera.controllerSensitivity;
+        cameraYaml["moveSpeed"] << editor->camera.moveSpeed;
 
         ryml::NodeRef skyboxYaml = yamlRoot["skybox"];
         skyboxYaml |= ryml::MAP;
@@ -1550,7 +1544,7 @@ struct World {
         editor->player.velocity >> playerYaml["velocity"];
         editor->player.acceleration >> playerYaml["acceleration"];
         editor->player.camera.lookAtOffset >> playerYaml["cameraLookAtOffset"];
-        editor->player.camera.rotation >> playerYaml["cameraRotation"];
+        editor->player.camera.pitchYaw >> playerYaml["cameraPitchYaw"];
         playerYaml["cameraDistance"] << editor->player.camera.distance;
 
         ryml::NodeRef staticObjectsYaml = yamlRoot["staticObjects"];
@@ -1888,7 +1882,7 @@ struct World {
         return modelInstance;
     }
 
-    void resetObjectsToEditor() {
+    void resetToEditor() {
         if (!editor) return;
         player = editor->player;
         staticObjects = editor->staticObjects;
@@ -2031,6 +2025,8 @@ static uint mouseSelectX = UINT_MAX;
 static uint mouseSelectY = UINT_MAX;
 static int mouseDeltaRaw[2] = {};
 static float mouseWheel = 0;
+static float mouseSensitivity = 0.2f;
+static float controllerSensitivity = 2.0f;
 
 ImGuiKey toImGuiKey(WPARAM wparam) {
     switch (wparam) {
@@ -2193,7 +2189,7 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
                 mouseDeltaRaw[1] += rawInput->data.mouse.lLastY;
             } else if (rawInput->header.dwType == RIM_TYPEHID && rawInput->header.hDevice == controller.dualSenseHID) {
                 for (uint packetIndex = 0; packetIndex < rawInput->data.hid.dwCount; packetIndex++) {
-                    controller.getStateDualSense(&rawInput->data.hid.bRawData[rawInput->data.hid.dwSizeHid * packetIndex], rawInput->data.hid.dwSizeHid);
+                    //controller.getStateDualSense(&rawInput->data.hid.bRawData[rawInput->data.hid.dwSizeHid * packetIndex], rawInput->data.hid.dwSizeHid);
                 }
             }
         }
@@ -2239,7 +2235,7 @@ void editorUpdate() {
     if (ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
         editor->active = false;
         hideCursor(true);
-        world.resetObjectsToEditor();
+        world.resetToEditor();
         return;
     }
 
@@ -2334,8 +2330,7 @@ void editorUpdate() {
         }
         if (ImGui::BeginMenu("Editor")) {
             if (ImGui::BeginMenu("Camera")) {
-                ImGui::SliderFloat("Sensitivity", &editor->camera.sensitivity, 0.0f, 100.0f);
-                ImGui::SliderFloat("RotationSensitivity", &editor->camera.rotationSensitivity, 0.1f, 10.0f);
+                ImGui::SliderFloat("moveSpeed", &editor->camera.moveSpeed, 0.1f, 100.0f);
                 ImGui::EndMenu();
             }
             ImGui::Separator();
@@ -2348,7 +2343,7 @@ void editorUpdate() {
             if (ImGui::MenuItem("Play", "CTRL+P")) {
                 editor->active = false;
                 hideCursor(false);
-                world.resetObjectsToEditor();
+                world.resetToEditor();
             }
             ImGui::EndMenu();
         }
@@ -2513,20 +2508,18 @@ void editorUpdate() {
         hideCursor(false);
     }
     if (editor->cameraMoving || controller.stickMoved()) {
-        float pitch = (mouseDeltaRaw[1] / 500.0f * editor->camera.rotationSensitivity) - (controller.rsY * (float)frameTime * editor->camera.controllerSensitivity);
-        float yaw = (mouseDeltaRaw[0] / 500.0f * editor->camera.rotationSensitivity) + (controller.rsX * (float)frameTime * editor->camera.controllerSensitivity);
-        editor->camera.sensitivity = std::clamp(editor->camera.sensitivity + ImGui::GetIO().MouseWheel, 0.0f, 100.0f);
-        float distance = (float)frameTime / 5.0f * editor->camera.sensitivity;
-        float3 translate = {0, 0, 0};
+        float pitch = (mouseDeltaRaw[1] * mouseSensitivity - controller.rsY * controllerSensitivity) * (float)frameTime;
+        float yaw = (mouseDeltaRaw[0] * mouseSensitivity + controller.rsX * controllerSensitivity) * (float)frameTime;
+        editor->camera.moveSpeed = std::clamp(editor->camera.moveSpeed + ImGui::GetIO().MouseWheel, 0.1f, 100.0f);
+        float distance = (float)frameTime / 5.0f * editor->camera.moveSpeed;
+        float3 translate = {-controller.lsX * distance, 0, controller.lsY * distance};
         if (ImGui::IsKeyDown(ImGuiKey_W)) translate.z = distance;
         if (ImGui::IsKeyDown(ImGuiKey_S)) translate.z = -distance;
         if (ImGui::IsKeyDown(ImGuiKey_A)) translate.x = distance;
         if (ImGui::IsKeyDown(ImGuiKey_D)) translate.x = -distance;
         if (ImGui::IsKeyDown(ImGuiKey_Q)) translate.y = distance;
         if (ImGui::IsKeyDown(ImGuiKey_E)) translate.y = -distance;
-        // editor->camera.position += editor->camera.dir.cross(float3(0, 1, 0)) * distance * -controller.lStick.x;
-        // editor->camera.position += editor->camera.dir * distance * controller.lStick.y;
-        editor->camera.rotate(pitch, yaw);
+        editor->camera.rotate({pitch, yaw});
         editor->camera.translate(translate);
     }
 
@@ -2575,7 +2568,7 @@ void editorUpdate() {
         auto objIter = editor->staticObjects.begin();
         while (objIter != editor->staticObjects.end()) {
             if (objIter->toBeDeleted) {
-                objIter->releaseResource();
+                objIter->release();
                 objIter = editor->staticObjects.erase(objIter);
             } else {
                 objIter++;
@@ -2586,7 +2579,7 @@ void editorUpdate() {
         auto objIter = editor->dynamicObjects.begin();
         while (objIter != editor->dynamicObjects.end()) {
             if (objIter->toBeDeleted) {
-                objIter->releaseResource();
+                objIter->release();
                 objIter = editor->dynamicObjects.erase(objIter);
             } else {
                 objIter++;
@@ -2596,7 +2589,7 @@ void editorUpdate() {
 }
 
 void gameUpdate() {
-    if (ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && editor) {
+    if (editor && ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
         editor->active = true;
         hideCursor(false);
         return;
@@ -2605,6 +2598,11 @@ void gameUpdate() {
     world.player.model.updateSkinsMats(frameTime);
     for (StaticObject& obj : world.staticObjects) obj.model.updateSkinsMats(frameTime);
     for (DynamicObject& obj : world.dynamicObjects) obj.model.updateSkinsMats(frameTime);
+    {
+        float pitch = (mouseDeltaRaw[1] * mouseSensitivity - controller.rsY * controllerSensitivity) * (float)frameTime;
+        float yaw = (mouseDeltaRaw[0] * mouseSensitivity + controller.rsX * controllerSensitivity) * (float)frameTime;
+        world.player.camera.rotate({pitch, yaw});
+    }
 }
 
 void update() {
@@ -2886,8 +2884,8 @@ void render() {
         d3d.graphicsCmdList->ResourceBarrier(1, &swapChainImageTransition);
     }
     d3d.graphicsQueueSubmitRecording();
-    assert(SUCCEEDED(d3d.swapChain->Present(0, 0)));
     d3d.graphicsQueueWait();
+    assert(SUCCEEDED(d3d.swapChain->Present(0, 0)));
 }
 
 int main(int argc, char** argv) {
