@@ -19,8 +19,7 @@
 float srgbToLinear(float e) {
     if (e <= 0.04045) {
         return e / 12.92;
-    }
-    else {
+    } else{
         return pow((e + 0.055) / 1.055, 2.4);
     }
 }
@@ -32,8 +31,7 @@ float3 srgbToLinear(float3 srgb) {
 float linearToSrgb(float e) {
     if (e <= 0.0031308) {
         return e * 12.92;
-    }
-    else {
+    } else{
         return 1.055 * pow(e, 1.0 / 2.4) - 0.055;
     }
 }
@@ -80,7 +78,7 @@ bool barycentricsOnEdge(in float2 barycentrics, in float edgeThickness) {
 RayDesc generatePinholeCameraRay(in float2 pixel, in float4x4 cameraViewMat, in float4x4 cameraProjMat) {
     RayDesc ray;
     ray.Origin = cameraViewMat[3].xyz;
-    ray.TMin = 0.f;
+    ray.TMin = 0.0f;
     ray.TMax = FLT_MAX;
     float aspect = cameraProjMat[1][1] / cameraProjMat[0][0];
     float tanHalfFovY = 1.0f / cameraProjMat[1][1];
@@ -91,5 +89,29 @@ RayDesc generatePinholeCameraRay(in float2 pixel, in float4x4 cameraViewMat, in 
     );
     return ray;
 }
+
+RayDesc generateShadowRay(in float3 a, in float3 b, in float3 c,
+                          in float3 na, in float3 nb, in float3 nc,
+                          in float u, in float v, in float w,
+                          in float3 p, in float3 dir, in float length) {
+    float3 tmpu = p - a;
+    float3 tmpv = p - b;
+    float3 tmpw = p - c;
+    float dotu = min(0.0, dot(tmpu, na));
+    float dotv = min(0.0, dot(tmpv, nb));
+    float dotw = min(0.0, dot(tmpw, nc));
+    tmpu -= dotu * na;
+    tmpv -= dotv * nb;
+    tmpw -= dotw * nc;
+    float3 pp = p + u * tmpu + v * tmpv + w * tmpw;
+    
+    RayDesc ray;
+    ray.Origin = pp;
+    ray.TMax = 0.0f;
+    ray.TMax = length;
+    ray.Direction = dir;
+    return ray;
+}
+
 
 

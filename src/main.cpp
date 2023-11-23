@@ -1,3 +1,16 @@
+#include <algorithm>
+#include <array>
+#include <filesystem>
+#include <format>
+#include <fstream>
+#include <iostream>
+#include <list>
+#include <span>
+#include <stack>
+#include <streambuf>
+#include <string>
+#include <vector>
+
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <atlbase.h>
@@ -17,22 +30,9 @@
 #include <windowsx.h>
 #include <xinput.h>
 
-#include <algorithm>
-#include <array>
-#include <filesystem>
-#include <format>
-#include <fstream>
-#include <iostream>
-#include <list>
-#include <span>
-#include <stack>
-#include <streambuf>
-#include <string>
-#include <vector>
-
 #define _XM_SSE4_INTRINSICS_
-#include <directXMath.h>
-#include <directXTex.h>
+#include <directxmath.h>
+#include <directxtex.h>
 using namespace DirectX;
 
 #define RYML_SINGLE_HDR_DEFINE_NOW
@@ -48,6 +48,7 @@ using namespace DirectX;
 
 #define IMGUI_DISABLE_OBSOLETE_FUNCTIONS
 #define IMGUI_DISABLE_OBSOLETE_KEYIO
+#define IMGUI_DISABLE_DEMO_WINDOWS
 #define IMGUI_USE_STB_SPRINTF
 #define IMGUI_STB_SPRINTF_FILENAME <stb/stb_sprintf.h>
 #include <imgui/imgui.cpp>
@@ -58,7 +59,7 @@ using namespace DirectX;
 #undef snprintf
 #undef vsnprintf
 
-#include <d3d12ma/d3d12MemAlloc.cpp>
+#include <d3d12ma/d3d12memalloc.cpp>
 
 #define TRACY_ENABLE
 #include <tracy/tracy/tracy.hpp>
@@ -117,6 +118,7 @@ struct float2 {
     float2(float x, float y) : x(x), y(y) {}
     bool operator==(float2 v) const { return x == v.x && y == v.y; }
     bool operator!=(float2 v) const { return x != v.x || y != v.y; }
+    float2 operator+(float2 v) const { return float2(x + v.x, y + v.y); }
     float2 operator*(float v) const { return float2(x * v, y * v); }
     float2 operator/(float v) const { return float2(x / v, y / v); }
     void operator<<(ryml::ConstNodeRef node) { node[0] >> x, node[1] >> y; }
@@ -137,17 +139,21 @@ struct float3 {
     float3(const float* v) : x(v[0]), y(v[1]), z(v[2]) {}
     float3(const XMVECTOR& v) : x(XMVectorGetX(v)), y(XMVectorGetY(v)), z(XMVectorGetZ(v)) {}
     void operator=(const XMVECTOR& v) { x = XMVectorGetX(v), y = XMVectorGetY(v), z = XMVectorGetZ(v); }
-    void operator<<(ryml::ConstNodeRef node) { node[0] >> x, node[1] >> y, node[2] >> z; }
-    void operator>>(ryml::NodeRef node) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << x, node.append_child() << y, node.append_child() << z; };
     float3 operator+(float3 v) const { return float3(x + v.x, y + v.y, z + v.z); }
     void operator+=(float3 v) { x += v.x, y += v.y, z += v.z; }
     float3 operator-() const { return float3(-x, -y, -z); }
     float3 operator-(float3 v) const { return float3(x - v.x, y - v.y, z - v.z); }
     void operator-=(float3 v) { x -= v.x, y -= v.y, z -= v.z; }
-    float3 operator*(float scale) const { return float3(x * scale, y * scale, z * scale); }
-    void operator*=(float scale) { x *= scale, y *= scale, z *= scale; }
-    float3 operator/(float scale) const { return float3(x / scale, y / scale, z / scale); }
-    void operator/=(float scale) { x /= scale, y /= scale, z /= scale; }
+    float3 operator*(float s) const { return float3(x * s, y * s, z * s); }
+    float3 operator*(float3 s) const { return float3(x * s.x, y * s.y, z * s.z); }
+    void operator*=(float s) { x *= s, y *= s, z *= s; }
+    void operator*=(float3 s) { x *= s.x, y *= s.y, z *= s.z; }
+    float3 operator/(float s) const { return float3(x / s, y / s, z / s); }
+    float3 operator/(float3 s) const { return float3(x / s.x, y / s.y, z / s.z); }
+    void operator/=(float s) { x /= s, y /= s, z /= s; }
+    void operator/=(float3 s) { x /= s.x, y /= s.y, z /= s.z; }
+    void operator<<(ryml::ConstNodeRef node) { node[0] >> x, node[1] >> y, node[2] >> z; }
+    void operator>>(ryml::NodeRef node) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << x, node.append_child() << y, node.append_child() << z; };
     XMVECTOR toXMVector() const { return XMVectorSet(x, y, z, 0); }
     std::string toString() const { return std::format("[{}, {}, {}]", x, y, z); };
     float dot(float3 v) const { return x * v.x + y * v.y + z * v.z; }
@@ -163,8 +169,8 @@ struct float4 {
     float x = 0, y = 0, z = 0, w = 1;
 
     float4() = default;
-    float4(const float* v) : x(v[0]), y(v[1]), z(v[2]), w(v[3]) {}
     float4(float x, float y, float z, float w) : x(x), y(y), z(z), w(w) {}
+    float4(const float* v) : x(v[0]), y(v[1]), z(v[2]), w(v[3]) {}
     float4(const XMVECTOR& v) : x(XMVectorGetX(v)), y(XMVectorGetY(v)), z(XMVectorGetZ(v)), w(XMVectorGetW(v)) {}
     void operator=(const XMVECTOR& v) { x = XMVectorGetX(v), y = XMVectorGetY(v), z = XMVectorGetZ(v), w = XMVectorGetW(v); }
     void operator=(const float3& v) { x = v.x, y = v.y, z = v.z, w = 0; }
@@ -182,21 +188,15 @@ struct Transform {
 
     void operator<<(ryml::ConstNodeRef node) { s << node["scale"], r << node["rotate"], t << node["translate"]; }
     void operator>>(ryml::NodeRef node) { s >> node["scale"], r >> node["rotate"], t >> node["translate"]; }
-
-    XMMATRIX toMat() const {
-        return XMMatrixAffineTransformation(s.toXMVector(), XMVectorSet(0, 0, 0, 0), r.toXMVector(), t.toXMVector());
-    }
-
+    Transform operator*(const Transform& transform) const { return Transform{.s = s * transform.s, .r = XMQuaternionMultiply(r.toXMVector(), transform.r.toXMVector()), .t = t + transform.t}; }
+    XMMATRIX toMat() const { return XMMatrixAffineTransformation(s.toXMVector(), XMVectorSet(0, 0, 0, 0), r.toXMVector(), t.toXMVector()); }
     void imgui() {
         if (ImGui::TreeNode("Transform")) {
-            ImGui::InputFloat3("S", &s.x);
-            ImGui::SameLine();
+            ImGui::InputFloat3("S", &s.x), ImGui::SameLine();
             if (ImGui::Button("reset##scale")) s = float3(1, 1, 1);
-            ImGui::InputFloat4("R", &r.x);
-            ImGui::SameLine();
+            ImGui::InputFloat4("R", &r.x), ImGui::SameLine();
             if (ImGui::Button("reset##rotate")) r = float4(0, 0, 0, 1);
-            ImGui::InputFloat3("T", &t.x);
-            ImGui::SameLine();
+            ImGui::InputFloat3("T", &t.x), ImGui::SameLine();
             if (ImGui::Button("reset##translate")) t = float3(0, 0, 0);
             ImGui::TreePop();
         }
@@ -207,9 +207,7 @@ float3 lerp(const float3& a, const float3& b, float t) { return a + ((b - a) * t
 
 float4 slerp(const float4& a, const float4& b, float t) { return float4(XMQuaternionSlerp(a.toXMVector(), b.toXMVector(), t)); };
 
-std::string toString(const XMVECTOR& vec) {
-    return std::format("|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n", XMVectorGetX(vec), XMVectorGetY(vec), XMVectorGetZ(vec), XMVectorGetW(vec));
-}
+std::string toString(const XMVECTOR& vec) { return std::format("|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n", XMVectorGetX(vec), XMVectorGetY(vec), XMVectorGetZ(vec), XMVectorGetW(vec)); }
 
 std::string toString(const XMMATRIX& mat) {
     return std::format("|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n",
@@ -359,9 +357,7 @@ struct Window {
         assert(RegisterRawInputDevices(&rawInputDeviceController, 1, sizeof(rawInputDeviceController)));
     }
 
-    void show() {
-        ShowWindow(hwnd, SW_SHOW);
-    }
+    void show() { ShowWindow(hwnd, SW_SHOW); }
 
     void updateSizes() {
         RECT windowRect;
@@ -1013,14 +1009,12 @@ struct CameraPlayer {
     float distance;
     float fovVertical = 50;
 
-    void rotate(float2 pitchYawDelta) {
-        pitchYaw.x += pitchYawDelta.x;
-        pitchYaw.y += pitchYawDelta.y;
-        pitchYaw.x = std::clamp(pitchYaw.x, 0.0f, pi * 0.4f);
-        pitchYaw.y = std::remainderf(pitchYaw.y, pi * 2.0f);
+    void setPitchYaw(float2 pitchYawNew) {
+        pitchYaw.x = std::clamp(pitchYawNew.x, -pi * 0.1f, pi * 0.4f);
+        pitchYaw.y = std::remainderf(pitchYawNew.y, pi * 2.0f);
         XMVECTOR quaternion = XMQuaternionRotationRollPitchYaw(pitchYaw.x, pitchYaw.y, 0);
         float3 dir = float3(XMVector3Rotate(XMVectorSet(0, 0, -1, 0), quaternion)).normalize();
-        position = lookAt + dir * distance;
+        position = lookAt + (dir * distance);
     }
     void translate(float3 translate) {
         position += translate;
@@ -1155,6 +1149,7 @@ struct Model {
 };
 
 struct ModelInstanceSkin {
+    std::vector<Transform> transforms;
     std::vector<XMMATRIX> mats;
     D3D12MA::Allocation* matsBuffer;
     uint8* matsBufferPtr;
@@ -1176,6 +1171,7 @@ struct ModelInstanceMeshNode {
 
 struct ModelInstance {
     Model* model = nullptr;
+    Transform transform;
     ModelAnimation* animation = nullptr;
     double animationTime = 0;
     std::vector<ModelInstanceSkin> skins;
@@ -1185,10 +1181,11 @@ struct ModelInstance {
         this->model = model;
         if (model->animations.size() > 0) {
             animation = &model->animations[0];
+            animationTime = 0;
         }
-        animationTime = 0;
         skins.resize(model->skins.size());
         for (uint skinIndex = 0; skinIndex < model->skins.size(); skinIndex++) {
+            skins[skinIndex].transforms.resize(model->skins[skinIndex].joints.size());
             skins[skinIndex].mats.resize(model->skins[skinIndex].joints.size());
             D3D12MA::ALLOCATION_DESC jointBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
             D3D12_RESOURCE_DESC jointBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = vectorSizeof(skins[skinIndex].mats), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
@@ -1222,14 +1219,15 @@ struct ModelInstance {
     void imgui() {
         if (ImGui::TreeNode("Model")) {
             ImGui::Text(std::format("File: {}", model->filePath.string()).c_str());
+            transform.imgui();
             if (ImGui::TreeNode("Animations")) {
                 for (uint animationIndex = 0; animationIndex < model->animations.size(); animationIndex++) {
-                    ModelAnimation& animation = model->animations[animationIndex];
-                    ImGui::Text(std::format("#{}: {}", animationIndex, animation.name).c_str());
+                    ModelAnimation& modelAnimation = model->animations[animationIndex];
+                    ImGui::Text(std::format("#{}: {}", animationIndex, modelAnimation.name).c_str());
                     ImGui::SameLine(ImGui::GetWindowWidth() * 0.8f);
                     ImGui::PushID(animationIndex);
                     if (ImGui::Button("play")) {
-                        this->animation = &animation;
+                        animation = &modelAnimation;
                         animationTime = 0;
                     }
                     ImGui::PopID();
@@ -1248,7 +1246,7 @@ struct ModelInstance {
 
     void updateSkinsMats(double time) {
         ZoneScoped;
-        if (!animation || skins.size() == 0) return;
+        if (skins.size() == 0) return;
 
         animationTime += time;
         if (animationTime > animation->timeLength) animationTime -= animation->timeLength;
@@ -1315,7 +1313,7 @@ struct ModelInstance {
     }
 
     void buildSkinnedMeshesBLASs() {
-        if (!animation || skins.size() == 0) return;
+        if (skins.size() == 0) return;
         std::vector<D3D12_RESOURCE_BARRIER> blasBarriers;
         for (uint meshNodeIndex = 0; meshNodeIndex < model->meshNodes.size(); meshNodeIndex++) {
             ModelNode* meshNode = model->meshNodes[meshNodeIndex];
@@ -1370,11 +1368,13 @@ struct ModelInstance {
 
 struct Player {
     ModelInstance model;
-    Transform transform;
     float3 spawnPosition;
     float3 position;
     float3 velocity;
     float3 acceleration;
+    uint idleAnimationIndex;
+    uint walkAnimationIndex;
+    uint runAnimationIndex;
     CameraPlayer camera;
 
     void release() { model.release(); }
@@ -1383,7 +1383,6 @@ struct Player {
 struct StaticObject {
     std::string name;
     ModelInstance model;
-    Transform transform;
     bool toBeDeleted;
 
     void release() { model.release(); }
@@ -1392,7 +1391,6 @@ struct StaticObject {
 struct DynamicObject {
     std::string name;
     ModelInstance model;
-    Transform transform;
     bool toBeDeleted;
 
     void release() { model.release(); }
@@ -1485,16 +1483,19 @@ struct World {
             std::string file;
             playerYaml["file"] >> file;
             player.model = loadModel(file);
-            player.transform << playerYaml;
+            player.model.transform << playerYaml;
             player.spawnPosition << playerYaml["spawnPosition"];
             player.position = player.spawnPosition;
             player.velocity << playerYaml["velocity"];
             player.acceleration << playerYaml["acceleration"];
+            playerYaml["idleAnimationIndex"] >> player.idleAnimationIndex;
+            playerYaml["walkAnimationIndex"] >> player.walkAnimationIndex;
+            playerYaml["runAnimationIndex"] >> player.runAnimationIndex;
+            player.model.animation = &player.model.model->animations[player.idleAnimationIndex];
             player.camera.lookAtOffset << playerYaml["cameraLookAtOffset"];
-            player.camera.pitchYaw << playerYaml["cameraPitchYaw"];
             playerYaml["cameraDistance"] >> player.camera.distance;
             player.camera.lookAt = player.position + player.camera.lookAtOffset;
-            player.camera.rotate({0, 0});
+            player.camera.setPitchYaw({0, 0});
             if (editor) editor->player = player;
         }
         ryml::ConstNodeRef staticObjectsYaml = yamlRoot["staticObjects"];
@@ -1504,7 +1505,7 @@ struct World {
             std::string file;
             staticObjectYaml["file"] >> file;
             obj.model = loadModel(file);
-            obj.transform << staticObjectYaml;
+            obj.model.transform << staticObjectYaml;
             if (editor) editor->staticObjects.push_back(obj);
         }
         ryml::ConstNodeRef dynamicObjectsYaml = yamlRoot["dynamicObjects"];
@@ -1514,7 +1515,7 @@ struct World {
             std::string file;
             dynamicObjectYaml["file"] >> file;
             obj.model = loadModel(file);
-            obj.transform << dynamicObjectYaml;
+            obj.model.transform << dynamicObjectYaml;
             if (editor) editor->dynamicObjects.push_back(obj);
         }
     }
@@ -1539,12 +1540,14 @@ struct World {
         ryml::NodeRef playerYaml = yamlRoot["player"];
         playerYaml |= ryml::MAP;
         playerYaml["file"] << editor->player.model.model->filePath.string();
-        editor->player.transform >> playerYaml;
+        editor->player.model.transform >> playerYaml;
         editor->player.spawnPosition >> playerYaml["spawnPosition"];
         editor->player.velocity >> playerYaml["velocity"];
         editor->player.acceleration >> playerYaml["acceleration"];
+        playerYaml["idleAnimationIndex"] << editor->player.idleAnimationIndex;
+        playerYaml["walkAnimationIndex"] << editor->player.walkAnimationIndex;
+        playerYaml["runAnimationIndex"] << editor->player.runAnimationIndex;
         editor->player.camera.lookAtOffset >> playerYaml["cameraLookAtOffset"];
-        editor->player.camera.pitchYaw >> playerYaml["cameraPitchYaw"];
         playerYaml["cameraDistance"] << editor->player.camera.distance;
 
         ryml::NodeRef staticObjectsYaml = yamlRoot["staticObjects"];
@@ -1554,7 +1557,7 @@ struct World {
             staticObjectYaml |= ryml::MAP;
             staticObjectYaml["name"] << staticObject.name;
             staticObjectYaml["file"] << staticObject.model.model->filePath.string();
-            staticObject.transform >> staticObjectYaml;
+            staticObject.model.transform >> staticObjectYaml;
         }
 
         ryml::NodeRef dynamicObjectsYaml = yamlRoot["dynamicObjects"];
@@ -1564,7 +1567,7 @@ struct World {
             dynamicObjectYaml |= ryml::MAP;
             dynamicObjectYaml["name"] << dynamicObject.name;
             dynamicObjectYaml["file"] << dynamicObject.model.model->filePath.string();
-            dynamicObject.transform >> dynamicObjectYaml;
+            dynamicObject.model.transform >> dynamicObjectYaml;
         }
 
         std::string yamlStr = ryml::emitrs_yaml<std::string>(yamlTree);
@@ -1602,6 +1605,8 @@ struct World {
             model->materials.resize(gltfData->materials_count);
             model->textures.resize(gltfData->textures_count);
             model->images.resize(gltfData->images_count);
+
+            if (model->skins.size() > 0) assert(model->animations.size() > 0);
 
             for (uint nodeIndex = 0; nodeIndex < gltfData->nodes_count; nodeIndex++) {
                 cgltf_node& gltfNode = gltfData->nodes[nodeIndex];
@@ -1885,6 +1890,9 @@ struct World {
     void resetToEditor() {
         if (!editor) return;
         player = editor->player;
+        player.position = editor->player.spawnPosition;
+        player.camera.lookAt = editor->player.spawnPosition + editor->player.camera.lookAtOffset;
+        player.camera.setPitchYaw({0, 0});
         staticObjects = editor->staticObjects;
         dynamicObjects = editor->dynamicObjects;
     }
@@ -2189,7 +2197,7 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
                 mouseDeltaRaw[1] += rawInput->data.mouse.lLastY;
             } else if (rawInput->header.dwType == RIM_TYPEHID && rawInput->header.hDevice == controller.dualSenseHID) {
                 for (uint packetIndex = 0; packetIndex < rawInput->data.hid.dwCount; packetIndex++) {
-                    //controller.getStateDualSense(&rawInput->data.hid.bRawData[rawInput->data.hid.dwSizeHid * packetIndex], rawInput->data.hid.dwSizeHid);
+                    // controller.getStateDualSense(&rawInput->data.hid.bRawData[rawInput->data.hid.dwSizeHid * packetIndex], rawInput->data.hid.dwSizeHid);
                 }
             }
         }
@@ -2362,7 +2370,7 @@ void editorUpdate() {
             ImGui::OpenPopup("player edit");
         }
         if (editor->selectedObjectType == WorldObjectTypePlayer && ImGui::BeginPopup("player edit")) {
-            if (ImGui::Selectable("focus")) editor->camera.focus(editor->player.transform.t, 1);
+            if (ImGui::Selectable("focus")) editor->camera.focus(editor->player.model.transform.t, 1);
             ImGui::EndPopup();
         }
         if (ImGui::TreeNode("Static Objects")) {
@@ -2380,7 +2388,7 @@ void editorUpdate() {
                 }
                 if (editor->selectedObjectType == WorldObjectTypeStaticObject && editor->selectedObjectIndex == objIndex && ImGui::BeginPopup("static object edit")) {
                     if (ImGui::Selectable("focus")) {
-                        editor->camera.focus(object.transform.t, 1);
+                        editor->camera.focus(object.model.transform.t, 1);
                     }
                     if (ImGui::Selectable("delete")) {
                         object.toBeDeleted = true;
@@ -2406,7 +2414,7 @@ void editorUpdate() {
                 }
                 if (editor->selectedObjectType == WorldObjectTypeDynamicObject && editor->selectedObjectIndex == objIndex && ImGui::BeginPopup("dynamic object edit")) {
                     if (ImGui::Selectable("focus")) {
-                        editor->camera.focus(object.transform.t, 1);
+                        editor->camera.focus(object.model.transform.t, 1);
                     }
                     if (ImGui::Selectable("delete")) {
                         object.toBeDeleted = true;
@@ -2426,24 +2434,41 @@ void editorUpdate() {
     if (ImGui::Begin("Properties")) {
         if (editor->selectedObjectType == WorldObjectTypePlayer) {
             ImGui::Text("Player");
-            editor->player.transform.imgui();
+            editor->player.model.imgui();
+            if (ImGui::TreeNode("Animations")) {
+                Model* model = editor->player.model.model;
+                if (model->animations.size() > 0) {
+                    auto selectAnimation = [model](const char* label, uint* index) {
+                        if (ImGui::BeginCombo(label, model->animations[*index].name.c_str())) {
+                            for (uint animationIndex = 0; animationIndex < model->animations.size(); animationIndex++) {
+                                if (ImGui::Selectable(model->animations[animationIndex].name.c_str())) {
+                                    *index = animationIndex;
+                                }
+                            }
+                            ImGui::EndCombo();
+                        }
+                    };
+                    selectAnimation("idle", &editor->player.idleAnimationIndex);
+                    selectAnimation("walk", &editor->player.walkAnimationIndex);
+                    selectAnimation("run", &editor->player.runAnimationIndex);
+                }
+                ImGui::TreePop();
+            }
             if (ImGui::TreeNode("Movement")) {
+                ImGui::InputFloat3("SpawnPosition", &editor->player.spawnPosition.x);
                 ImGui::InputFloat3("Velocity", &editor->player.velocity.x);
                 ImGui::InputFloat3("Acceleration", &editor->player.acceleration.x);
                 ImGui::TreePop();
             }
-            editor->player.model.imgui();
         } else if (editor->selectedObjectType == WorldObjectTypeStaticObject) {
             StaticObject& object = editor->staticObjects[editor->selectedObjectIndex];
             ImGui::Text("Static Object #%d", editor->selectedObjectIndex);
             ImGui::Text("Name \"%s\"", object.name.c_str());
-            object.transform.imgui();
             object.model.imgui();
         } else if (editor->selectedObjectType == WorldObjectTypeDynamicObject) {
             DynamicObject& object = editor->dynamicObjects[editor->selectedObjectIndex];
             ImGui::Text("Dynamic Object #%d", editor->selectedObjectIndex);
             ImGui::Text("Name \"%s\"", object.name.c_str());
-            object.transform.imgui();
             object.model.imgui();
         }
     }
@@ -2464,8 +2489,7 @@ void editorUpdate() {
         ImGui::Combo("Object Type", &objectType, "Static Object\0Dyanmic Object\0");
         if (objectType == 0 || objectType == 1) {
             ImGui::InputText("Name", objectName, sizeof(objectName));
-            ImGui::InputText("File", filePath, sizeof(filePath));
-            ImGui::SameLine();
+            ImGui::InputText("File", filePath, sizeof(filePath)), ImGui::SameLine();
             if (ImGui::Button("Browse")) {
                 OPENFILENAMEA openfileName = {.lStructSize = sizeof(OPENFILENAMEA), .hwndOwner = window.hwnd, .lpstrFile = filePath, .nMaxFile = sizeof(filePath)};
                 GetOpenFileNameA(&openfileName);
@@ -2542,12 +2566,12 @@ void editorUpdate() {
             }
             ImGui::EndPopup();
         }
-        XMMATRIX transformMat = transform->toMat();
         if (!ImGui::IsAnyItemActive()) {
             if (ImGui::IsKeyPressed(ImGuiKey_T)) gizmoOperation = ImGuizmo::TRANSLATE;
             else if (ImGui::IsKeyPressed(ImGuiKey_R)) gizmoOperation = ImGuizmo::ROTATE;
             else if (ImGui::IsKeyPressed(ImGuiKey_S)) gizmoOperation = ImGuizmo::SCALE;
         }
+        XMMATRIX transformMat = transform->toMat();
         if (ImGuizmo::Manipulate((const float*)&lookAtMat, (const float*)&perspectiveMat, gizmoOperation, gizmoMode, (float*)&transformMat)) {
             XMVECTOR scale, rotate, translate;
             if (XMMatrixDecompose(&scale, &rotate, &translate, transformMat)) {
@@ -2556,11 +2580,15 @@ void editorUpdate() {
         }
     };
     if (editor->selectedObjectType == WorldObjectTypePlayer) {
-        transformGizmo(&editor->player.transform);
+        Transform transform = editor->player.model.transform;
+        transform.t += editor->player.spawnPosition;
+        transformGizmo(&transform);
+        transform.t -= editor->player.spawnPosition;
+        editor->player.model.transform = transform;
     } else if (editor->selectedObjectType == WorldObjectTypeStaticObject && editor->selectedObjectIndex < editor->staticObjects.size()) {
-        transformGizmo(&editor->staticObjects[editor->selectedObjectIndex].transform);
+        transformGizmo(&editor->staticObjects[editor->selectedObjectIndex].model.transform);
     } else if (editor->selectedObjectType == WorldObjectTypeDynamicObject && editor->selectedObjectIndex < editor->dynamicObjects.size()) {
-        transformGizmo(&editor->dynamicObjects[editor->selectedObjectIndex].transform);
+        transformGizmo(&editor->dynamicObjects[editor->selectedObjectIndex].model.transform);
     }
     // static const XMMATRIX gridMat = XMMatrixIdentity();
     // ImGuizmo::DrawGrid((const float*)&lookAtMat, (const float*)&perspectiveMat, (const float*)&gridMat, 10);
@@ -2601,7 +2629,7 @@ void gameUpdate() {
     {
         float pitch = (mouseDeltaRaw[1] * mouseSensitivity - controller.rsY * controllerSensitivity) * (float)frameTime;
         float yaw = (mouseDeltaRaw[0] * mouseSensitivity + controller.rsX * controllerSensitivity) * (float)frameTime;
-        world.player.camera.rotate({pitch, yaw});
+        world.player.camera.setPitchYaw(world.player.camera.pitchYaw + float2(pitch, yaw));
     }
 }
 
@@ -2633,6 +2661,7 @@ void addTLASInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
         uint meshIndex = (uint)(meshNode->mesh - &modelInstance.model->meshes[0]);
         XMMATRIX transform = meshNode->globalTransform;
         transform = XMMatrixMultiply(transform, XMMatrixScaling(1, 1, -1)); // convert RH to LH
+        transform = XMMatrixMultiply(transform, modelInstance.transform.toMat());
         transform = XMMatrixMultiply(transform, objectTransform);
         transform = XMMatrixTranspose(transform);
         D3D12_RAYTRACING_INSTANCE_DESC instanceDesc = {.InstanceID = d3d.cbvSrvUavDescriptorCount, .InstanceMask = 0xff, .AccelerationStructure = instanceMeshNode.blas->GetResource()->GetGPUVirtualAddress()};
@@ -2743,25 +2772,25 @@ void render() {
     {
         if (editor && editor->active) {
             editor->player.model.buildSkinnedMeshesBLASs();
-            addTLASInstance(editor->player.model, editor->player.transform.toMat(), WorldObjectTypePlayer, 0);
+            addTLASInstance(editor->player.model, XMMatrixTranslationFromVector(editor->player.spawnPosition.toXMVector()), WorldObjectTypePlayer, 0);
             for (uint objIndex = 0; objIndex < editor->staticObjects.size(); objIndex++) {
                 editor->staticObjects[objIndex].model.buildSkinnedMeshesBLASs();
-                addTLASInstance(editor->staticObjects[objIndex].model, editor->staticObjects[objIndex].transform.toMat(), WorldObjectTypeStaticObject, objIndex);
+                addTLASInstance(editor->staticObjects[objIndex].model, XMMatrixIdentity(), WorldObjectTypeStaticObject, objIndex);
             }
             for (uint objIndex = 0; objIndex < editor->dynamicObjects.size(); objIndex++) {
                 editor->dynamicObjects[objIndex].model.buildSkinnedMeshesBLASs();
-                addTLASInstance(editor->dynamicObjects[objIndex].model, editor->dynamicObjects[objIndex].transform.toMat(), WorldObjectTypeDynamicObject, objIndex);
+                addTLASInstance(editor->dynamicObjects[objIndex].model, XMMatrixIdentity(), WorldObjectTypeDynamicObject, objIndex);
             }
         } else {
             world.player.model.buildSkinnedMeshesBLASs();
-            addTLASInstance(world.player.model, world.player.transform.toMat(), WorldObjectTypePlayer, 0);
+            addTLASInstance(world.player.model, XMMatrixTranslationFromVector(world.player.position.toXMVector()), WorldObjectTypePlayer, 0);
             for (uint objIndex = 0; objIndex < world.staticObjects.size(); objIndex++) {
                 world.staticObjects[objIndex].model.buildSkinnedMeshesBLASs();
-                addTLASInstance(world.staticObjects[objIndex].model, world.staticObjects[objIndex].transform.toMat(), WorldObjectTypeStaticObject, objIndex);
+                addTLASInstance(world.staticObjects[objIndex].model, XMMatrixIdentity(), WorldObjectTypeStaticObject, objIndex);
             }
             for (uint objIndex = 0; objIndex < world.dynamicObjects.size(); objIndex++) {
                 world.dynamicObjects[objIndex].model.buildSkinnedMeshesBLASs();
-                addTLASInstance(world.dynamicObjects[objIndex].model, world.dynamicObjects[objIndex].transform.toMat(), WorldObjectTypeDynamicObject, objIndex);
+                addTLASInstance(world.dynamicObjects[objIndex].model, XMMatrixIdentity(), WorldObjectTypeDynamicObject, objIndex);
             }
         }
         {

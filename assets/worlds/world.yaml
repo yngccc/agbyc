@@ -1,6 +1,6 @@
 editorCamera:
-  position: [-0.40905008,0.17780645,0.25913155]
-  pitchYaw: [0.15605552,1.8274921]
+  position: [0.12267393,0.17955896,0.50807536]
+  pitchYaw: [0.26120824,-3.0471387]
   moveSpeed: 6.401
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
@@ -8,12 +8,14 @@ player:
   file: models\girl\girl.gltf
   scale: [1,1,1]
   rotate: [-0,0,-0,1]
-  translate: [0,-0.0013817772,0]
+  translate: [0,0,0]
   spawnPosition: [0,0,0]
   velocity: [0,0,0]
   acceleration: [0,0,0]
-  cameraLookAtOffset: [0,0.1,0]
-  cameraPitchYaw: [0,0]
+  idleAnimationIndex: 2
+  walkAnimationIndex: 5
+  runAnimationIndex: 4
+  cameraLookAtOffset: [0,0.125,0]
   cameraDistance: 0.3
 staticObjects:
   - name: Floor

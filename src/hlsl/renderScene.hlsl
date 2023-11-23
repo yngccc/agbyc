@@ -11,12 +11,12 @@ RaytracingShaderConfig shaderConfig = { 52, 8 };
 TriangleHitGroup primaryRayHitGroup = { "", "primaryRayClosestHit" };
 TriangleHitGroup secondaryRayHitGroup = { "", "secondaryRayClosestHit" };
 
-struct RayPayload {
-    bool edge;
-    float3 position;
-    float3 normal;
-    float3 diffuse;
-    float3 emissive;
+struct PrimaryRayPayload {
+    float3 color;
+};
+
+struct SecondaryRayPayload {
+    bool miss;
 };
 
 [shader("raygeneration")]
@@ -29,90 +29,79 @@ void rayGen() {
     RENDER_INFO_DESCRIPTOR(renderInfo);
     BVH_DESCRIPTOR(bvh);
     TLAS_INSTANCES_INFOS_DESCRIPTOR(instanceInfos);
-    SKYBOX_TEXTURE_DESCRIPTOR(skyboxTexture);
 
-    RayPayload primaryRayPayload = (RayPayload) 0;
     RayDesc primaryRay = generatePinholeCameraRay(pixelCoord, renderInfo.cameraViewMat, renderInfo.cameraProjMat);
+    PrimaryRayPayload primaryRayPayload;
     TraceRay(bvh, RAY_FLAG_NONE, 0xff, 0, 0, 0, primaryRay, primaryRayPayload);
-    if (primaryRayPayload.position.x == -FLT_MAX) {
-        float3 viewDir = primaryRay.Direction;
-        float theta = atan2(viewDir.z, viewDir.x);
-        float phi = acos(viewDir.y);
-        float3 skyboxColor = skyboxTexture.SampleLevel(bilinearSampler, float2((theta + PI) / (2.0 * PI), phi / PI), 0);
-        renderTexture[pixelIndex] = float4(skyboxColor / 10, 0);
-    }
-    else {
-        if (primaryRayPayload.edge) {
-            renderTexture[pixelIndex] = float4(0, 1, 0, 0);
-        }
-        else {
-            float3 lightDir = normalize(float3(1, 1, 1));
-            float ndotl = dot(primaryRayPayload.normal, lightDir);
-            renderTexture[pixelIndex] = float4(primaryRayPayload.diffuse * ndotl, 0);
-        }
-    }
-    //float3 lightDir = normalize(float3(1, 1, 1));
-    //float3 lightColor = float3(1, 1, 1);
-    //float3 ambient = float3(0.025, 0.025, 0.025);
-    //float d = saturate(dot(primaryRayPayload.normal, lightDir));
-    //renderTexture[pixelIndex] = d;
-
-    //RayDesc shadowRayDesc;
-    //shadowRayDesc.Origin = rayPayload.position;
-    //shadowRayDesc.Origin += rayPayload.normal * 0.005;
-    //shadowRayDesc.TMin = 0;
-    //shadowRayDesc.TMax = 1000;
-    //shadowRayDesc.Direction = lightDir;
-    //TraceRay(BVH, RAY_FLAG_NONE, 0xff, 1, 0, 1, shadowRayDesc, rayPayload);
-    //if (rayPayload.position.x == -FLT_MAX) {
-    //    renderTexture[pixelIndex] = saturate(lightColor * d + ambient);
-    //}
-    //else {
-    //    renderTexture[pixelIndex] = ambient;
-    //}
+    renderTexture[pixelIndex] = float4(primaryRayPayload.color.xyz, 0);
 }
 
 [shader("miss")]
-void primaryRayMiss(inout RayPayload payload) {
-    payload.position.x = -FLT_MAX;
+void primaryRayMiss(inout PrimaryRayPayload payload) {
+    SKYBOX_TEXTURE_DESCRIPTOR(skyboxTexture);
+    float3 viewDir = WorldRayDirection();
+    float theta = atan2(viewDir.z, viewDir.x);
+    float phi = acos(viewDir.y);
+    float3 skyboxColor = skyboxTexture.SampleLevel(bilinearSampler, float2((theta + PI) / (2.0 * PI), phi / PI), 0);
+    payload.color = skyboxColor * 0.1f;
 }
 
 [shader("closesthit")]
-void primaryRayClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
+void primaryRayClosestHit(inout PrimaryRayPayload payload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
     TLAS_INSTANCES_INFOS_DESCRIPTOR(instancesInfos);
-    BLAS_GEOMETRIES_INFOS_DESCRIPTOR(blasGeometriesInfos);
     TLASInstanceInfo instanceInfo = instancesInfos[InstanceIndex()];
-    BLASGeometryInfo blasGeometryInfo = blasGeometriesInfos[instanceInfo.blasGeometriesOffset + GeometryIndex()];
+    bool edge = instanceInfo.selected ? barycentricsOnEdge(trigAttribs.barycentrics, 0.02) : false;
+    if (edge) {
+        payload.color = float3(0, 1, 0);
+    } else{
+        BLAS_GEOMETRIES_INFOS_DESCRIPTOR(blasGeometriesInfos);
+        BLASGeometryInfo blasGeometryInfo = blasGeometriesInfos[instanceInfo.blasGeometriesOffset + GeometryIndex()];
 
-    uint verticesDescriptorIndex = InstanceID() + GeometryIndex() * 3;
-    StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex)];
-    StructuredBuffer<uint> indices = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex + 1)];
-    Texture2D<float3> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex + 2)];
-    uint triangleIndex = PrimitiveIndex() * 3;
-    Vertex vertex0 = vertices[indices[NonUniformResourceIndex(triangleIndex)]];
-    Vertex vertex1 = vertices[indices[NonUniformResourceIndex(triangleIndex + 1)]];
-    Vertex vertex2 = vertices[indices[NonUniformResourceIndex(triangleIndex + 2)]];
+        uint verticesDescriptorIndex = InstanceID() + GeometryIndex() * 3;
+        StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex)];
+        StructuredBuffer<uint> indices = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex + 1)];
+        Texture2D<float3> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex + 2)];
+        uint triangleIndex = PrimitiveIndex() * 3;
+        Vertex vertex0 = vertices[indices[NonUniformResourceIndex(triangleIndex)]];
+        Vertex vertex1 = vertices[indices[NonUniformResourceIndex(triangleIndex + 1)]];
+        Vertex vertex2 = vertices[indices[NonUniformResourceIndex(triangleIndex + 2)]];
 
-    float3x4 transform = ObjectToWorld3x4();
-    float3x3 normalTransform = float3x3(transform[0].xyz, transform[1].xyz, transform[2].xyz);
-    payload.position = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-    payload.normal = barycentricsLerp(trigAttribs.barycentrics, vertex0.normal, vertex1.normal, vertex2.normal);
-    payload.normal = normalize(mul(normalTransform, payload.normal));
-    float2 uv = barycentricsLerp(trigAttribs.barycentrics, vertex0.uv, vertex1.uv, vertex2.uv);
-    payload.diffuse = baseColorTexture.SampleLevel(bilinearSampler, uv, 0);
-    payload.diffuse *= blasGeometryInfo.baseColorFactor.xyz;
-    payload.edge = false;
-    if (instanceInfo.selected) {
-        payload.edge = barycentricsOnEdge(trigAttribs.barycentrics, 0.02);
+        float3x4 transform = ObjectToWorld3x4();
+        float3x3 normalTransform = float3x3(transform[0].xyz, transform[1].xyz, transform[2].xyz);
+        float3 position = barycentricsLerp(trigAttribs.barycentrics, vertex0.position, vertex1.position, vertex2.position);
+        position = mul(transform, float4(position, 1));
+        float3 normal = barycentricsLerp(trigAttribs.barycentrics, vertex0.normal, vertex1.normal, vertex2.normal);
+        normal = normalize(mul(normalTransform, normal));
+        float2 uv = barycentricsLerp(trigAttribs.barycentrics, vertex0.uv, vertex1.uv, vertex2.uv);
+        float3 diffuse = baseColorTexture.SampleLevel(bilinearSampler, uv, 0) * blasGeometryInfo.baseColorFactor.xyz;
+
+        float3 lightDir = normalize(float3(1, 1, 1));
+        float ndotl = dot(normal, lightDir);
+        payload.color = diffuse * ndotl;
+        
+        BVH_DESCRIPTOR(bvh);
+        SecondaryRayPayload rayPayload;
+        RayDesc shadowRay;
+        shadowRay.Origin = position + normal * 0.005;
+        shadowRay.TMin = 0.0f;
+        shadowRay.TMax = 1000.0f;
+        shadowRay.Direction = lightDir;
+        TraceRay(bvh, RAY_FLAG_NONE, 0xff, 1, 0, 1, shadowRay, rayPayload);
+        if (!rayPayload.miss) {
+            payload.color *= 0.1;
+        }
+        //generateShadowRay(vertex0.position, vertex1.position, vertex2.position,
+        //                  vertex0.normal, vertex1.normal, vertex2.normal,
+        //                  trigAttribs.barycentrics.x, trigAttribs.barycentrics.y, 1.0 - trigAttribs.barycentrics.x - trigAttribs.barycentrics.y,
     }
 }
 
 [shader("miss")]
-void secondaryRayMiss(inout RayPayload payload) {
-    payload.position.x = -FLT_MAX;
+void secondaryRayMiss(inout SecondaryRayPayload payload) {
+    payload.miss = true;
 }
 
 [shader("closesthit")]
-void secondaryRayClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
-    payload.position.x = 0;
+void secondaryRayClosestHit(inout SecondaryRayPayload payload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
+    payload.miss = false;
 }
