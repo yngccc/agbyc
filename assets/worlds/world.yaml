@@ -1,20 +1,21 @@
 editorCamera:
-  position: [0.12267393,0.17955896,0.50807536]
-  pitchYaw: [0.26120824,-3.0471387]
+  position: [-0.56244624,0.17851578,0.59702146]
+  pitchYaw: [0.21473286,2.4066572]
   moveSpeed: 6.401
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
 player:
   file: models\girl\girl.gltf
-  scale: [1,1,1]
+  scale: [0.34000003,0.34000003,0.34000003]
   rotate: [-0,0,-0,1]
   translate: [0,0,0]
   spawnPosition: [0,0,0]
-  velocity: [0,0,0]
-  acceleration: [0,0,0]
-  idleAnimationIndex: 2
-  walkAnimationIndex: 5
-  runAnimationIndex: 4
+  walkSpeed: 0.1
+  runSpeed: 0.5
+  idleAnimationIndex: 6
+  walkAnimationIndex: 7
+  runAnimationIndex: 5
+  jumpAnimationIndex: 0
   cameraLookAtOffset: [0,0.125,0]
   cameraDistance: 0.3
 staticObjects:
@@ -32,12 +33,12 @@ staticObjects:
     file: models\xbot\xbot.gltf
     scale: [1,1,1]
     rotate: [-0,0,-0,1]
-    translate: [0.15663825,0,-0.0056644157]
+    translate: [0.30230552,0,0]
   - name: cesiumMan
     file: models\cesiumMan\cesiumMan.gltf
     scale: [0.351204,0.351204,0.351204]
     rotate: [-0,0,-0,1]
-    translate: [-0.1523385,0,-0.066141345]
+    translate: [-0.17975935,0,0]
   - name: cube2
     file: models/cube/cube.gltf
     scale: [0.10142998,0.10142998,0.10142998]

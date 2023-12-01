@@ -16,7 +16,7 @@ struct PrimaryRayPayload {
 };
 
 struct SecondaryRayPayload {
-    bool miss;
+    bool hit;
 };
 
 [shader("raygeneration")]
@@ -87,21 +87,18 @@ void primaryRayClosestHit(inout PrimaryRayPayload payload, in BuiltInTriangleInt
         shadowRay.TMax = 1000.0f;
         shadowRay.Direction = lightDir;
         TraceRay(bvh, RAY_FLAG_NONE, 0xff, 1, 0, 1, shadowRay, rayPayload);
-        if (!rayPayload.miss) {
+        if (rayPayload.hit) {
             payload.color *= 0.1;
         }
-        //generateShadowRay(vertex0.position, vertex1.position, vertex2.position,
-        //                  vertex0.normal, vertex1.normal, vertex2.normal,
-        //                  trigAttribs.barycentrics.x, trigAttribs.barycentrics.y, 1.0 - trigAttribs.barycentrics.x - trigAttribs.barycentrics.y,
     }
 }
 
 [shader("miss")]
 void secondaryRayMiss(inout SecondaryRayPayload payload) {
-    payload.miss = true;
+    payload.hit = false;
 }
 
 [shader("closesthit")]
 void secondaryRayClosestHit(inout SecondaryRayPayload payload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
-    payload.miss = false;
+    payload.hit = true;
 }

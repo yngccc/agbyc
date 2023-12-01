@@ -122,7 +122,7 @@ struct float2 {
     float2 operator*(float v) const { return float2(x * v, y * v); }
     float2 operator/(float v) const { return float2(x / v, y / v); }
     void operator<<(ryml::ConstNodeRef node) { node[0] >> x, node[1] >> y; }
-    void operator>>(ryml::NodeRef node) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << x, node.append_child() << y; };
+    void operator>>(ryml::NodeRef node) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << x, node.append_child() << y; }
     std::string toString() const { return std::format("[{}, {}]", x, y); }
     float length() const { return sqrtf(x * x + y * y); }
     float2 normalize() const {
@@ -153,12 +153,13 @@ struct float3 {
     void operator/=(float s) { x /= s, y /= s, z /= s; }
     void operator/=(float3 s) { x /= s.x, y /= s.y, z /= s.z; }
     void operator<<(ryml::ConstNodeRef node) { node[0] >> x, node[1] >> y, node[2] >> z; }
-    void operator>>(ryml::NodeRef node) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << x, node.append_child() << y, node.append_child() << z; };
+    void operator>>(ryml::NodeRef node) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << x, node.append_child() << y, node.append_child() << z; }
     XMVECTOR toXMVector() const { return XMVectorSet(x, y, z, 0); }
-    std::string toString() const { return std::format("[{}, {}, {}]", x, y, z); };
+    std::string toString() const { return std::format("[{}, {}, {}]", x, y, z); }
     float dot(float3 v) const { return x * v.x + y * v.y + z * v.z; }
     float3 cross(float3 v) const { return float3(y * v.z - z * v.y, z * v.x - x * v.z, x * v.y - y * v.x); }
-    float length() const { return sqrtf(x * x + y * y + z * z); };
+    float length() const { return sqrtf(x * x + y * y + z * z); }
+    float lengthSquared() const { return x * x + y * y + z * z; }
     float3 normalize() const {
         float l = length();
         return (l > 0) ? float3(x / l, y / l, z / l) : float3(x, y, z);
@@ -176,9 +177,9 @@ struct float4 {
     void operator=(const float3& v) { x = v.x, y = v.y, z = v.z, w = 0; }
     void operator<<(ryml::ConstNodeRef node) { node[0] >> x, node[1] >> y, node[2] >> z, node[3] >> w; }
     void operator>>(ryml::NodeRef node) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << x, node.append_child() << y, node.append_child() << z, node.append_child() << w; }
-    float3 xyz() const { return float3(x, y, z); };
+    float3 xyz() const { return float3(x, y, z); }
     XMVECTOR toXMVector() const { return XMVectorSet(x, y, z, w); }
-    std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); };
+    std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
 };
 
 struct Transform {
@@ -215,6 +216,12 @@ std::string toString(const XMMATRIX& mat) {
                        XMVectorGetY(mat.r[0]), XMVectorGetY(mat.r[1]), XMVectorGetY(mat.r[2]), XMVectorGetY(mat.r[3]),
                        XMVectorGetZ(mat.r[0]), XMVectorGetZ(mat.r[1]), XMVectorGetZ(mat.r[2]), XMVectorGetZ(mat.r[3]),
                        XMVectorGetW(mat.r[0]), XMVectorGetW(mat.r[1]), XMVectorGetW(mat.r[2]), XMVectorGetW(mat.r[3]));
+}
+
+XMVECTOR quaternionBetween(float3 v1, float3 v2) {
+    float3 a = v1.cross(v2);
+    float w = sqrtf(v1.lengthSquared() * v2.lengthSquared() + v1.dot(v2));
+    return XMVectorSet(a.x, a.y, a.z, w);
 }
 
 std::filesystem::path exeDir = [] {
@@ -370,6 +377,25 @@ struct Window {
         settings.windowH = windowRect.bottom - windowRect.top;
         settings.renderW = clientRect.right - clientRect.left;
         settings.renderH = clientRect.bottom - clientRect.top;
+    }
+
+    void hideCursor(bool hide) {
+        if (hide) {
+            RECT windowRect;
+            assert(GetWindowRect(hwnd, &windowRect));
+            POINT cursorP = {0, 0};
+            GetCursorPos(&cursorP);
+            if (cursorP.x <= windowRect.left || cursorP.x >= windowRect.right || cursorP.y <= windowRect.top || cursorP.y >= windowRect.bottom) {
+                cursorP = {windowRect.left + (windowRect.right - windowRect.left) / 2, windowRect.top + (windowRect.bottom - windowRect.top) / 2};
+                SetCursorPos(cursorP.x, cursorP.y);
+            }
+            RECT rect = {cursorP.x, cursorP.y, cursorP.x, cursorP.y};
+            ClipCursor(&rect);
+            ShowCursor(false);
+        } else {
+            ClipCursor(nullptr);
+            ShowCursor(true);
+        }
     }
 };
 
@@ -971,6 +997,131 @@ struct D3D {
 
 static D3D d3d = {};
 
+struct Controller {
+    bool back, start;
+    bool a, b, x, y;
+    bool up, down, left, right;
+    bool lb, rb;
+    float lt, rt;
+    bool ls, rs;
+    float lsX, lsY, rsX, rsY;
+
+    float deadZone = 0.25f;
+
+    HANDLE dualSenseHID;
+
+    void reset() {
+        back = start = false;
+        a = b = x = y = false;
+        up = down = left = right = false;
+        lb = rb = false;
+        lt = rt = 0;
+        ls = rs = false;
+        lsX = lsY = rsX = rsY = 0;
+    }
+
+    void applyDeadZone() {
+        float lDistance = sqrtf(lsX * lsX + lsY * lsY);
+        if (lDistance > 0) {
+            float lDistanceNew = std::max(0.0f, lDistance - deadZone) / (1.0f - deadZone);
+            lsX = lsX / lDistance * lDistanceNew;
+            lsY = lsY / lDistance * lDistanceNew;
+        }
+        float rDistance = sqrtf(rsX * rsX + rsY * rsY);
+        if (rDistance > 0) {
+            float rDistanceNew = std::max(0.0f, rDistance - deadZone) / (1.0f - deadZone);
+            rsX = rsX / rDistance * rDistanceNew;
+            rsY = rsY / rDistance * rDistanceNew;
+        }
+    }
+
+    bool stickMoved() {
+        return lsX != 0 || lsY != 0 || rsX != 0 || rsY != 0;
+    }
+
+    std::string toString() {
+        std::string s = std::format("ls({}, {}) rs({}, {})\nlt({}) rt({})\n", lsX, lsY, rsX, rsY, lt, rt);
+        if (a) s += "A ";
+        if (b) s += "B ";
+        if (x) s += "X ";
+        if (y) s += "Y ";
+        if (up) s += "up ";
+        if (down) s += "down ";
+        if (left) s += "left ";
+        if (right) s += "right ";
+        if (lb) s += "lb ";
+        if (rb) s += "rb ";
+        if (ls) s += "ls ";
+        if (rs) s += "rs ";
+        if (back) s += "back ";
+        if (start) s += "start ";
+        s += '\n';
+        return s;
+    }
+
+    void getStateDualSense(uint8* packet, uint packetSize) {
+        reset();
+        uint n = (packetSize == 64) ? 0 : 1;
+        lsX = (packet[n + 1] / 255.0f) * 2.0f - 1.0f;
+        lsY = -((packet[n + 2] / 255.0f) * 2.0f - 1.0f);
+        rsX = (packet[n + 3] / 255.0f) * 2.0f - 1.0f;
+        rsY = -((packet[n + 4] / 255.0f) * 2.0f - 1.0f);
+        lt = packet[n + 5] / 255.0f;
+        rt = packet[n + 6] / 255.0f;
+        switch (packet[n + 8] & 0x0f) {
+        case 0x0: up = true; break;
+        case 0x1: up = right = true; break;
+        case 0x2: right = true; break;
+        case 0x3: down = right = true; break;
+        case 0x4: down = true; break;
+        case 0x5: down = left = true; break;
+        case 0x6: left = true; break;
+        case 0x7: up = left = true; break;
+        }
+        x = packet[n + 8] & 0x10;
+        a = packet[n + 8] & 0x20;
+        b = packet[n + 8] & 0x40;
+        y = packet[n + 8] & 0x80;
+        lb = packet[n + 9] & 0x01;
+        rb = packet[n + 9] & 0x02;
+        back = packet[n + 9] & 0x10;
+        start = packet[n + 9] & 0x20;
+        ls = packet[n + 9] & 0x40;
+        rs = packet[n + 9] & 0x80;
+        applyDeadZone();
+    }
+
+    void getStateXInput() {
+        reset();
+        XINPUT_STATE state;
+        if (XInputGetState(0, &state) == ERROR_SUCCESS) {
+            back = state.Gamepad.wButtons & XINPUT_GAMEPAD_BACK;
+            start = state.Gamepad.wButtons & XINPUT_GAMEPAD_START;
+            a = state.Gamepad.wButtons & XINPUT_GAMEPAD_A;
+            b = state.Gamepad.wButtons & XINPUT_GAMEPAD_B;
+            x = state.Gamepad.wButtons & XINPUT_GAMEPAD_X;
+            y = state.Gamepad.wButtons & XINPUT_GAMEPAD_Y;
+            up = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP;
+            down = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN;
+            left = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT;
+            right = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT;
+            lb = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER;
+            rb = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER;
+            lt = state.Gamepad.bLeftTrigger / 255.0f;
+            rt = state.Gamepad.bRightTrigger / 255.0f;
+            ls = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB;
+            rs = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB;
+            lsX = state.Gamepad.sThumbLX / 32767.0f;
+            lsY = state.Gamepad.sThumbLY / 32767.0f;
+            rsX = state.Gamepad.sThumbRX / 32767.0f;
+            rsY = state.Gamepad.sThumbRY / 32767.0f;
+            applyDeadZone();
+        }
+    }
+};
+
+static Controller controller = {};
+
 struct CameraEditor {
     float3 position;
     float3 lookAt;
@@ -1366,15 +1517,30 @@ struct ModelInstance {
     }
 };
 
+enum PlayerState {
+    PlayerStateIdle,
+    PlayerStateWalk,
+    PlayerStateRun,
+    PlayerStateJump,
+};
+
+struct PlayerStateTransition {
+};
+
 struct Player {
     ModelInstance model;
     float3 spawnPosition;
     float3 position;
+    float3 PitchYawRoll;
+    float walkSpeed;
+    float runSpeed;
+    PlayerState state;
     float3 velocity;
     float3 acceleration;
     uint idleAnimationIndex;
     uint walkAnimationIndex;
     uint runAnimationIndex;
+    uint jumpAnimationIndex;
     CameraPlayer camera;
 
     void release() { model.release(); }
@@ -1383,6 +1549,8 @@ struct Player {
 struct StaticObject {
     std::string name;
     ModelInstance model;
+    float3 spawnPosition;
+    float3 position;
     bool toBeDeleted;
 
     void release() { model.release(); }
@@ -1391,6 +1559,8 @@ struct StaticObject {
 struct DynamicObject {
     std::string name;
     ModelInstance model;
+    float3 spawnPosition;
+    float3 position;
     bool toBeDeleted;
 
     void release() { model.release(); }
@@ -1486,11 +1656,13 @@ struct World {
             player.model.transform << playerYaml;
             player.spawnPosition << playerYaml["spawnPosition"];
             player.position = player.spawnPosition;
-            player.velocity << playerYaml["velocity"];
-            player.acceleration << playerYaml["acceleration"];
+            player.state = PlayerStateIdle;
+            playerYaml["walkSpeed"] >> player.walkSpeed;
+            playerYaml["runSpeed"] >> player.runSpeed;
             playerYaml["idleAnimationIndex"] >> player.idleAnimationIndex;
             playerYaml["walkAnimationIndex"] >> player.walkAnimationIndex;
             playerYaml["runAnimationIndex"] >> player.runAnimationIndex;
+            playerYaml["jumpAnimationIndex"] >> player.jumpAnimationIndex;
             player.model.animation = &player.model.model->animations[player.idleAnimationIndex];
             player.camera.lookAtOffset << playerYaml["cameraLookAtOffset"];
             playerYaml["cameraDistance"] >> player.camera.distance;
@@ -1542,11 +1714,12 @@ struct World {
         playerYaml["file"] << editor->player.model.model->filePath.string();
         editor->player.model.transform >> playerYaml;
         editor->player.spawnPosition >> playerYaml["spawnPosition"];
-        editor->player.velocity >> playerYaml["velocity"];
-        editor->player.acceleration >> playerYaml["acceleration"];
+        playerYaml["walkSpeed"] << editor->player.walkSpeed;
+        playerYaml["runSpeed"] << editor->player.runSpeed;
         playerYaml["idleAnimationIndex"] << editor->player.idleAnimationIndex;
         playerYaml["walkAnimationIndex"] << editor->player.walkAnimationIndex;
         playerYaml["runAnimationIndex"] << editor->player.runAnimationIndex;
+        playerYaml["jumpAnimationIndex"] << editor->player.jumpAnimationIndex;
         editor->player.camera.lookAtOffset >> playerYaml["cameraLookAtOffset"];
         playerYaml["cameraDistance"] << editor->player.camera.distance;
 
@@ -1900,131 +2073,6 @@ struct World {
 
 static World world = {};
 
-struct Controller {
-    bool back, start;
-    bool a, b, x, y;
-    bool up, down, left, right;
-    bool lb, rb;
-    float lt, rt;
-    bool ls, rs;
-    float lsX, lsY, rsX, rsY;
-
-    float deadZone = 0.25f;
-
-    HANDLE dualSenseHID;
-
-    void reset() {
-        back = start = false;
-        a = b = x = y = false;
-        up = down = left = right = false;
-        lb = rb = false;
-        lt = rt = 0;
-        ls = rs = false;
-        lsX = lsY = rsX = rsY = 0;
-    }
-
-    void applyDeadZone() {
-        float lDistance = sqrtf(lsX * lsX + lsY * lsY);
-        if (lDistance > 0) {
-            float lDistanceNew = std::max(0.0f, lDistance - deadZone) / (1.0f - deadZone);
-            lsX = lsX / lDistance * lDistanceNew;
-            lsY = lsY / lDistance * lDistanceNew;
-        }
-        float rDistance = sqrtf(rsX * rsX + rsY * rsY);
-        if (rDistance > 0) {
-            float rDistanceNew = std::max(0.0f, rDistance - deadZone) / (1.0f - deadZone);
-            rsX = rsX / rDistance * rDistanceNew;
-            rsY = rsY / rDistance * rDistanceNew;
-        }
-    }
-
-    bool stickMoved() {
-        return lsX != 0 || lsY != 0 || rsX != 0 || rsY != 0;
-    }
-
-    std::string toString() {
-        std::string s = std::format("ls({}, {}) rs({}, {})\nlt({}) rt({})\n", lsX, lsY, rsX, rsY, lt, rt);
-        if (a) s += "A ";
-        if (b) s += "B ";
-        if (x) s += "X ";
-        if (y) s += "Y ";
-        if (up) s += "up ";
-        if (down) s += "down ";
-        if (left) s += "left ";
-        if (right) s += "right ";
-        if (lb) s += "lb ";
-        if (rb) s += "rb ";
-        if (ls) s += "ls ";
-        if (rs) s += "rs ";
-        if (back) s += "back ";
-        if (start) s += "start ";
-        s += '\n';
-        return s;
-    }
-
-    void getStateDualSense(uint8* packet, uint packetSize) {
-        reset();
-        uint n = (packetSize == 64) ? 0 : 1;
-        lsX = (packet[n + 1] / 255.0f) * 2.0f - 1.0f;
-        lsY = -((packet[n + 2] / 255.0f) * 2.0f - 1.0f);
-        rsX = (packet[n + 3] / 255.0f) * 2.0f - 1.0f;
-        rsY = -((packet[n + 4] / 255.0f) * 2.0f - 1.0f);
-        lt = packet[n + 5] / 255.0f;
-        rt = packet[n + 6] / 255.0f;
-        switch (packet[n + 8] & 0x0f) {
-        case 0x0: up = true; break;
-        case 0x1: up = right = true; break;
-        case 0x2: right = true; break;
-        case 0x3: down = right = true; break;
-        case 0x4: down = true; break;
-        case 0x5: down = left = true; break;
-        case 0x6: left = true; break;
-        case 0x7: up = left = true; break;
-        }
-        x = packet[n + 8] & 0x10;
-        a = packet[n + 8] & 0x20;
-        b = packet[n + 8] & 0x40;
-        y = packet[n + 8] & 0x80;
-        lb = packet[n + 9] & 0x01;
-        rb = packet[n + 9] & 0x02;
-        back = packet[n + 9] & 0x10;
-        start = packet[n + 9] & 0x20;
-        ls = packet[n + 9] & 0x40;
-        rs = packet[n + 9] & 0x80;
-        applyDeadZone();
-    }
-
-    void getStateXInput() {
-        reset();
-        XINPUT_STATE state;
-        if (XInputGetState(0, &state) == ERROR_SUCCESS) {
-            back = state.Gamepad.wButtons & XINPUT_GAMEPAD_BACK;
-            start = state.Gamepad.wButtons & XINPUT_GAMEPAD_START;
-            a = state.Gamepad.wButtons & XINPUT_GAMEPAD_A;
-            b = state.Gamepad.wButtons & XINPUT_GAMEPAD_B;
-            x = state.Gamepad.wButtons & XINPUT_GAMEPAD_X;
-            y = state.Gamepad.wButtons & XINPUT_GAMEPAD_Y;
-            up = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP;
-            down = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN;
-            left = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT;
-            right = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT;
-            lb = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER;
-            rb = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER;
-            lt = state.Gamepad.bLeftTrigger / 255.0f;
-            rt = state.Gamepad.bRightTrigger / 255.0f;
-            ls = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB;
-            rs = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB;
-            lsX = state.Gamepad.sThumbLX / 32767.0f;
-            lsY = state.Gamepad.sThumbLY / 32767.0f;
-            rsX = state.Gamepad.sThumbRX / 32767.0f;
-            rsY = state.Gamepad.sThumbRY / 32767.0f;
-            applyDeadZone();
-        }
-    }
-};
-
-static Controller controller = {};
-
 static bool quit = false;
 static LARGE_INTEGER perfFrequency = {};
 static LARGE_INTEGER perfCounters[2] = {};
@@ -2226,23 +2274,10 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
     return result;
 }
 
-void hideCursor(bool hide) {
-    if (hide) {
-        POINT cursorP;
-        GetCursorPos(&cursorP);
-        RECT rect = {cursorP.x, cursorP.y, cursorP.x, cursorP.y};
-        ClipCursor(&rect);
-        ShowCursor(false);
-    } else {
-        ClipCursor(nullptr);
-        ShowCursor(true);
-    }
-}
-
 void editorUpdate() {
     if (ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
         editor->active = false;
-        hideCursor(true);
+        window.hideCursor(true);
         world.resetToEditor();
         return;
     }
@@ -2350,7 +2385,7 @@ void editorUpdate() {
         if (ImGui::BeginMenu("Game")) {
             if (ImGui::MenuItem("Play", "CTRL+P")) {
                 editor->active = false;
-                hideCursor(false);
+                window.hideCursor(false);
                 world.resetToEditor();
             }
             ImGui::EndMenu();
@@ -2451,6 +2486,7 @@ void editorUpdate() {
                     selectAnimation("idle", &editor->player.idleAnimationIndex);
                     selectAnimation("walk", &editor->player.walkAnimationIndex);
                     selectAnimation("run", &editor->player.runAnimationIndex);
+                    selectAnimation("jump", &editor->player.jumpAnimationIndex);
                 }
                 ImGui::TreePop();
             }
@@ -2525,11 +2561,11 @@ void editorUpdate() {
 
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !ImGui::GetIO().WantCaptureMouse) {
         editor->cameraMoving = true;
-        hideCursor(true);
+        window.hideCursor(true);
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
         editor->cameraMoving = false;
-        hideCursor(false);
+        window.hideCursor(false);
     }
     if (editor->cameraMoving || controller.stickMoved()) {
         float pitch = (mouseDeltaRaw[1] * mouseSensitivity - controller.rsY * controllerSensitivity) * (float)frameTime;
@@ -2619,17 +2655,56 @@ void editorUpdate() {
 void gameUpdate() {
     if (editor && ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
         editor->active = true;
-        hideCursor(false);
+        window.hideCursor(false);
         return;
     }
-
-    world.player.model.updateSkinsMats(frameTime);
-    for (StaticObject& obj : world.staticObjects) obj.model.updateSkinsMats(frameTime);
-    for (DynamicObject& obj : world.dynamicObjects) obj.model.updateSkinsMats(frameTime);
     {
         float pitch = (mouseDeltaRaw[1] * mouseSensitivity - controller.rsY * controllerSensitivity) * (float)frameTime;
         float yaw = (mouseDeltaRaw[0] * mouseSensitivity + controller.rsX * controllerSensitivity) * (float)frameTime;
         world.player.camera.setPitchYaw(world.player.camera.pitchYaw + float2(pitch, yaw));
+
+        float3 forwardDir = (world.player.camera.lookAt - world.player.camera.position);
+        forwardDir.y = 0;
+        forwardDir = forwardDir.normalize();
+        float3 sideDir = forwardDir.cross(float3(0, 1, 0));
+        float3 playerMovement = {0, 0, 0};
+        if (ImGui::IsKeyDown(ImGuiKey_W)) playerMovement = forwardDir;
+        if (ImGui::IsKeyDown(ImGuiKey_S)) playerMovement = -forwardDir;
+        if (ImGui::IsKeyDown(ImGuiKey_A)) playerMovement = sideDir;
+        if (ImGui::IsKeyDown(ImGuiKey_D)) playerMovement = -sideDir;
+        playerMovement += forwardDir * controller.lsY;
+        playerMovement += sideDir * -controller.lsX;
+        playerMovement = playerMovement.normalize();
+        if (playerMovement.length() < 0.0001f) {
+            world.player.state = PlayerStateIdle;
+        } else {
+            float3 translate;
+            if (sqrtf(controller.lsX * controller.lsX + controller.lsY * controller.lsY) < 0.5f) {
+                world.player.state = PlayerStateWalk;
+                translate = playerMovement * world.player.walkSpeed * (float)frameTime;
+            } else {
+                world.player.state = PlayerStateRun;
+                translate = playerMovement * world.player.runSpeed * (float)frameTime;
+            }
+            world.player.position += translate;
+            world.player.camera.translate(translate);
+            float angle = acosf(playerMovement.dot(float3(0, 0, -1)));
+            if (playerMovement.x > 0) angle = -angle;
+            world.player.PitchYawRoll = float3(0, angle, 0);
+        }
+
+        if (world.player.state == PlayerStateIdle) {
+            world.player.model.animation = &world.player.model.model->animations[world.player.idleAnimationIndex];
+        } else if (world.player.state == PlayerStateWalk) {
+            world.player.model.animation = &world.player.model.model->animations[world.player.walkAnimationIndex];
+        } else if (world.player.state == PlayerStateRun) {
+            world.player.model.animation = &world.player.model.model->animations[world.player.runAnimationIndex];
+        }
+    }
+    {
+        world.player.model.updateSkinsMats(frameTime);
+        for (StaticObject& obj : world.staticObjects) obj.model.updateSkinsMats(frameTime);
+        for (DynamicObject& obj : world.dynamicObjects) obj.model.updateSkinsMats(frameTime);
     }
 }
 
@@ -2783,7 +2858,10 @@ void render() {
             }
         } else {
             world.player.model.buildSkinnedMeshesBLASs();
-            addTLASInstance(world.player.model, XMMatrixTranslationFromVector(world.player.position.toXMVector()), WorldObjectTypePlayer, 0);
+            XMVECTOR translate = world.player.position.toXMVector();
+            XMVECTOR rotate = XMQuaternionRotationRollPitchYaw(0, world.player.PitchYawRoll.y, 0);
+            XMMATRIX transformMat = XMMatrixAffineTransformation(XMVectorSet(1, 1, 1, 0), world.player.model.transform.t.toXMVector(), rotate, translate);
+            addTLASInstance(world.player.model, transformMat, WorldObjectTypePlayer, 0);
             for (uint objIndex = 0; objIndex < world.staticObjects.size(); objIndex++) {
                 world.staticObjects[objIndex].model.buildSkinnedMeshesBLASs();
                 addTLASInstance(world.staticObjects[objIndex].model, XMMatrixIdentity(), WorldObjectTypeStaticObject, objIndex);
@@ -2827,6 +2905,7 @@ void render() {
         }
     }
     {
+        ZoneScopedN("collisionDetection");
         D3D12_RESOURCE_BARRIER readBackBufferBarriers[2] = {
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.readBackUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.readBackUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS, .StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE}},
@@ -2855,6 +2934,7 @@ void render() {
         d3d.graphicsCmdList->CopyBufferRegion(d3d.collisionQueryResultsBuffer->GetResource(), 0, d3d.collisionQueryResultsUavBuffer->GetResource(), 0, d3d.collisionQueryResultsBuffer->GetSize());
     }
     {
+        ZoneScopedN("imgui");
         uint swapChainBackBufferIndex = d3d.swapChain->GetCurrentBackBufferIndex();
         D3D12_RESOURCE_BARRIER swapChainImageTransition = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.swapChainImages[swapChainBackBufferIndex], .StateBefore = D3D12_RESOURCE_STATE_PRESENT, .StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET}};
         d3d.graphicsCmdList->ResourceBarrier(1, &swapChainImageTransition);
@@ -2912,9 +2992,12 @@ void render() {
         std::swap(swapChainImageTransition.Transition.StateBefore, swapChainImageTransition.Transition.StateAfter);
         d3d.graphicsCmdList->ResourceBarrier(1, &swapChainImageTransition);
     }
-    d3d.graphicsQueueSubmitRecording();
-    d3d.graphicsQueueWait();
-    assert(SUCCEEDED(d3d.swapChain->Present(0, 0)));
+    {
+        ZoneScopedN("submit");
+        d3d.graphicsQueueSubmitRecording();
+        d3d.graphicsQueueWait();
+        assert(SUCCEEDED(d3d.swapChain->Present(0, 0)));
+    }
 }
 
 int main(int argc, char** argv) {
