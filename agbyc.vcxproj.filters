@@ -31,7 +31,7 @@
     </None>
   </ItemGroup>
   <ItemGroup>
-    <FxCompile Include="src\hlsl\collisionDetection.hlsl">
+    <FxCompile Include="src\hlsl\collisionQuery.hlsl">
       <Filter>HLSL</Filter>
     </FxCompile>
     <FxCompile Include="src\hlsl\imguiPS.hlsl">

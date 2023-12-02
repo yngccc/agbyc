@@ -4,17 +4,16 @@
 
 #define HDR_SCALE_FACTOR (80.0f / 10000.0f)
 
-#define RENDER_TEXTURE_SRV_DESCRIPTOR(name) Texture2D<float4> name = ResourceDescriptorHeap[0]
-#define RENDER_TEXTURE_UAV_DESCRIPTOR(name) RWTexture2D<float4> name = ResourceDescriptorHeap[1]
-#define RENDER_INFO_DESCRIPTOR(name) ConstantBuffer<RenderInfo> name = ResourceDescriptorHeap[2]
-#define BVH_DESCRIPTOR(name) RaytracingAccelerationStructure name = ResourceDescriptorHeap[3]
-#define TLAS_INSTANCES_INFOS_DESCRIPTOR(name) StructuredBuffer<TLASInstanceInfo> name = ResourceDescriptorHeap[4]
-#define BLAS_GEOMETRIES_INFOS_DESCRIPTOR(name) StructuredBuffer<BLASGeometryInfo> name = ResourceDescriptorHeap[5]
-#define SKYBOX_TEXTURE_DESCRIPTOR(name) Texture2D<float3> name = ResourceDescriptorHeap[6]
-#define READBACK_BUFFER_DESCRIPTOR(name) RWStructuredBuffer<ReadBackBuffer> name = ResourceDescriptorHeap[7]
-#define IMGUI_IMAGE_DESCRIPTOR(name) Texture2D<float4> name = ResourceDescriptorHeap[8]
-#define COLLISION_QUERIES_DESCRIPTOR(name) StructuredBuffer<CollisionQuery> name = ResourceDescriptorHeap[9]
-#define COLLISION_QUERY_RESULTS_DESCRIPTOR(name) RWStructuredBuffer<CollisionQueryResult> name = ResourceDescriptorHeap[10]
+#define RENDER_TEXTURE_SRV_DESCRIPTOR(name) Texture2D<float4> name = ResourceDescriptorHeap[0];
+#define RENDER_TEXTURE_UAV_DESCRIPTOR(name) RWTexture2D<float4> name = ResourceDescriptorHeap[1];
+#define RENDER_INFO_DESCRIPTOR(name) ConstantBuffer<RenderInfo> name = ResourceDescriptorHeap[2];
+#define BVH_DESCRIPTOR(name) RaytracingAccelerationStructure name = ResourceDescriptorHeap[3];
+#define TLAS_INSTANCES_INFOS_DESCRIPTOR(name) StructuredBuffer<TLASInstanceInfo> name = ResourceDescriptorHeap[4];
+#define BLAS_GEOMETRIES_INFOS_DESCRIPTOR(name) StructuredBuffer<BLASGeometryInfo> name = ResourceDescriptorHeap[5];
+#define SKYBOX_TEXTURE_DESCRIPTOR(name) Texture2D<float3> name = ResourceDescriptorHeap[6];
+#define IMGUI_IMAGE_DESCRIPTOR(name) Texture2D<float4> name = ResourceDescriptorHeap[7];
+#define COLLISION_QUERIES_DESCRIPTOR(name) StructuredBuffer<CollisionQuery> name = ResourceDescriptorHeap[8];
+#define COLLISION_QUERY_RESULTS_DESCRIPTOR(name) RWStructuredBuffer<CollisionQueryResult> name = ResourceDescriptorHeap[9];
 
 float srgbToLinear(float e) {
     if (e <= 0.04045) {
@@ -75,18 +74,14 @@ bool barycentricsOnEdge(in float2 barycentrics, in float edgeThickness) {
     return (barycentrics.x < edgeThickness) || (barycentrics.y < edgeThickness) || ((1.0 - barycentrics.x - barycentrics.y) < edgeThickness);
 }
 
-RayDesc generatePinholeCameraRay(in float2 pixel, in float4x4 cameraViewMat, in float4x4 cameraProjMat) {
+RayDesc generatePinholeCameraRay(in float2 pixelCoord, in float4x4 cameraViewMat, in float4x4 cameraProjMat) {
     RayDesc ray;
     ray.Origin = cameraViewMat[3].xyz;
     ray.TMin = 0.0f;
     ray.TMax = FLT_MAX;
     float aspect = cameraProjMat[1][1] / cameraProjMat[0][0];
     float tanHalfFovY = 1.0f / cameraProjMat[1][1];
-    ray.Direction = normalize(
-        (pixel.x * cameraViewMat[0].xyz * tanHalfFovY * aspect) -
-		(pixel.y * cameraViewMat[1].xyz * tanHalfFovY) +
-        cameraViewMat[2].xyz
-    );
+    ray.Direction = normalize((pixelCoord.x * cameraViewMat[0].xyz * tanHalfFovY * aspect) - (pixelCoord.y * cameraViewMat[1].xyz * tanHalfFovY) + cameraViewMat[2].xyz);
     return ray;
 }
 

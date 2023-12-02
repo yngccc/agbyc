@@ -173,7 +173,7 @@
     <None Include="src\sharedStructs.h" />
   </ItemGroup>
   <ItemGroup>
-    <FxCompile Include="src\hlsl\collisionDetection.hlsl">
+    <FxCompile Include="src\hlsl\collisionQuery.hlsl">
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.6</ShaderModel>
       <EntryPointName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
       </EntryPointName>

@@ -118,9 +118,14 @@ struct float2 {
     float2(float x, float y) : x(x), y(y) {}
     bool operator==(float2 v) const { return x == v.x && y == v.y; }
     bool operator!=(float2 v) const { return x != v.x || y != v.y; }
+    float2 operator+(float v) const { return float2(x + v, y + v); }
     float2 operator+(float2 v) const { return float2(x + v.x, y + v.y); }
+    float2 operator-(float v) const { return float2(x - v, y - v); }
+    float2 operator-(float2 v) const { return float2(x - v.x, y - v.y); }
     float2 operator*(float v) const { return float2(x * v, y * v); }
+    float2 operator*(float2 v) const { return float2(x * v.x, y * v.y); }
     float2 operator/(float v) const { return float2(x / v, y / v); }
+    float2 operator/(float2 v) const { return float2(x / v.x, y / v.y); }
     void operator<<(ryml::ConstNodeRef node) { node[0] >> x, node[1] >> y; }
     void operator>>(ryml::NodeRef node) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << x, node.append_child() << y; }
     std::string toString() const { return std::format("[{}, {}]", x, y); }
@@ -472,10 +477,6 @@ struct D3D {
     uint8* constantBufferPtr;
     uint constantBufferOffset = 0;
 
-    D3D12MA::Allocation* readBackUAVBuffer;
-    D3D12MA::Allocation* readBackBuffer;
-    ReadBackBuffer* readBackBufferPtr;
-
     D3D12MA::Allocation* renderTexture;
     DXGI_FORMAT renderTextureFormat;
 
@@ -499,10 +500,10 @@ struct D3D {
     D3D12MA::Allocation* tlasScratchBuffer;
 
     D3D12MA::Allocation* collisionQueriesBuffer;
-    uint8* collisionQueriesBufferPtr;
-    D3D12MA::Allocation* collisionQueryResultsUavBuffer;
+    CollisionQuery* collisionQueriesBufferPtr;
+    D3D12MA::Allocation* collisionQueryResultsUAVBuffer;
     D3D12MA::Allocation* collisionQueryResultsBuffer;
-    uint8* collisionQueryResultsBufferPtr;
+    CollisionQueryResult* collisionQueryResultsBufferPtr;
 
     ID3D12PipelineState* vertexSkinningPSO;
     ID3D12RootSignature* vertexSkinningRootSig;
@@ -516,12 +517,12 @@ struct D3D {
     void* renderSceneSecondaryRayMissID;
     void* renderSceneSecondaryRayHitGroupID;
 
-    ID3D12StateObject* collisionDetection;
-    ID3D12StateObjectProperties* collisionDetectionProps;
-    ID3D12RootSignature* collisionDetectionRootSig;
-    void* collisionDetectionRayGenID;
-    void* collisionDetectionMissID;
-    void* collisionDetectionHitGroupID;
+    ID3D12StateObject* collisionQuery;
+    ID3D12StateObjectProperties* collisionQueryProps;
+    ID3D12RootSignature* collisionQueryRootSig;
+    void* collisionQueryRayGenID;
+    void* collisionQueryMissID;
+    void* collisionQueryHitGroupID;
 
     ID3D12PipelineState* postProcessPSO;
     ID3D12RootSignature* postProcessRootSig;
@@ -658,27 +659,25 @@ struct D3D {
         {
             struct BufferDesc {
                 D3D12MA::Allocation** buffer;
-                uint8** bufferPtr;
+                void** bufferPtr;
                 uint size;
                 D3D12_HEAP_TYPE heapType;
                 D3D12_RESOURCE_FLAGS flags;
                 D3D12_RESOURCE_STATES initState;
                 const wchar_t* name;
             } descs[] = {
-                {&stagingBuffer, &stagingBufferPtr, megabytes(256), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_SOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"stagingBuffer"},
-                {&constantBuffer, &constantBufferPtr, megabytes(4), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer"},
-                {&tlasInstancesBuildInfosBuffer, &tlasInstancesBuildInfosBufferPtr, megabytes(32), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesBuildInfosBuffer"},
-                {&tlasInstancesInfosBuffer, &tlasInstancesInfosBufferPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesInfosBuffer"},
-                {&blasGeometriesInfosBuffer, &blasGeometriesInfosBufferPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"blasGeometriesInfosBuffer"},
+                {&stagingBuffer, (void**)&stagingBufferPtr, megabytes(256), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_SOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"stagingBuffer"},
+                {&constantBuffer, (void**)&constantBufferPtr, megabytes(4), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer"},
+                {&tlasInstancesBuildInfosBuffer, (void**)&tlasInstancesBuildInfosBufferPtr, megabytes(32), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesBuildInfosBuffer"},
+                {&tlasInstancesInfosBuffer, (void**)&tlasInstancesInfosBufferPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesInfosBuffer"},
+                {&blasGeometriesInfosBuffer, (void**)&blasGeometriesInfosBufferPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"blasGeometriesInfosBuffer"},
                 {&tlasBuffer, nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"tlasBuffer"},
                 {&tlasScratchBuffer, nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"tlasScratchBuffer"},
-                {&imguiVertexBuffer, &imguiVertexBufferPtr, megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiVertexBuffer"},
-                {&imguiIndexBuffer, &imguiIndexBufferPtr, megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiIndexBuffer"},
-                {&readBackUAVBuffer, nullptr, megabytes(2), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"readBackUavBuffer"},
-                {&readBackBuffer, (uint8**)&readBackBufferPtr, megabytes(2), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"readBackBuffer"},
-                {&collisionQueriesBuffer, &collisionQueriesBufferPtr, megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, L"collisionQueriesBuffer"},
-                {&collisionQueryResultsUavBuffer, nullptr, megabytes(1), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"collisionQueryResultsUavBuffer"},
-                {&collisionQueryResultsBuffer, &collisionQueryResultsBufferPtr, megabytes(1), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"collisionQueryResultsBuffer"},
+                {&imguiVertexBuffer, (void**)&imguiVertexBufferPtr, megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiVertexBuffer"},
+                {&imguiIndexBuffer, (void**)&imguiIndexBufferPtr, megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiIndexBuffer"},
+                {&collisionQueriesBuffer, (void**)&collisionQueriesBufferPtr, megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, L"collisionQueriesBuffer"},
+                {&collisionQueryResultsUAVBuffer, nullptr, megabytes(1), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"collisionQueryResultsUAVBuffer"},
+                {&collisionQueryResultsBuffer, (void**)&collisionQueryResultsBufferPtr, megabytes(1), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"collisionQueryResultsBuffer"},
             };
             for (BufferDesc& desc : descs) {
                 D3D12_RESOURCE_DESC bufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = desc.size, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = desc.flags};
@@ -686,7 +685,7 @@ struct D3D {
                 assert(SUCCEEDED(allocator->CreateResource(&allocationDesc, &bufferDesc, desc.initState, nullptr, desc.buffer, {}, nullptr)));
                 (*desc.buffer)->GetResource()->SetName(desc.name);
                 if (desc.bufferPtr) {
-                    assert(SUCCEEDED((*desc.buffer)->GetResource()->Map(0, nullptr, (void**)desc.bufferPtr)));
+                    assert(SUCCEEDED((*desc.buffer)->GetResource()->Map(0, nullptr, desc.bufferPtr)));
                 }
             }
         }
@@ -764,17 +763,17 @@ struct D3D {
             assert(renderSceneSecondaryRayHitGroupID = renderSceneProps->GetShaderIdentifier(L"secondaryRayHitGroup"));
         }
         {
-            std::vector<uint8> rtByteCode = fileReadBytes(exeDir / "collisionDetection.cso");
-            assert(SUCCEEDED(device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&collisionDetectionRootSig))));
+            std::vector<uint8> rtByteCode = fileReadBytes(exeDir / "collisionQuery.cso");
+            assert(SUCCEEDED(device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&collisionQueryRootSig))));
             D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"miss"}, {L"hitGroup"}, {L"closestHit"}};
             D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
             D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
             D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
-            assert(SUCCEEDED(device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&collisionDetection))));
-            assert(SUCCEEDED(collisionDetection->QueryInterface(IID_PPV_ARGS(&collisionDetectionProps))));
-            assert(collisionDetectionRayGenID = collisionDetectionProps->GetShaderIdentifier(L"rayGen"));
-            assert(collisionDetectionMissID = collisionDetectionProps->GetShaderIdentifier(L"miss"));
-            assert(collisionDetectionHitGroupID = collisionDetectionProps->GetShaderIdentifier(L"hitGroup"));
+            assert(SUCCEEDED(device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&collisionQuery))));
+            assert(SUCCEEDED(collisionQuery->QueryInterface(IID_PPV_ARGS(&collisionQueryProps))));
+            assert(collisionQueryRayGenID = collisionQueryProps->GetShaderIdentifier(L"rayGen"));
+            assert(collisionQueryMissID = collisionQueryProps->GetShaderIdentifier(L"miss"));
+            assert(collisionQueryHitGroupID = collisionQueryProps->GetShaderIdentifier(L"hitGroup"));
         }
         {
             std::vector<uint8> vsByteCode = fileReadBytes(exeDir / "postProcessVS.cso");
@@ -1410,35 +1409,35 @@ struct ModelInstance {
             for (ModelAnimationChannel& channel : animation->channels) {
                 float4 frame0 = channel.sampler->keyFrames[0].xyzw;
                 float4 frame1 = channel.sampler->keyFrames[1].xyzw;
-                float progress = 0;
+                float percentage = 0;
                 for (uint frameIndex = 1; frameIndex < channel.sampler->keyFrames.size(); frameIndex++) {
                     ModelAnimationSamplerKeyFrame& keyFrame = channel.sampler->keyFrames[frameIndex];
                     if (animationTime <= keyFrame.time) {
                         ModelAnimationSamplerKeyFrame& keyFramePrevious = channel.sampler->keyFrames[frameIndex - 1];
                         frame0 = keyFramePrevious.xyzw;
                         frame1 = keyFrame.xyzw;
-                        progress = ((float)animationTime - keyFramePrevious.time) / (keyFrame.time - keyFramePrevious.time);
+                        percentage = ((float)animationTime - keyFramePrevious.time) / (keyFrame.time - keyFramePrevious.time);
                         break;
                     }
                 }
                 int64 nodeIndex = channel.node - &model->nodes[0];
                 if (channel.type == AnimationChannelTypeTranslate) {
                     if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
-                        nodeLocalTransforms[nodeIndex].t = lerp(frame0.xyz(), frame1.xyz(), progress);
+                        nodeLocalTransforms[nodeIndex].t = lerp(frame0.xyz(), frame1.xyz(), percentage);
                     } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
-                        nodeLocalTransforms[nodeIndex].t = progress < 1.0f ? frame0.xyz() : frame1.xyz();
+                        nodeLocalTransforms[nodeIndex].t = percentage < 1.0f ? frame0.xyz() : frame1.xyz();
                     }
                 } else if (channel.type == AnimationChannelTypeRotate) {
                     if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
-                        nodeLocalTransforms[nodeIndex].r = slerp(frame0, frame1, progress);
+                        nodeLocalTransforms[nodeIndex].r = slerp(frame0, frame1, percentage);
                     } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
-                        nodeLocalTransforms[nodeIndex].r = progress < 1.0f ? frame0 : frame1;
+                        nodeLocalTransforms[nodeIndex].r = percentage < 1.0f ? frame0 : frame1;
                     }
                 } else if (channel.type == AnimationChannelTypeScale) {
                     if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
-                        nodeLocalTransforms[nodeIndex].s = lerp(frame0.xyz(), frame1.xyz(), progress);
+                        nodeLocalTransforms[nodeIndex].s = lerp(frame0.xyz(), frame1.xyz(), percentage);
                     } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
-                        nodeLocalTransforms[nodeIndex].s = progress < 1.0f ? frame0.xyz() : frame1.xyz();
+                        nodeLocalTransforms[nodeIndex].s = percentage < 1.0f ? frame0.xyz() : frame1.xyz();
                     }
                 }
             }
@@ -2283,7 +2282,7 @@ void editorUpdate() {
     }
 
     if (d3d.graphicsQueueFenceCounter > 0) {
-        uint mouseSelectInstanceIndex = d3d.readBackBufferPtr->mouseSelectInstanceIndex;
+        uint mouseSelectInstanceIndex = d3d.collisionQueryResultsBufferPtr[0].instanceIndex;
         if (mouseSelectInstanceIndex < world.tlasInstancesInfos.size()) {
             TLASInstanceInfo& info = world.tlasInstancesInfos[mouseSelectInstanceIndex];
             editor->selectedObjectType = info.objectType;
@@ -2800,6 +2799,22 @@ void render() {
 
     d3d.stagingBufferOffset = 0;
     d3d.constantBufferOffset = 0;
+
+    float3 cameraPosition = world.player.camera.position;
+    float3 cameraLookAt = world.player.camera.lookAt;
+    float cameraFovVertical = world.player.camera.fovVertical;
+    if (editor && editor->active) {
+        cameraPosition = editor->camera.position;
+        cameraLookAt = editor->camera.lookAt;
+        cameraFovVertical = editor->camera.fovVertical;
+    }
+    RenderInfo renderInfo = {
+        .cameraViewMat = XMMatrixTranspose(XMMatrixInverse(nullptr, XMMatrixLookAtLH(cameraPosition.toXMVector(), cameraLookAt.toXMVector(), XMVectorSet(0, 1, 0, 0)))),
+        .cameraProjMat = XMMatrixPerspectiveFovLH(radian(cameraFovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f),
+        .resolution = {settings.renderW, settings.renderH},
+        .hdr = settings.hdr,
+        .frameTime = (float)frameTime,
+    };
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC renderTextureSRVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = 1}};
         D3D12_UNORDERED_ACCESS_VIEW_DESC renderTextureUAVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
@@ -2807,7 +2822,6 @@ void render() {
         D3D12_SHADER_RESOURCE_VIEW_DESC tlasViewDesc = {.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .RaytracingAccelerationStructure = {.Location = d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress()}};
         D3D12_SHADER_RESOURCE_VIEW_DESC tlasInstancesInfosDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.tlasInstancesInfosBuffer->GetSize() / sizeof(struct TLASInstanceInfo)), .StructureByteStride = sizeof(struct TLASInstanceInfo)}};
         D3D12_SHADER_RESOURCE_VIEW_DESC blasGeometriesInfosDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.blasGeometriesInfosBuffer->GetSize() / sizeof(struct BLASGeometryInfo)), .StructureByteStride = sizeof(struct BLASGeometryInfo)}};
-        D3D12_UNORDERED_ACCESS_VIEW_DESC readBackBufferDesc = {.ViewDimension = D3D12_UAV_DIMENSION_BUFFER, .Buffer = {.NumElements = 1, .StructureByteStride = sizeof(struct ReadBackBuffer)}};
         D3D12_SHADER_RESOURCE_VIEW_DESC collisionQueriesDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = 1, .StructureByteStride = sizeof(struct CollisionQuery)}};
         D3D12_UNORDERED_ACCESS_VIEW_DESC collisionQueryResultsDesc = {.ViewDimension = D3D12_UAV_DIMENSION_BUFFER, .Buffer = {.NumElements = 1, .StructureByteStride = sizeof(struct CollisionQueryResult)}};
 
@@ -2818,28 +2832,11 @@ void render() {
         D3DDescriptor tlasInstancesInfosDescriptor = d3d.appendSRVDescriptor(&tlasInstancesInfosDesc, d3d.tlasInstancesInfosBuffer->GetResource());
         D3DDescriptor blasGeometriesInfosDescriptor = d3d.appendSRVDescriptor(&blasGeometriesInfosDesc, d3d.blasGeometriesInfosBuffer->GetResource());
         D3DDescriptor skyboxTextureDescriptor = d3d.appendSRVDescriptor(nullptr, world.skybox.hdriTexture->GetResource());
-        D3DDescriptor readBackBufferDescriptor = d3d.appendUAVDescriptor(&readBackBufferDesc, d3d.readBackUAVBuffer->GetResource());
         D3DDescriptor imguiImageDescriptor = d3d.appendSRVDescriptor(nullptr, d3d.imguiImage->GetResource());
         D3DDescriptor collisionQueriesDescriptor = d3d.appendSRVDescriptor(&collisionQueriesDesc, d3d.collisionQueriesBuffer->GetResource());
-        D3DDescriptor collisionQueryResultsDescriptor = d3d.appendUAVDescriptor(&collisionQueryResultsDesc, d3d.collisionQueryResultsUavBuffer->GetResource());
+        D3DDescriptor collisionQueryResultsDescriptor = d3d.appendUAVDescriptor(&collisionQueryResultsDesc, d3d.collisionQueryResultsUAVBuffer->GetResource());
     }
     {
-        float3 cameraPosition = world.player.camera.position;
-        float3 cameraLookAt = world.player.camera.lookAt;
-        float cameraFovVertical = world.player.camera.fovVertical;
-        if (editor && editor->active) {
-            cameraPosition = editor->camera.position;
-            cameraLookAt = editor->camera.lookAt;
-            cameraFovVertical = editor->camera.fovVertical;
-        }
-        RenderInfo renderInfo = {
-            .cameraViewMat = XMMatrixTranspose(XMMatrixInverse(nullptr, XMMatrixLookAtLH(cameraPosition.toXMVector(), cameraLookAt.toXMVector(), XMVectorSet(0, 1, 0, 0)))),
-            .cameraProjMat = XMMatrixPerspectiveFovLH(radian(cameraFovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f),
-            .resolution = {settings.renderW, settings.renderH},
-            .mouseSelectPosition = {mouseSelectX, mouseSelectY},
-            .hdr = settings.hdr,
-            .frameTime = (float)frameTime,
-        };
         assert(d3d.constantBufferOffset == 0);
         memcpy(d3d.constantBufferPtr + d3d.constantBufferOffset, &renderInfo, sizeof(renderInfo));
         d3d.constantBufferOffset += sizeof(renderInfo);
@@ -2905,33 +2902,41 @@ void render() {
         }
     }
     {
-        ZoneScopedN("collisionDetection");
-        D3D12_RESOURCE_BARRIER readBackBufferBarriers[2] = {
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.readBackUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.readBackUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS, .StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE}},
-        };
+        ZoneScopedN("collisionQuery");
+        if (mouseSelectX == UINT_MAX) {
+            d3d.collisionQueriesBufferPtr[0] = {.rayDesc = {.origin = {0, 0, 0}, .min = 0, .dir = {0, 0, 0}, .max = 0}};
+        } else {
+            XMFLOAT4X4 cameraViewMat;
+            XMFLOAT4X4 cameraProjMat;
+            XMStoreFloat4x4(&cameraViewMat, XMMatrixTranspose(renderInfo.cameraViewMat));
+            XMStoreFloat4x4(&cameraProjMat, XMMatrixTranspose(renderInfo.cameraProjMat));
+            float2 pixelCoord = ((float2((float)mouseSelectX, (float)mouseSelectY) + 0.5f) / float2((float)settings.renderW, (float)settings.renderH)) * 2.0f - 1.0f;
+            RayDesc rayDesc = {.origin = {cameraViewMat.m[3][0], cameraViewMat.m[3][1], cameraViewMat.m[3][2]}, .min = 0.0f, .max = FLT_MAX};
+            float aspect = cameraProjMat.m[1][1] / cameraProjMat.m[0][0];
+            float tanHalfFovY = 1.0f / cameraProjMat.m[1][1];
+            rayDesc.dir = (float3(cameraViewMat.m[0][0], cameraViewMat.m[0][1], cameraViewMat.m[0][2]) * pixelCoord.x * tanHalfFovY * aspect) - (float3(cameraViewMat.m[1][0], cameraViewMat.m[1][1], cameraViewMat.m[1][2]) * pixelCoord.y * tanHalfFovY) + (float3(cameraViewMat.m[2][0], cameraViewMat.m[2][1], cameraViewMat.m[2][2]));
+            rayDesc.dir = rayDesc.dir.normalize();
+            d3d.collisionQueriesBufferPtr[0] = {.rayDesc = rayDesc};
+        }
+
         D3D12_RESOURCE_BARRIER collisionQueryResultsBarriers[2] = {
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsUavBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsUavBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS, .StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE}},
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS, .StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE}},
         };
-        d3d.graphicsCmdList->ResourceBarrier(1, &readBackBufferBarriers[0]);
         d3d.graphicsCmdList->ResourceBarrier(1, &collisionQueryResultsBarriers[0]);
 
-        void* missIDs[1] = {d3d.collisionDetectionMissID};
-        void* hitGroupIDs[1] = {d3d.collisionDetectionHitGroupID};
-        D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantBuffer->GetResource(), d3d.constantBufferPtr, &d3d.constantBufferOffset, d3d.collisionDetectionRayGenID, missIDs, hitGroupIDs);
+        void* missIDs[1] = {d3d.collisionQueryMissID};
+        void* hitGroupIDs[1] = {d3d.collisionQueryHitGroupID};
+        D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantBuffer->GetResource(), d3d.constantBufferPtr, &d3d.constantBufferOffset, d3d.collisionQueryRayGenID, missIDs, hitGroupIDs);
         dispatchDesc.Width = 1, dispatchDesc.Height = 1, dispatchDesc.Depth = 1;
         assert(d3d.constantBufferOffset < d3d.constantBuffer->GetSize());
 
-        d3d.graphicsCmdList->SetPipelineState1(d3d.collisionDetection);
-        d3d.graphicsCmdList->SetComputeRootSignature(d3d.collisionDetectionRootSig);
+        d3d.graphicsCmdList->SetPipelineState1(d3d.collisionQuery);
+        d3d.graphicsCmdList->SetComputeRootSignature(d3d.collisionQueryRootSig);
         d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
 
-        d3d.graphicsCmdList->ResourceBarrier(1, &readBackBufferBarriers[1]);
         d3d.graphicsCmdList->ResourceBarrier(1, &collisionQueryResultsBarriers[1]);
-
-        d3d.graphicsCmdList->CopyBufferRegion(d3d.readBackBuffer->GetResource(), 0, d3d.readBackUAVBuffer->GetResource(), 0, sizeof(struct ReadBackBuffer));
-        d3d.graphicsCmdList->CopyBufferRegion(d3d.collisionQueryResultsBuffer->GetResource(), 0, d3d.collisionQueryResultsUavBuffer->GetResource(), 0, d3d.collisionQueryResultsBuffer->GetSize());
+        d3d.graphicsCmdList->CopyBufferRegion(d3d.collisionQueryResultsBuffer->GetResource(), 0, d3d.collisionQueryResultsUAVBuffer->GetResource(), 0, d3d.collisionQueryResultsBuffer->GetSize());
     }
     {
         ZoneScopedN("imgui");

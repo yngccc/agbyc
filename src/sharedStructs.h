@@ -66,18 +66,14 @@ struct RenderInfo {
     XMMATRIX cameraViewMat;
     XMMATRIX cameraProjMat;
     uint resolution[2];
-    uint mouseSelectPosition[2];
     uint hdr;
     float frameTime;
-    float padding0[2];
 #else
     float4x4 cameraViewMat;
     float4x4 cameraProjMat;
     uint2 resolution;
-    uint2 mouseSelectPosition;
     uint hdr;
     float frameTime;
-    float2 padding0;
 #endif
 };
 
@@ -115,27 +111,20 @@ struct BLASGeometryInfo {
 #endif
 };
 
-struct ReadBackBuffer {
 #ifdef __cplusplus
-    uint mouseSelectInstanceIndex;
-    float padding0[3];
-#else
-    uint mouseSelectInstanceIndex;
-    float padding0[3];
-#endif
+struct RayDesc {
+    float3 origin;
+    float min;
+    float3 dir;
+    float max;
 };
+#endif
 
 struct CollisionQuery {
 #ifdef __cplusplus
-    float3 rayPosition;
-    float rayMin;
-    float3 rayDir;
-    float rayMax;
+    RayDesc rayDesc;
 #else
-    float3 rayPosition;
-    float rayMin;
-    float3 rayDir;
-    float rayMax;
+    RayDesc rayDesc;
 #endif
 };
 
