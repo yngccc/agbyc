@@ -9,9 +9,9 @@ RWStructuredBuffer<Vertex> verticesBufferDst : register(u0);
 uint verticeCount : register(b0);
 
 [RootSignature(rootSig)]
-[numthreads(32, 1, 1)]
+[numthreads(128, 1, 1)]
 void main(uint3 groupID : SV_GroupID, uint3 groupThreadID : SV_GroupThreadID) {
-    uint vertexIndex = groupID.x * 32 + groupThreadID.x;
+    uint vertexIndex = groupID.x * 128 + groupThreadID.x;
     if (vertexIndex < verticeCount) {
         Vertex vertex = verticesBufferSrc[vertexIndex];
         float4x4 jointMat = 

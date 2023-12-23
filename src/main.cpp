@@ -95,6 +95,10 @@ T align(T x, T2 n) {
     return remainder == 0 ? x : x + ((T)n - remainder);
 }
 
+struct int2 {
+    int x = 0, y = 0;
+};
+
 struct uint8_4 {
     uint8 x = 0, y = 0, z = 0, w = 0;
     std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
@@ -144,6 +148,7 @@ struct float3 {
     float3(const float* v) : x(v[0]), y(v[1]), z(v[2]) {}
     float3(const XMVECTOR& v) : x(XMVectorGetX(v)), y(XMVectorGetY(v)), z(XMVectorGetZ(v)) {}
     void operator=(const XMVECTOR& v) { x = XMVectorGetX(v), y = XMVectorGetY(v), z = XMVectorGetZ(v); }
+    bool operator==(const float3& v) const { return x == v.x && y == v.y && z == v.z; }
     float3 operator+(float3 v) const { return float3(x + v.x, y + v.y, z + v.z); }
     void operator+=(float3 v) { x += v.x, y += v.y, z += v.z; }
     float3 operator-() const { return float3(-x, -y, -z); }
@@ -1533,6 +1538,7 @@ struct Player {
     float3 PitchYawRoll;
     float walkSpeed;
     float runSpeed;
+    float3 movement;
     PlayerState state;
     float3 velocity;
     float3 acceleration;
@@ -1593,7 +1599,7 @@ struct Editor {
     WorldObjectType selectedObjectType = WorldObjectTypeNone;
     uint selectedObjectIndex = 0;
     std::stack<EditorUndo> undos;
-
+    
     Player player;
     std::vector<StaticObject> staticObjects;
     std::vector<DynamicObject> dynamicObjects;
@@ -2078,7 +2084,7 @@ static LARGE_INTEGER perfCounters[2] = {};
 static double frameTime = 0;
 static uint mouseSelectX = UINT_MAX;
 static uint mouseSelectY = UINT_MAX;
-static int mouseDeltaRaw[2] = {};
+static int2 mouseDeltaRaw = {0, 0};
 static float mouseWheel = 0;
 static float mouseSensitivity = 0.2f;
 static float controllerSensitivity = 2.0f;
@@ -2240,8 +2246,8 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
         if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, rawInputBuffer, &rawInputBufferSize, sizeof(RAWINPUTHEADER)) < sizeof(rawInputBuffer)) {
             RAWINPUT* rawInput = (RAWINPUT*)rawInputBuffer;
             if (rawInput->header.dwType == RIM_TYPEMOUSE) {
-                mouseDeltaRaw[0] += rawInput->data.mouse.lLastX;
-                mouseDeltaRaw[1] += rawInput->data.mouse.lLastY;
+                mouseDeltaRaw.x += rawInput->data.mouse.lLastX;
+                mouseDeltaRaw.y += rawInput->data.mouse.lLastY;
             } else if (rawInput->header.dwType == RIM_TYPEHID && rawInput->header.hDevice == controller.dualSenseHID) {
                 for (uint packetIndex = 0; packetIndex < rawInput->data.hid.dwCount; packetIndex++) {
                     // controller.getStateDualSense(&rawInput->data.hid.bRawData[rawInput->data.hid.dwSizeHid * packetIndex], rawInput->data.hid.dwSizeHid);
@@ -2282,19 +2288,16 @@ void editorUpdate() {
     }
 
     if (d3d.graphicsQueueFenceCounter > 0) {
-        uint mouseSelectInstanceIndex = d3d.collisionQueryResultsBufferPtr[0].instanceIndex;
-        if (mouseSelectInstanceIndex < world.tlasInstancesInfos.size()) {
-            TLASInstanceInfo& info = world.tlasInstancesInfos[mouseSelectInstanceIndex];
-            editor->selectedObjectType = info.objectType;
-            editor->selectedObjectIndex = info.objectIndex;
-        } else {
-            if (mouseSelectX != UINT_MAX && mouseSelectY != UINT_MAX) {
+        if (mouseSelectX != UINT_MAX && mouseSelectY != UINT_MAX) {
+            uint mouseSelectInstanceIndex = d3d.collisionQueryResultsBufferPtr[0].instanceIndex;
+            if (mouseSelectInstanceIndex == UINT_MAX) {
                 editor->selectedObjectType = WorldObjectTypeNone;
+            } else {
+                TLASInstanceInfo& info = world.tlasInstancesInfos[mouseSelectInstanceIndex];
+                editor->selectedObjectType = info.objectType;
+                editor->selectedObjectIndex = info.objectIndex;
             }
         }
-        // world.player.transform.translate = readBackBuffer->playerPosition;
-        // world.player.velocity = readBackBuffer->playerVelocity;
-        // world.player.acceleration = readBackBuffer->playerAcceleration;
     }
     {
         editor->player.model.updateSkinsMats(frameTime);
@@ -2567,8 +2570,8 @@ void editorUpdate() {
         window.hideCursor(false);
     }
     if (editor->cameraMoving || controller.stickMoved()) {
-        float pitch = (mouseDeltaRaw[1] * mouseSensitivity - controller.rsY * controllerSensitivity) * (float)frameTime;
-        float yaw = (mouseDeltaRaw[0] * mouseSensitivity + controller.rsX * controllerSensitivity) * (float)frameTime;
+        float pitch = (mouseDeltaRaw.y * mouseSensitivity - controller.rsY * controllerSensitivity) * (float)frameTime;
+        float yaw = (mouseDeltaRaw.x * mouseSensitivity + controller.rsX * controllerSensitivity) * (float)frameTime;
         editor->camera.moveSpeed = std::clamp(editor->camera.moveSpeed + ImGui::GetIO().MouseWheel, 0.1f, 100.0f);
         float distance = (float)frameTime / 5.0f * editor->camera.moveSpeed;
         float3 translate = {-controller.lsX * distance, 0, controller.lsY * distance};
@@ -2657,47 +2660,56 @@ void gameUpdate() {
         window.hideCursor(false);
         return;
     }
+    if (d3d.graphicsQueueFenceCounter > 0) {
+        uint playerCollisionInstanceIndex = d3d.collisionQueryResultsBufferPtr[1].instanceIndex;
+        if (playerCollisionInstanceIndex == UINT_MAX) {
+            world.player.position += world.player.movement;
+            world.player.camera.translate(world.player.movement);
+            float angle = acosf(world.player.movement.normalize().dot(float3(0, 0, -1)));
+            if (world.player.movement.x > 0) angle = -angle;
+            world.player.PitchYawRoll = float3(0, angle, 0);
+        } else {
+
+        }
+    }
     {
-        float pitch = (mouseDeltaRaw[1] * mouseSensitivity - controller.rsY * controllerSensitivity) * (float)frameTime;
-        float yaw = (mouseDeltaRaw[0] * mouseSensitivity + controller.rsX * controllerSensitivity) * (float)frameTime;
+        float pitch = (mouseDeltaRaw.y * mouseSensitivity - controller.rsY * controllerSensitivity) * (float)frameTime;
+        float yaw = (mouseDeltaRaw.x * mouseSensitivity + controller.rsX * controllerSensitivity) * (float)frameTime;
         world.player.camera.setPitchYaw(world.player.camera.pitchYaw + float2(pitch, yaw));
 
-        float3 forwardDir = (world.player.camera.lookAt - world.player.camera.position);
+        float3 forwardDir = world.player.camera.lookAt - world.player.camera.position;
         forwardDir.y = 0;
         forwardDir = forwardDir.normalize();
         float3 sideDir = forwardDir.cross(float3(0, 1, 0));
-        float3 playerMovement = {0, 0, 0};
-        if (ImGui::IsKeyDown(ImGuiKey_W)) playerMovement = forwardDir;
-        if (ImGui::IsKeyDown(ImGuiKey_S)) playerMovement = -forwardDir;
-        if (ImGui::IsKeyDown(ImGuiKey_A)) playerMovement = sideDir;
-        if (ImGui::IsKeyDown(ImGuiKey_D)) playerMovement = -sideDir;
-        playerMovement += forwardDir * controller.lsY;
-        playerMovement += sideDir * -controller.lsX;
-        playerMovement = playerMovement.normalize();
-        if (playerMovement.length() < 0.0001f) {
+        float3 moveDir = {0, 0, 0};
+        if (ImGui::IsKeyDown(ImGuiKey_W)) moveDir += forwardDir;
+        if (ImGui::IsKeyDown(ImGuiKey_S)) moveDir += -forwardDir;
+        if (ImGui::IsKeyDown(ImGuiKey_A)) moveDir += sideDir;
+        if (ImGui::IsKeyDown(ImGuiKey_D)) moveDir += -sideDir;
+        moveDir += forwardDir * controller.lsY;
+        moveDir += sideDir * -controller.lsX;
+        moveDir = moveDir.normalize();
+
+        if (moveDir == float3{0, 0, 0}) {
             world.player.state = PlayerStateIdle;
+            world.player.movement = {0, 0, 0};
+            world.player.model.animation = &world.player.model.model->animations[world.player.idleAnimationIndex];
         } else {
-            float3 translate;
-            if (sqrtf(controller.lsX * controller.lsX + controller.lsY * controller.lsY) < 0.5f) {
+            if (!ImGui::IsKeyDown(ImGuiKey_LeftShift) && sqrtf(controller.lsX * controller.lsX + controller.lsY * controller.lsY) < 0.8f) {
                 world.player.state = PlayerStateWalk;
-                translate = playerMovement * world.player.walkSpeed * (float)frameTime;
+                world.player.movement = moveDir * world.player.walkSpeed * (float)frameTime;
+                world.player.model.animation = &world.player.model.model->animations[world.player.walkAnimationIndex];
             } else {
                 world.player.state = PlayerStateRun;
-                translate = playerMovement * world.player.runSpeed * (float)frameTime;
+                world.player.movement = moveDir * world.player.runSpeed * (float)frameTime;
+                world.player.model.animation = &world.player.model.model->animations[world.player.runAnimationIndex];
             }
-            world.player.position += translate;
-            world.player.camera.translate(translate);
-            float angle = acosf(playerMovement.dot(float3(0, 0, -1)));
-            if (playerMovement.x > 0) angle = -angle;
-            world.player.PitchYawRoll = float3(0, angle, 0);
-        }
 
-        if (world.player.state == PlayerStateIdle) {
-            world.player.model.animation = &world.player.model.model->animations[world.player.idleAnimationIndex];
-        } else if (world.player.state == PlayerStateWalk) {
-            world.player.model.animation = &world.player.model.model->animations[world.player.walkAnimationIndex];
-        } else if (world.player.state == PlayerStateRun) {
-            world.player.model.animation = &world.player.model.model->animations[world.player.runAnimationIndex];
+            world.player.position += world.player.movement;
+            world.player.camera.translate(world.player.movement);
+            float angle = acosf(moveDir.dot(float3(0, 0, -1)));
+            if (world.player.movement.x > 0) angle = -angle;
+            world.player.PitchYawRoll = float3(0, angle, 0);
         }
     }
     {
@@ -3017,7 +3029,8 @@ int main(int argc, char** argv) {
     while (!quit) {
         QueryPerformanceCounter(&perfCounters[0]);
         ZoneScoped;
-        mouseDeltaRaw[0] = 0, mouseDeltaRaw[1] = 0, mouseWheel = 0;
+        mouseDeltaRaw = {0, 0};
+        mouseWheel = 0;
         controller.getStateXInput();
         MSG windowMsg;
         while (PeekMessageA(&windowMsg, (HWND)window.hwnd, 0, 0, PM_REMOVE)) {
