@@ -192,6 +192,21 @@ struct float4 {
     std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
 };
 
+struct Position {
+    // 0.1mm precision
+    int x = 0, y = 0, z = 0;
+
+    void operator<<(ryml::ConstNodeRef node) { node[0] >> x, node[1] >> y, node[2] >> z; }
+    void operator>>(ryml::NodeRef node) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << x, node.append_child() << y, node.append_child() << z; }
+    void operator=(float3 p) { x = int(p.x * 10000.0), y = int(p.y * 10000.0), z = int(p.z * 10000.0); }
+    Position operator+(float3 p) const { return Position{x + int(p.x * 10000.0), y + int(p.y * 10000.0), z + int(p.z * 10000.0)}; }
+    void operator+=(float3 p) { x += int(p.x * 10000.0), y += int(p.y * 10000.0), z += int(p.z * 10000.0); }
+    Position operator-() const { return Position{-x, -y, -z}; }
+    float3 operator-(Position p) const { return float3((x - p.x) * 0.0001f, (y - p.y) * 0.0001f, (z - p.z) * 0.0001f); }
+    float3 toFloat3() const { return float3(x * 0.0001f, y * 0.0001f, z * 0.0001f); }
+    XMVECTOR toXMVector() const { return XMVectorSet(x * 0.0001f, y * 0.0001f, z * 0.0001f, 0); }
+};
+
 struct Transform {
     float3 s = {1, 1, 1};
     float4 r = {0, 0, 0, 1};
@@ -1126,57 +1141,6 @@ struct Controller {
 
 static Controller controller = {};
 
-struct CameraEditor {
-    float3 position;
-    float3 lookAt;
-    float2 pitchYaw;
-    float fovVertical = 50;
-    float moveSpeed = 1;
-
-    void rotate(float2 pitchYawDelta) {
-        pitchYaw.x += pitchYawDelta.x;
-        pitchYaw.y += pitchYawDelta.y;
-        pitchYaw.x = std::clamp(pitchYaw.x, -pi * 0.4f, pi * 0.4f);
-        pitchYaw.y = std::remainderf(pitchYaw.y, pi * 2.0f);
-        XMVECTOR quaternion = XMQuaternionRotationRollPitchYaw(pitchYaw.x, pitchYaw.y, 0);
-        float3 dir = XMVector3Rotate(XMVectorSet(0, 0, 1, 0), quaternion);
-        lookAt = position + dir;
-    }
-    void translate(float3 translate) {
-        float3 dz = (lookAt - position).normalize();
-        float3 dx = dz.cross({0, 1, 0});
-        float3 dy = dz.cross({1, 0, 0});
-        position += dx * translate.x;
-        lookAt += dx * translate.x;
-        position += dy * translate.y;
-        lookAt += dy * translate.y;
-        position += dz * translate.z;
-        lookAt += dz * translate.z;
-    }
-    void focus(float3 position, float distance) {}
-};
-
-struct CameraPlayer {
-    float3 position;
-    float3 lookAt;
-    float3 lookAtOffset;
-    float2 pitchYaw;
-    float distance;
-    float fovVertical = 50;
-
-    void setPitchYaw(float2 pitchYawNew) {
-        pitchYaw.x = std::clamp(pitchYawNew.x, -pi * 0.1f, pi * 0.4f);
-        pitchYaw.y = std::remainderf(pitchYawNew.y, pi * 2.0f);
-        XMVECTOR quaternion = XMQuaternionRotationRollPitchYaw(pitchYaw.x, pitchYaw.y, 0);
-        float3 dir = float3(XMVector3Rotate(XMVectorSet(0, 0, -1, 0), quaternion)).normalize();
-        position = lookAt + (dir * distance);
-    }
-    void translate(float3 translate) {
-        position += translate;
-        lookAt += translate;
-    }
-};
-
 struct ModelImage {
     D3D12MA::Allocation* gpuData = nullptr;
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc;
@@ -1521,6 +1485,27 @@ struct ModelInstance {
     }
 };
 
+struct CameraPlayer {
+    Position position;
+    Position lookAt;
+    float3 lookAtOffset;
+    float2 pitchYaw;
+    float distance;
+    float fovVertical = 50;
+
+    void setPitchYaw(float2 pitchYawNew) {
+        pitchYaw.x = std::clamp(pitchYawNew.x, -pi * 0.1f, pi * 0.4f);
+        pitchYaw.y = std::remainderf(pitchYawNew.y, pi * 2.0f);
+        XMVECTOR quaternion = XMQuaternionRotationRollPitchYaw(pitchYaw.x, pitchYaw.y, 0);
+        float3 dir = float3(XMVector3Rotate(XMVectorSet(0, 0, -1, 0), quaternion)).normalize();
+        position = lookAt + (dir * distance);
+    }
+    void translate(float3 translate) {
+        position += translate;
+        lookAt += translate;
+    }
+};
+
 enum PlayerState {
     PlayerStateIdle,
     PlayerStateWalk,
@@ -1533,8 +1518,8 @@ struct PlayerStateTransition {
 
 struct Player {
     ModelInstance model;
-    float3 spawnPosition;
-    float3 position;
+    Position spawnPosition;
+    Position position;
     float3 PitchYawRoll;
     float walkSpeed;
     float runSpeed;
@@ -1554,8 +1539,8 @@ struct Player {
 struct StaticObject {
     std::string name;
     ModelInstance model;
-    float3 spawnPosition;
-    float3 position;
+    Position spawnPosition;
+    Position position;
     bool toBeDeleted;
 
     void release() { model.release(); }
@@ -1564,8 +1549,8 @@ struct StaticObject {
 struct DynamicObject {
     std::string name;
     ModelInstance model;
-    float3 spawnPosition;
-    float3 position;
+    Position spawnPosition;
+    Position position;
     bool toBeDeleted;
 
     void release() { model.release(); }
@@ -1574,6 +1559,36 @@ struct DynamicObject {
 struct Skybox {
     std::filesystem::path hdriTextureFilePath;
     D3D12MA::Allocation* hdriTexture;
+};
+
+struct CameraEditor {
+    Position position;
+    Position lookAt;
+    float2 pitchYaw;
+    float fovVertical = 50;
+    float moveSpeed = 1;
+
+    void rotate(float2 pitchYawDelta) {
+        pitchYaw.x += pitchYawDelta.x;
+        pitchYaw.y += pitchYawDelta.y;
+        pitchYaw.x = std::clamp(pitchYaw.x, -pi * 0.4f, pi * 0.4f);
+        pitchYaw.y = std::remainderf(pitchYaw.y, pi * 2.0f);
+        XMVECTOR quaternion = XMQuaternionRotationRollPitchYaw(pitchYaw.x, pitchYaw.y, 0);
+        float3 dir = XMVector3Rotate(XMVectorSet(0, 0, 1, 0), quaternion);
+        lookAt = position + dir;
+    }
+    void translate(float3 translate) {
+        float3 dz = (lookAt - position).normalize();
+        float3 dx = dz.cross({0, 1, 0});
+        float3 dy = dz.cross({1, 0, 0});
+        position += dx * translate.x;
+        lookAt += dx * translate.x;
+        position += dy * translate.y;
+        lookAt += dy * translate.y;
+        position += dz * translate.z;
+        lookAt += dz * translate.z;
+    }
+    void focus(float3 position, float distance) {}
 };
 
 enum EditorUndoType {
@@ -1599,7 +1614,7 @@ struct Editor {
     WorldObjectType selectedObjectType = WorldObjectTypeNone;
     uint selectedObjectIndex = 0;
     std::stack<EditorUndo> undos;
-    
+
     Player player;
     std::vector<StaticObject> staticObjects;
     std::vector<DynamicObject> dynamicObjects;
@@ -2493,7 +2508,10 @@ void editorUpdate() {
                 ImGui::TreePop();
             }
             if (ImGui::TreeNode("Movement")) {
-                ImGui::InputFloat3("SpawnPosition", &editor->player.spawnPosition.x);
+                float3 spawnPoint = editor->player.spawnPosition.toFloat3();
+                if (ImGui::InputFloat3("SpawnPosition", &spawnPoint.x)) {
+                    editor->player.spawnPosition = spawnPoint;
+                }
                 ImGui::InputFloat3("Velocity", &editor->player.velocity.x);
                 ImGui::InputFloat3("Acceleration", &editor->player.acceleration.x);
                 ImGui::TreePop();
@@ -2619,9 +2637,9 @@ void editorUpdate() {
     };
     if (editor->selectedObjectType == WorldObjectTypePlayer) {
         Transform transform = editor->player.model.transform;
-        transform.t += editor->player.spawnPosition;
+        transform.t += editor->player.spawnPosition.toFloat3();
         transformGizmo(&transform);
-        transform.t -= editor->player.spawnPosition;
+        transform.t -= editor->player.spawnPosition.toFloat3();
         editor->player.model.transform = transform;
     } else if (editor->selectedObjectType == WorldObjectTypeStaticObject && editor->selectedObjectIndex < editor->staticObjects.size()) {
         transformGizmo(&editor->staticObjects[editor->selectedObjectIndex].model.transform);
@@ -2669,7 +2687,6 @@ void gameUpdate() {
             if (world.player.movement.x > 0) angle = -angle;
             world.player.PitchYawRoll = float3(0, angle, 0);
         } else {
-
         }
     }
     {
@@ -2812,16 +2829,14 @@ void render() {
     d3d.stagingBufferOffset = 0;
     d3d.constantBufferOffset = 0;
 
-    float3 cameraPosition = world.player.camera.position;
-    float3 cameraLookAt = world.player.camera.lookAt;
+    float3 cameraLookAt = world.player.camera.lookAt - world.player.camera.position;
     float cameraFovVertical = world.player.camera.fovVertical;
     if (editor && editor->active) {
-        cameraPosition = editor->camera.position;
-        cameraLookAt = editor->camera.lookAt;
+        cameraLookAt = editor->camera.lookAt - editor->camera.position;
         cameraFovVertical = editor->camera.fovVertical;
     }
     RenderInfo renderInfo = {
-        .cameraViewMat = XMMatrixTranspose(XMMatrixInverse(nullptr, XMMatrixLookAtLH(cameraPosition.toXMVector(), cameraLookAt.toXMVector(), XMVectorSet(0, 1, 0, 0)))),
+        .cameraViewMat = XMMatrixTranspose(XMMatrixInverse(nullptr, XMMatrixLookAtLH(XMVectorSet(0, 0, 0, 0), cameraLookAt.toXMVector(), XMVectorSet(0, 1, 0, 0)))),
         .cameraProjMat = XMMatrixPerspectiveFovLH(radian(cameraFovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f),
         .resolution = {settings.renderW, settings.renderH},
         .hdr = settings.hdr,
@@ -2856,28 +2871,28 @@ void render() {
     {
         if (editor && editor->active) {
             editor->player.model.buildSkinnedMeshesBLASs();
-            addTLASInstance(editor->player.model, XMMatrixTranslationFromVector(editor->player.spawnPosition.toXMVector()), WorldObjectTypePlayer, 0);
+            addTLASInstance(editor->player.model, XMMatrixTranslationFromVector((editor->player.spawnPosition - editor->camera.position).toXMVector()), WorldObjectTypePlayer, 0);
             for (uint objIndex = 0; objIndex < editor->staticObjects.size(); objIndex++) {
                 editor->staticObjects[objIndex].model.buildSkinnedMeshesBLASs();
-                addTLASInstance(editor->staticObjects[objIndex].model, XMMatrixIdentity(), WorldObjectTypeStaticObject, objIndex);
+                addTLASInstance(editor->staticObjects[objIndex].model, XMMatrixTranslationFromVector((-editor->camera.position).toXMVector()), WorldObjectTypeStaticObject, objIndex);
             }
             for (uint objIndex = 0; objIndex < editor->dynamicObjects.size(); objIndex++) {
                 editor->dynamicObjects[objIndex].model.buildSkinnedMeshesBLASs();
-                addTLASInstance(editor->dynamicObjects[objIndex].model, XMMatrixIdentity(), WorldObjectTypeDynamicObject, objIndex);
+                addTLASInstance(editor->dynamicObjects[objIndex].model, XMMatrixTranslationFromVector((-editor->camera.position).toXMVector()), WorldObjectTypeDynamicObject, objIndex);
             }
         } else {
             world.player.model.buildSkinnedMeshesBLASs();
-            XMVECTOR translate = world.player.position.toXMVector();
+            XMVECTOR translate = (world.player.position - world.player.camera.position).toXMVector();
             XMVECTOR rotate = XMQuaternionRotationRollPitchYaw(0, world.player.PitchYawRoll.y, 0);
             XMMATRIX transformMat = XMMatrixAffineTransformation(XMVectorSet(1, 1, 1, 0), world.player.model.transform.t.toXMVector(), rotate, translate);
             addTLASInstance(world.player.model, transformMat, WorldObjectTypePlayer, 0);
             for (uint objIndex = 0; objIndex < world.staticObjects.size(); objIndex++) {
                 world.staticObjects[objIndex].model.buildSkinnedMeshesBLASs();
-                addTLASInstance(world.staticObjects[objIndex].model, XMMatrixIdentity(), WorldObjectTypeStaticObject, objIndex);
+                addTLASInstance(world.staticObjects[objIndex].model, XMMatrixTranslationFromVector((-world.player.camera.position).toXMVector()), WorldObjectTypeStaticObject, objIndex);
             }
             for (uint objIndex = 0; objIndex < world.dynamicObjects.size(); objIndex++) {
                 world.dynamicObjects[objIndex].model.buildSkinnedMeshesBLASs();
-                addTLASInstance(world.dynamicObjects[objIndex].model, XMMatrixIdentity(), WorldObjectTypeDynamicObject, objIndex);
+                addTLASInstance(world.dynamicObjects[objIndex].model, XMMatrixTranslationFromVector((-world.player.camera.position).toXMVector()), WorldObjectTypeDynamicObject, objIndex);
             }
         }
         {
