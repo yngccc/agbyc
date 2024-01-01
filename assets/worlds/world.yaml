@@ -1,12 +1,12 @@
 editorCamera:
-  position: [27404,17972,-52220]
-  pitchYaw: [0.2471216,-0.8757219]
+  position: [19264,21830,-61257]
+  pitchYaw: [0.22787435,-0.3088673]
   moveSpeed: 15.687
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
 player:
   file: models\girl\girl.gltf
-  scale: [2.51,2.51,2.51]
+  scale: [1,1,1]
   rotate: [-0,0,-0,1]
   translate: [0,0,0]
   spawnPosition: [0,0,0]
@@ -26,9 +26,9 @@ staticObjects:
     translate: [0,-1,0]
   - name: cubeReference
     file: models/cube/cube.gltf
-    scale: [0.1,0.1,0.1]
-    rotate: [-0,0,-0,1]
-    translate: [0.6558792,0.09892969,0]
+    scale: [1,1,1]
+    rotate: [0,0,0,1]
+    translate: [3,0,0]
   - name: bot
     file: models\xbot\xbot.gltf
     scale: [7.4099994,7.4099994,7.4099994]
@@ -41,7 +41,7 @@ staticObjects:
     translate: [-1.006432,0,-1.3228992]
   - name: cube2
     file: models/cube/cube.gltf
-    scale: [0.10142998,0.10142998,0.10142998]
-    rotate: [-0,0,-0,1]
-    translate: [1.0292994,0.10165221,0]
+    scale: [1,1,1]
+    rotate: [0,0,0,1]
+    translate: [-3,0,0]
 dynamicObjects: []
