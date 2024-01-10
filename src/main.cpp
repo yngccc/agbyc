@@ -371,18 +371,24 @@ struct D3D {
     // bool gpuUploadHeapSupported;
 
     ID3D12CommandQueue* graphicsQueue;
-    ID3D12Fence* graphicsQueueFence;
-    HANDLE graphicsQueueFenceEvent;
-    uint64 graphicsQueueFenceCounter;
     ID3D12CommandAllocator* graphicsCmdAllocator;
     ID3D12GraphicsCommandList4* graphicsCmdList;
 
+    ID3D12Fence* fenceRenderDone;
+    HANDLE fenceEventRenderDone;
+    uint64 fenceCounterRenderDone;
+
+    ID3D12Fence* fenceCollisionQueriesDone;
+    HANDLE fenceEventCollisionQueriesDone;
+    uint64 fenceCounterCollisionQueriesDone;
+
     ID3D12CommandQueue* transferQueue;
-    ID3D12Fence* transferQueueFence;
-    HANDLE transferQueueFenceEvent;
-    uint64 transferQueueFenceCounter;
     ID3D12CommandAllocator* transferCmdAllocator;
     ID3D12GraphicsCommandList4* transferCmdList;
+
+    ID3D12Fence* fenceTransferDone;
+    HANDLE fenceEventTransferDone;
+    uint64 fenceCounterTransferDone;
 
     IDXGISwapChain4* swapChain;
     DXGI_FORMAT swapChainFormat;
@@ -921,25 +927,6 @@ void d3dMessageCallback(D3D12_MESSAGE_CATEGORY category, D3D12_MESSAGE_SEVERITY 
     }
 }
 
-void d3dGraphicsQueueStartRecording() {
-    assert(SUCCEEDED(d3d.graphicsCmdAllocator->Reset()));
-    assert(SUCCEEDED(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
-}
-
-void d3dGraphicsQueueSubmitRecording() {
-    assert(SUCCEEDED(d3d.graphicsCmdList->Close()));
-    d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
-}
-
-void d3dGraphicsQueueWait() {
-    d3d.graphicsQueueFenceCounter++;
-    d3d.graphicsQueue->Signal(d3d.graphicsQueueFence, d3d.graphicsQueueFenceCounter);
-    if (d3d.graphicsQueueFence->GetCompletedValue() < d3d.graphicsQueueFenceCounter) {
-        assert(SUCCEEDED(d3d.graphicsQueueFence->SetEventOnCompletion(d3d.graphicsQueueFenceCounter, d3d.graphicsQueueFenceEvent)));
-        assert(WaitForSingleObjectEx(d3d.graphicsQueueFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
-    }
-}
-
 void d3dTransferQueueStartRecording() {
     assert(SUCCEEDED(d3d.transferCmdAllocator->Reset()));
     assert(SUCCEEDED(d3d.transferCmdList->Reset(d3d.transferCmdAllocator, nullptr)));
@@ -951,11 +938,11 @@ void d3dTransferQueueSubmitRecording() {
 }
 
 void d3dTransferQueueWait() {
-    d3d.transferQueueFenceCounter += 1;
-    d3d.transferQueue->Signal(d3d.transferQueueFence, d3d.transferQueueFenceCounter);
-    if (d3d.transferQueueFence->GetCompletedValue() < d3d.transferQueueFenceCounter) {
-        assert(SUCCEEDED(d3d.transferQueueFence->SetEventOnCompletion(d3d.transferQueueFenceCounter, d3d.transferQueueFenceEvent)));
-        assert(WaitForSingleObjectEx(d3d.transferQueueFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
+    d3d.fenceCounterTransferDone += 1;
+    d3d.transferQueue->Signal(d3d.fenceTransferDone, d3d.fenceCounterTransferDone);
+    if (d3d.fenceTransferDone->GetCompletedValue() < d3d.fenceCounterTransferDone) {
+        assert(SUCCEEDED(d3d.fenceTransferDone->SetEventOnCompletion(d3d.fenceCounterTransferDone, d3d.fenceEventTransferDone)));
+        assert(WaitForSingleObjectEx(d3d.fenceEventTransferDone, INFINITE, false) == WAIT_OBJECT_0);
     }
 }
 
@@ -1059,12 +1046,17 @@ void d3dInit(bool debug) {
         assert(SUCCEEDED(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.transferCmdAllocator, nullptr, IID_PPV_ARGS(&d3d.transferCmdList))));
         assert(SUCCEEDED(d3d.transferCmdList->Close()));
 
-        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.graphicsQueueFence))));
-        d3d.graphicsQueueFenceEvent = CreateEventA(nullptr, false, false, nullptr);
-        assert(d3d.graphicsQueueFenceEvent);
-        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.transferQueueFence))));
-        d3d.transferQueueFenceEvent = CreateEventA(nullptr, false, false, nullptr);
-        assert(d3d.transferQueueFenceEvent);
+        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.fenceRenderDone))));
+        d3d.fenceEventRenderDone = CreateEventA(nullptr, false, false, nullptr);
+        assert(d3d.fenceEventRenderDone);
+
+        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.fenceCollisionQueriesDone))));
+        d3d.fenceEventCollisionQueriesDone = CreateEventA(nullptr, false, false, nullptr);
+        assert(d3d.fenceEventCollisionQueriesDone);
+
+        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.fenceTransferDone))));
+        d3d.fenceEventTransferDone = CreateEventA(nullptr, false, false, nullptr);
+        assert(d3d.fenceEventTransferDone);
     }
     {
         d3d.swapChainFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
@@ -1310,7 +1302,10 @@ void d3dInit(bool debug) {
 }
 
 void d3dResizeSwapChain(uint width, uint height) {
-    d3dGraphicsQueueWait();
+    if (d3d.fenceRenderDone->GetCompletedValue() < d3d.fenceCounterRenderDone) {
+        assert(SUCCEEDED(d3d.fenceRenderDone->SetEventOnCompletion(d3d.fenceCounterRenderDone, d3d.fenceEventRenderDone)));
+        assert(WaitForSingleObjectEx(d3d.fenceEventRenderDone, INFINITE, false) == WAIT_OBJECT_0);
+    }
     for (ID3D12Resource* image : d3d.swapChainImages) { image->Release(); }
     assert(SUCCEEDED(d3d.swapChain->ResizeBuffers(countof(d3d.swapChainImages), width, height, d3d.swapChainFormat, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH)));
     for (uint imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
@@ -2294,8 +2289,11 @@ void editorUpdate() {
         resetToEditor();
         return;
     }
-
-    if (d3d.graphicsQueueFenceCounter > 0) {
+    if (d3d.fenceCounterCollisionQueriesDone > 0) {
+        if (d3d.fenceCollisionQueriesDone->GetCompletedValue() < d3d.fenceCounterCollisionQueriesDone) {
+            assert(SUCCEEDED(d3d.fenceCollisionQueriesDone->SetEventOnCompletion(d3d.fenceCounterCollisionQueriesDone, d3d.fenceEventCollisionQueriesDone)));
+            assert(WaitForSingleObjectEx(d3d.fenceEventCollisionQueriesDone, INFINITE, false) == WAIT_OBJECT_0);
+        }
         if (mouseSelectX != UINT_MAX && mouseSelectY != UINT_MAX) {
             uint mouseSelectInstanceIndex = d3d.collisionQueryResultsBufferPtr[0].instanceIndex;
             if (mouseSelectInstanceIndex == UINT_MAX) {
@@ -2671,7 +2669,11 @@ void gameUpdate() {
         windowHideCursor(false);
         return;
     }
-    if (d3d.graphicsQueueFenceCounter > 0) {
+    if (d3d.fenceCounterCollisionQueriesDone > 0) {
+        if (d3d.fenceCollisionQueriesDone->GetCompletedValue() < d3d.fenceCounterCollisionQueriesDone) {
+            assert(SUCCEEDED(d3d.fenceCollisionQueriesDone->SetEventOnCompletion(d3d.fenceCounterCollisionQueriesDone, d3d.fenceEventCollisionQueriesDone)));
+            assert(WaitForSingleObjectEx(d3d.fenceEventCollisionQueriesDone, INFINITE, false) == WAIT_OBJECT_0);
+        }
         uint playerCollisionInstanceIndex = d3d.collisionQueryResultsBufferPtr[1].instanceIndex;
         if (playerCollisionInstanceIndex == UINT_MAX) {
             player.position += player.movement;
@@ -2724,8 +2726,8 @@ void gameUpdate() {
     }
     {
         modelInstanceUpdateSkinsMats(&player.model, frameTime);
-        for (StaticObject& obj : staticObjects) modelInstanceUpdateSkinsMats(&player.model, frameTime);
-        for (DynamicObject& obj : dynamicObjects) modelInstanceUpdateSkinsMats(&player.model, frameTime);
+        for (StaticObject& obj : staticObjects) modelInstanceUpdateSkinsMats(&obj.model, frameTime);
+        for (DynamicObject& obj : dynamicObjects) modelInstanceUpdateSkinsMats(&obj.model, frameTime);
     }
 }
 
@@ -2807,10 +2809,14 @@ D3D12_DISPATCH_RAYS_DESC fillRayTracingShaderTable(ID3D12Resource* buffer, uint8
 
 void render() {
     ZoneScopedN("render");
-    d3dGraphicsQueueStartRecording();
 
-    D3D12_RESOURCE_BARRIER renderTextureTransition = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.renderTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}};
-    d3d.graphicsCmdList->ResourceBarrier(1, &renderTextureTransition);
+    if (d3d.fenceRenderDone->GetCompletedValue() < d3d.fenceCounterRenderDone) {
+        assert(SUCCEEDED(d3d.fenceRenderDone->SetEventOnCompletion(d3d.fenceCounterRenderDone, d3d.fenceEventRenderDone)));
+        assert(WaitForSingleObjectEx(d3d.fenceEventRenderDone, INFINITE, false) == WAIT_OBJECT_0);
+    }
+
+    assert(SUCCEEDED(d3d.graphicsCmdAllocator->Reset()));
+    assert(SUCCEEDED(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
 
     d3d.cbvSrvUavDescriptorCount = 0;
     d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap);
@@ -2862,6 +2868,7 @@ void render() {
         d3d.constantBufferOffset += sizeof(renderInfo);
     }
     {
+        ZoneScopedN("buildTLAS");
         if (editor && editor->active) {
             modelInstanceBuildSkinnedMeshesBLASs(&editor->player.model);
             addTLASInstance(editor->player.model, XMMatrixTranslationFromVector((editor->player.spawnPosition - editor->camera.position).toXMVector()), WorldObjectTypePlayer, 0);
@@ -2889,7 +2896,6 @@ void render() {
             }
         }
         {
-            ZoneScopedN("buildTLAS");
             assert(vectorSizeof(tlasInstancesBuildInfos) < d3d.tlasInstancesBuildInfosBuffer->GetSize());
             assert(vectorSizeof(tlasInstancesInfos) < d3d.tlasInstancesInfosBuffer->GetSize());
             assert(vectorSizeof(blasGeometriesInfos) < d3d.blasGeometriesInfosBuffer->GetSize());
@@ -2907,18 +2913,6 @@ void render() {
             d3d.graphicsCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
             D3D12_RESOURCE_BARRIER tlasBarrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = d3d.tlasBuffer->GetResource()}};
             d3d.graphicsCmdList->ResourceBarrier(1, &tlasBarrier);
-        }
-        {
-            ZoneScopedN("renderScene");
-            void* missIDs[2] = {d3d.renderScenePrimaryRayMissID, d3d.renderSceneSecondaryRayMissID};
-            void* hitGroupIDs[2] = {d3d.renderScenePrimaryRayHitGroupID, d3d.renderSceneSecondaryRayHitGroupID};
-            D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantBuffer->GetResource(), d3d.constantBufferPtr, &d3d.constantBufferOffset, d3d.renderSceneRayGenID, missIDs, hitGroupIDs);
-            dispatchDesc.Width = settings.renderW, dispatchDesc.Height = settings.renderH, dispatchDesc.Depth = 1;
-            assert(d3d.constantBufferOffset < d3d.constantBuffer->GetSize());
-
-            d3d.graphicsCmdList->SetPipelineState1(d3d.renderScenePSO);
-            d3d.graphicsCmdList->SetComputeRootSignature(d3d.renderSceneRootSig);
-            d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
         }
     }
     {
@@ -2957,6 +2951,31 @@ void render() {
 
         d3d.graphicsCmdList->ResourceBarrier(1, &collisionQueryResultsBarriers[1]);
         d3d.graphicsCmdList->CopyBufferRegion(d3d.collisionQueryResultsBuffer->GetResource(), 0, d3d.collisionQueryResultsUAVBuffer->GetResource(), 0, d3d.collisionQueryResultsBuffer->GetSize());
+
+        assert(SUCCEEDED(d3d.graphicsCmdList->Close()));
+        d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
+        d3d.fenceCounterCollisionQueriesDone += 1;
+        d3d.graphicsQueue->Signal(d3d.fenceCollisionQueriesDone, d3d.fenceCounterCollisionQueriesDone);
+        assert(SUCCEEDED(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
+        d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap);
+    }
+    {
+        ZoneScopedN("render");
+        void* missIDs[2] = {d3d.renderScenePrimaryRayMissID, d3d.renderSceneSecondaryRayMissID};
+        void* hitGroupIDs[2] = {d3d.renderScenePrimaryRayHitGroupID, d3d.renderSceneSecondaryRayHitGroupID};
+        D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantBuffer->GetResource(), d3d.constantBufferPtr, &d3d.constantBufferOffset, d3d.renderSceneRayGenID, missIDs, hitGroupIDs);
+        dispatchDesc.Width = settings.renderW, dispatchDesc.Height = settings.renderH, dispatchDesc.Depth = 1;
+        assert(d3d.constantBufferOffset < d3d.constantBuffer->GetSize());
+
+        D3D12_RESOURCE_BARRIER renderTextureTransition = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.renderTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}};
+        d3d.graphicsCmdList->ResourceBarrier(1, &renderTextureTransition);
+
+        d3d.graphicsCmdList->SetPipelineState1(d3d.renderScenePSO);
+        d3d.graphicsCmdList->SetComputeRootSignature(d3d.renderSceneRootSig);
+        d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
+
+        std::swap(renderTextureTransition.Transition.StateBefore, renderTextureTransition.Transition.StateAfter);
+        d3d.graphicsCmdList->ResourceBarrier(1, &renderTextureTransition);
     }
     {
         ZoneScopedN("imgui");
@@ -2974,8 +2993,6 @@ void render() {
             d3d.graphicsCmdList->SetPipelineState(d3d.postProcessPSO);
             d3d.graphicsCmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.postProcessRootSig);
-            std::swap(renderTextureTransition.Transition.StateBefore, renderTextureTransition.Transition.StateAfter);
-            d3d.graphicsCmdList->ResourceBarrier(1, &renderTextureTransition);
             d3d.graphicsCmdList->DrawInstanced(3, 1, 0, 0);
         }
         {
@@ -3016,11 +3033,14 @@ void render() {
         }
         std::swap(swapChainImageTransition.Transition.StateBefore, swapChainImageTransition.Transition.StateAfter);
         d3d.graphicsCmdList->ResourceBarrier(1, &swapChainImageTransition);
+
+        assert(SUCCEEDED(d3d.graphicsCmdList->Close()));
+        d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
+        d3d.fenceCounterRenderDone += 1;
+        d3d.graphicsQueue->Signal(d3d.fenceRenderDone, d3d.fenceCounterRenderDone);
     }
     {
-        ZoneScopedN("submit");
-        d3dGraphicsQueueSubmitRecording();
-        d3dGraphicsQueueWait();
+        ZoneScopedN("present");
         assert(SUCCEEDED(d3d.swapChain->Present(0, 0)));
     }
 }
