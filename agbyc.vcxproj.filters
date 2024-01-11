@@ -11,10 +11,34 @@
     <Filter Include="Worlds">
       <UniqueIdentifier>{5e709aaa-7469-48b7-9ce8-d5d93a5b86ba}</UniqueIdentifier>
     </Filter>
+    <Filter Include="RTXDI">
+      <UniqueIdentifier>{722c8bbd-79c8-4959-b62c-f69de209c4cf}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="RTXDI\HLSL">
+      <UniqueIdentifier>{47654515-7078-4d56-8bd9-c467bb1b0635}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\main.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="include\rtxdi-sdk\src\ImportanceSamplingContext.cpp">
+      <Filter>RTXDI</Filter>
+    </ClCompile>
+    <ClCompile Include="include\rtxdi-sdk\src\ReGIR.cpp">
+      <Filter>RTXDI</Filter>
+    </ClCompile>
+    <ClCompile Include="include\rtxdi-sdk\src\ReSTIRDI.cpp">
+      <Filter>RTXDI</Filter>
+    </ClCompile>
+    <ClCompile Include="include\rtxdi-sdk\src\ReSTIRGI.cpp">
+      <Filter>RTXDI</Filter>
+    </ClCompile>
+    <ClCompile Include="include\rtxdi-sdk\src\RISBufferSegmentAllocator.cpp">
+      <Filter>RTXDI</Filter>
+    </ClCompile>
+    <ClCompile Include="include\rtxdi-sdk\src\RtxdiUtils.cpp">
+      <Filter>RTXDI</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -28,6 +52,42 @@
     </None>
     <None Include="assets\worlds\world.yaml">
       <Filter>Worlds</Filter>
+    </None>
+    <None Include="include\rtxdi-sdk\include\rtxdi\DIResamplingFunctions.hlsli">
+      <Filter>RTXDI\HLSL</Filter>
+    </None>
+    <None Include="include\rtxdi-sdk\include\rtxdi\DIReservoir.hlsli">
+      <Filter>RTXDI\HLSL</Filter>
+    </None>
+    <None Include="include\rtxdi-sdk\include\rtxdi\GIResamplingFunctions.hlsli">
+      <Filter>RTXDI\HLSL</Filter>
+    </None>
+    <None Include="include\rtxdi-sdk\include\rtxdi\GIReservoir.hlsli">
+      <Filter>RTXDI\HLSL</Filter>
+    </None>
+    <None Include="include\rtxdi-sdk\include\rtxdi\InitialSamplingFunctions.hlsli">
+      <Filter>RTXDI\HLSL</Filter>
+    </None>
+    <None Include="include\rtxdi-sdk\include\rtxdi\LocalLightSelection.hlsli">
+      <Filter>RTXDI\HLSL</Filter>
+    </None>
+    <None Include="include\rtxdi-sdk\include\rtxdi\PresamplingFunctions.hlsli">
+      <Filter>RTXDI\HLSL</Filter>
+    </None>
+    <None Include="include\rtxdi-sdk\include\rtxdi\ReGIRSampling.hlsli">
+      <Filter>RTXDI\HLSL</Filter>
+    </None>
+    <None Include="include\rtxdi-sdk\include\rtxdi\RISBuffer.hlsli">
+      <Filter>RTXDI\HLSL</Filter>
+    </None>
+    <None Include="include\rtxdi-sdk\include\rtxdi\RtxdiHelpers.hlsli">
+      <Filter>RTXDI\HLSL</Filter>
+    </None>
+    <None Include="include\rtxdi-sdk\include\rtxdi\RtxdiMath.hlsli">
+      <Filter>RTXDI\HLSL</Filter>
+    </None>
+    <None Include="include\rtxdi-sdk\include\rtxdi\UniformSampling.hlsli">
+      <Filter>RTXDI\HLSL</Filter>
     </None>
   </ItemGroup>
   <ItemGroup>
@@ -51,6 +111,9 @@
     </FxCompile>
     <FxCompile Include="src\hlsl\vertexSkinning.hlsl">
       <Filter>HLSL</Filter>
+    </FxCompile>
+    <FxCompile Include="include\rtxdi-sdk\shaders\ResamplingCompileTest.hlsl">
+      <Filter>RTXDI\HLSL</Filter>
     </FxCompile>
   </ItemGroup>
 </Project>

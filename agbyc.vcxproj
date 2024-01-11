@@ -80,12 +80,12 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
     <LibraryPath>$(ProjectDir)lib\debug;$(LibraryPath)</LibraryPath>
-    <IncludePath>$(ProjectDir)include;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir)include;$(ProjectDir)include\rtxdi-sdk\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
     <LibraryPath>$(ProjectDir)lib\release;$(LibraryPath)</LibraryPath>
-    <IncludePath>$(ProjectDir)include;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir)include;$(ProjectDir)include\rtxdi-sdk\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -163,16 +163,42 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="include\rtxdi-sdk\src\ImportanceSamplingContext.cpp" />
+    <ClCompile Include="include\rtxdi-sdk\src\ReGIR.cpp" />
+    <ClCompile Include="include\rtxdi-sdk\src\ReSTIRDI.cpp" />
+    <ClCompile Include="include\rtxdi-sdk\src\ReSTIRGI.cpp" />
+    <ClCompile Include="include\rtxdi-sdk\src\RISBufferSegmentAllocator.cpp" />
+    <ClCompile Include="include\rtxdi-sdk\src\RtxdiUtils.cpp" />
     <ClCompile Include="src\main.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include=".clang-format" />
     <None Include="assets\worlds\world.yaml" />
+    <None Include="include\rtxdi-sdk\include\rtxdi\DIResamplingFunctions.hlsli" />
+    <None Include="include\rtxdi-sdk\include\rtxdi\DIReservoir.hlsli" />
+    <None Include="include\rtxdi-sdk\include\rtxdi\GIResamplingFunctions.hlsli" />
+    <None Include="include\rtxdi-sdk\include\rtxdi\GIReservoir.hlsli" />
+    <None Include="include\rtxdi-sdk\include\rtxdi\InitialSamplingFunctions.hlsli" />
+    <None Include="include\rtxdi-sdk\include\rtxdi\LocalLightSelection.hlsli" />
+    <None Include="include\rtxdi-sdk\include\rtxdi\PresamplingFunctions.hlsli" />
+    <None Include="include\rtxdi-sdk\include\rtxdi\ReGIRSampling.hlsli" />
+    <None Include="include\rtxdi-sdk\include\rtxdi\RISBuffer.hlsli" />
+    <None Include="include\rtxdi-sdk\include\rtxdi\RtxdiHelpers.hlsli" />
+    <None Include="include\rtxdi-sdk\include\rtxdi\RtxdiMath.hlsli" />
+    <None Include="include\rtxdi-sdk\include\rtxdi\UniformSampling.hlsli" />
     <None Include="packages.config" />
     <None Include="src\hlsl\shared.hlsli" />
     <None Include="src\sharedStructs.h" />
   </ItemGroup>
   <ItemGroup>
+    <FxCompile Include="include\rtxdi-sdk\shaders\ResamplingCompileTest.hlsl">
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.6</ShaderModel>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.6</ShaderModel>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(ProjectDir)include\rtxdi-sdk\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(ProjectDir)include\rtxdi-sdk\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </FxCompile>
     <FxCompile Include="src\hlsl\collisionQuery.hlsl">
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.6</ShaderModel>
       <EntryPointName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">

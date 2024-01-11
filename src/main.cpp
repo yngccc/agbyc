@@ -149,6 +149,7 @@ struct float3 {
     float3(const XMVECTOR& v) : x(XMVectorGetX(v)), y(XMVectorGetY(v)), z(XMVectorGetZ(v)) {}
     void operator=(const XMVECTOR& v) { x = XMVectorGetX(v), y = XMVectorGetY(v), z = XMVectorGetZ(v); }
     bool operator==(const float3& v) const { return x == v.x && y == v.y && z == v.z; }
+    bool operator!=(const float3& v) const { return x != v.x || y != v.y || z != v.z; }
     float3 operator+(float3 v) const { return float3(x + v.x, y + v.y, z + v.z); }
     void operator+=(float3 v) { x += v.x, y += v.y, z += v.z; }
     float3 operator-() const { return float3(-x, -y, -z); }
@@ -374,21 +375,21 @@ struct D3D {
     ID3D12CommandAllocator* graphicsCmdAllocator;
     ID3D12GraphicsCommandList4* graphicsCmdList;
 
-    ID3D12Fence* fenceRenderDone;
-    HANDLE fenceEventRenderDone;
-    uint64 fenceCounterRenderDone;
+    ID3D12Fence* renderDoneFence;
+    HANDLE renderDoneFenceEvent;
+    uint64 renderDoneFenceValue;
 
-    ID3D12Fence* fenceCollisionQueriesDone;
-    HANDLE fenceEventCollisionQueriesDone;
-    uint64 fenceCounterCollisionQueriesDone;
+    ID3D12Fence* collisionQueriesFence;
+    HANDLE collisionQueriesFenceEvent;
+    uint64 collisionQueriesFenceValue;
 
     ID3D12CommandQueue* transferQueue;
     ID3D12CommandAllocator* transferCmdAllocator;
     ID3D12GraphicsCommandList4* transferCmdList;
 
-    ID3D12Fence* fenceTransferDone;
-    HANDLE fenceEventTransferDone;
-    uint64 fenceCounterTransferDone;
+    ID3D12Fence* transferDoneFence;
+    HANDLE transferDoneFenceEvent;
+    uint64 transferDoneFenceCounter;
 
     IDXGISwapChain4* swapChain;
     DXGI_FORMAT swapChainFormat;
@@ -938,11 +939,11 @@ void d3dTransferQueueSubmitRecording() {
 }
 
 void d3dTransferQueueWait() {
-    d3d.fenceCounterTransferDone += 1;
-    d3d.transferQueue->Signal(d3d.fenceTransferDone, d3d.fenceCounterTransferDone);
-    if (d3d.fenceTransferDone->GetCompletedValue() < d3d.fenceCounterTransferDone) {
-        assert(SUCCEEDED(d3d.fenceTransferDone->SetEventOnCompletion(d3d.fenceCounterTransferDone, d3d.fenceEventTransferDone)));
-        assert(WaitForSingleObjectEx(d3d.fenceEventTransferDone, INFINITE, false) == WAIT_OBJECT_0);
+    d3d.transferDoneFenceCounter += 1;
+    d3d.transferQueue->Signal(d3d.transferDoneFence, d3d.transferDoneFenceCounter);
+    if (d3d.transferDoneFence->GetCompletedValue() < d3d.transferDoneFenceCounter) {
+        assert(SUCCEEDED(d3d.transferDoneFence->SetEventOnCompletion(d3d.transferDoneFenceCounter, d3d.transferDoneFenceEvent)));
+        assert(WaitForSingleObjectEx(d3d.transferDoneFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
     }
 }
 
@@ -1046,17 +1047,17 @@ void d3dInit(bool debug) {
         assert(SUCCEEDED(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.transferCmdAllocator, nullptr, IID_PPV_ARGS(&d3d.transferCmdList))));
         assert(SUCCEEDED(d3d.transferCmdList->Close()));
 
-        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.fenceRenderDone))));
-        d3d.fenceEventRenderDone = CreateEventA(nullptr, false, false, nullptr);
-        assert(d3d.fenceEventRenderDone);
+        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.renderDoneFence))));
+        d3d.renderDoneFenceEvent = CreateEventA(nullptr, false, false, nullptr);
+        assert(d3d.renderDoneFenceEvent);
 
-        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.fenceCollisionQueriesDone))));
-        d3d.fenceEventCollisionQueriesDone = CreateEventA(nullptr, false, false, nullptr);
-        assert(d3d.fenceEventCollisionQueriesDone);
+        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.collisionQueriesFence))));
+        d3d.collisionQueriesFenceEvent = CreateEventA(nullptr, false, false, nullptr);
+        assert(d3d.collisionQueriesFenceEvent);
 
-        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.fenceTransferDone))));
-        d3d.fenceEventTransferDone = CreateEventA(nullptr, false, false, nullptr);
-        assert(d3d.fenceEventTransferDone);
+        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.transferDoneFence))));
+        d3d.transferDoneFenceEvent = CreateEventA(nullptr, false, false, nullptr);
+        assert(d3d.transferDoneFenceEvent);
     }
     {
         d3d.swapChainFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
@@ -1302,9 +1303,9 @@ void d3dInit(bool debug) {
 }
 
 void d3dResizeSwapChain(uint width, uint height) {
-    if (d3d.fenceRenderDone->GetCompletedValue() < d3d.fenceCounterRenderDone) {
-        assert(SUCCEEDED(d3d.fenceRenderDone->SetEventOnCompletion(d3d.fenceCounterRenderDone, d3d.fenceEventRenderDone)));
-        assert(WaitForSingleObjectEx(d3d.fenceEventRenderDone, INFINITE, false) == WAIT_OBJECT_0);
+    if (d3d.renderDoneFence->GetCompletedValue() < d3d.renderDoneFenceValue) {
+        assert(SUCCEEDED(d3d.renderDoneFence->SetEventOnCompletion(d3d.renderDoneFenceValue, d3d.renderDoneFenceEvent)));
+        assert(WaitForSingleObjectEx(d3d.renderDoneFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
     }
     for (ID3D12Resource* image : d3d.swapChainImages) { image->Release(); }
     assert(SUCCEEDED(d3d.swapChain->ResizeBuffers(countof(d3d.swapChainImages), width, height, d3d.swapChainFormat, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH)));
@@ -2289,10 +2290,10 @@ void editorUpdate() {
         resetToEditor();
         return;
     }
-    if (d3d.fenceCounterCollisionQueriesDone > 0) {
-        if (d3d.fenceCollisionQueriesDone->GetCompletedValue() < d3d.fenceCounterCollisionQueriesDone) {
-            assert(SUCCEEDED(d3d.fenceCollisionQueriesDone->SetEventOnCompletion(d3d.fenceCounterCollisionQueriesDone, d3d.fenceEventCollisionQueriesDone)));
-            assert(WaitForSingleObjectEx(d3d.fenceEventCollisionQueriesDone, INFINITE, false) == WAIT_OBJECT_0);
+    if (d3d.collisionQueriesFenceValue > 0) {
+        if (d3d.collisionQueriesFence->GetCompletedValue() < d3d.collisionQueriesFenceValue) {
+            assert(SUCCEEDED(d3d.collisionQueriesFence->SetEventOnCompletion(d3d.collisionQueriesFenceValue, d3d.collisionQueriesFenceEvent)));
+            assert(WaitForSingleObjectEx(d3d.collisionQueriesFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
         }
         if (mouseSelectX != UINT_MAX && mouseSelectY != UINT_MAX) {
             uint mouseSelectInstanceIndex = d3d.collisionQueryResultsBufferPtr[0].instanceIndex;
@@ -2669,19 +2670,22 @@ void gameUpdate() {
         windowHideCursor(false);
         return;
     }
-    if (d3d.fenceCounterCollisionQueriesDone > 0) {
-        if (d3d.fenceCollisionQueriesDone->GetCompletedValue() < d3d.fenceCounterCollisionQueriesDone) {
-            assert(SUCCEEDED(d3d.fenceCollisionQueriesDone->SetEventOnCompletion(d3d.fenceCounterCollisionQueriesDone, d3d.fenceEventCollisionQueriesDone)));
-            assert(WaitForSingleObjectEx(d3d.fenceEventCollisionQueriesDone, INFINITE, false) == WAIT_OBJECT_0);
+    if (d3d.collisionQueriesFenceValue > 0) {
+        if (d3d.collisionQueriesFence->GetCompletedValue() < d3d.collisionQueriesFenceValue) {
+            assert(SUCCEEDED(d3d.collisionQueriesFence->SetEventOnCompletion(d3d.collisionQueriesFenceValue, d3d.collisionQueriesFenceEvent)));
+            assert(WaitForSingleObjectEx(d3d.collisionQueriesFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
         }
-        uint playerCollisionInstanceIndex = d3d.collisionQueryResultsBufferPtr[1].instanceIndex;
-        if (playerCollisionInstanceIndex == UINT_MAX) {
-            player.position += player.movement;
-            playerCameraTranslate(player.movement);
-            float angle = acosf(player.movement.normalize().dot(float3(0, 0, -1)));
-            if (player.movement.x > 0) angle = -angle;
-            player.PitchYawRoll = float3(0, angle, 0);
+        CollisionQueryResult queryResult = d3d.collisionQueryResultsBufferPtr[1];
+        if (queryResult.instanceIndex == UINT_MAX) {
+            if (player.movement != float3(0, 0, 0)) {
+                player.position += player.movement;
+                playerCameraTranslate(player.movement);
+                float angle = acosf(player.movement.normalize().dot(float3(0, 0, -1)));
+                if (player.movement.x > 0) angle = -angle;
+                player.PitchYawRoll = float3(0, angle, 0);
+            }
         } else {
+
         }
     }
     {
@@ -2810,9 +2814,9 @@ D3D12_DISPATCH_RAYS_DESC fillRayTracingShaderTable(ID3D12Resource* buffer, uint8
 void render() {
     ZoneScopedN("render");
 
-    if (d3d.fenceRenderDone->GetCompletedValue() < d3d.fenceCounterRenderDone) {
-        assert(SUCCEEDED(d3d.fenceRenderDone->SetEventOnCompletion(d3d.fenceCounterRenderDone, d3d.fenceEventRenderDone)));
-        assert(WaitForSingleObjectEx(d3d.fenceEventRenderDone, INFINITE, false) == WAIT_OBJECT_0);
+    if (d3d.renderDoneFence->GetCompletedValue() < d3d.renderDoneFenceValue) {
+        assert(SUCCEEDED(d3d.renderDoneFence->SetEventOnCompletion(d3d.renderDoneFenceValue, d3d.renderDoneFenceEvent)));
+        assert(WaitForSingleObjectEx(d3d.renderDoneFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
     }
 
     assert(SUCCEEDED(d3d.graphicsCmdAllocator->Reset()));
@@ -2954,8 +2958,8 @@ void render() {
 
         assert(SUCCEEDED(d3d.graphicsCmdList->Close()));
         d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
-        d3d.fenceCounterCollisionQueriesDone += 1;
-        d3d.graphicsQueue->Signal(d3d.fenceCollisionQueriesDone, d3d.fenceCounterCollisionQueriesDone);
+        d3d.collisionQueriesFenceValue += 1;
+        d3d.graphicsQueue->Signal(d3d.collisionQueriesFence, d3d.collisionQueriesFenceValue);
         assert(SUCCEEDED(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
         d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap);
     }
@@ -3036,8 +3040,8 @@ void render() {
 
         assert(SUCCEEDED(d3d.graphicsCmdList->Close()));
         d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
-        d3d.fenceCounterRenderDone += 1;
-        d3d.graphicsQueue->Signal(d3d.fenceRenderDone, d3d.fenceCounterRenderDone);
+        d3d.renderDoneFenceValue += 1;
+        d3d.graphicsQueue->Signal(d3d.renderDoneFence, d3d.renderDoneFenceValue);
     }
     {
         ZoneScopedN("present");
