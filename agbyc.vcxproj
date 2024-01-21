@@ -169,6 +169,7 @@
     <ClCompile Include="include\rtxdi-sdk\src\ReSTIRGI.cpp" />
     <ClCompile Include="include\rtxdi-sdk\src\RISBufferSegmentAllocator.cpp" />
     <ClCompile Include="include\rtxdi-sdk\src\RtxdiUtils.cpp" />
+    <ClCompile Include="include\ufbx\ufbx.c" />
     <ClCompile Include="src\main.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -273,6 +274,9 @@
       <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">/enable-16bit-types %(AdditionalOptions)</AdditionalOptions>
       <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">/enable-16bit-types %(AdditionalOptions)</AdditionalOptions>
     </FxCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\ufbx\ufbx.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

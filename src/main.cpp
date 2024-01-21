@@ -95,6 +95,22 @@ T align(T x, T2 n) {
     return remainder == 0 ? x : x + ((T)n - remainder);
 }
 
+bool getBit(uint n, uint index) {
+    return (n >> index) & 1;
+}
+
+uint setBit(uint n, uint index) {
+    return n |= (1 << index);
+}
+
+uint unsetBit(uint n, uint index) {
+    return n &= ~(1 << index);
+}
+
+uint toggleBit(uint n, uint index) {
+    return n ^= (1 << index);
+}
+
 struct int2 {
     int x = 0, y = 0;
 };
@@ -669,7 +685,7 @@ enum EditorUndoType {
 };
 
 struct EditorUndoObjectDeletion {
-    WorldObjectType objectType;
+    ObjectType objectType;
     void* object;
 };
 
@@ -684,7 +700,7 @@ struct Editor {
     bool active = true;
     CameraEditor camera;
     bool cameraMoving = false;
-    WorldObjectType selectedObjectType = WorldObjectTypeNone;
+    ObjectType selectedObjectType = ObjectTypeNone;
     uint selectedObjectIndex = 0;
     std::stack<EditorUndo> undos;
 
@@ -2298,7 +2314,7 @@ void editorUpdate() {
         if (mouseSelectX != UINT_MAX && mouseSelectY != UINT_MAX) {
             uint mouseSelectInstanceIndex = d3d.collisionQueryResultsBufferPtr[0].instanceIndex;
             if (mouseSelectInstanceIndex == UINT_MAX) {
-                editor->selectedObjectType = WorldObjectTypeNone;
+                editor->selectedObjectType = ObjectTypeNone;
             } else {
                 TLASInstanceInfo& info = tlasInstancesInfos[mouseSelectInstanceIndex];
                 editor->selectedObjectType = info.objectType;
@@ -2406,14 +2422,14 @@ void editorUpdate() {
     ImGui::SetNextWindowPos(objectWindowPos);
     ImGui::SetNextWindowSize(objectWindowSize);
     if (ImGui::Begin("Objects")) {
-        if (ImGui::Selectable("Player", editor->selectedObjectType == WorldObjectTypePlayer)) {
-            editor->selectedObjectType = WorldObjectTypePlayer;
+        if (ImGui::Selectable("Player", editor->selectedObjectType == ObjectTypePlayer)) {
+            editor->selectedObjectType = ObjectTypePlayer;
             editor->selectedObjectIndex = 0;
         }
-        if (editor->selectedObjectType == WorldObjectTypePlayer && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        if (editor->selectedObjectType == ObjectTypePlayer && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
             ImGui::OpenPopup("player edit");
         }
-        if (editor->selectedObjectType == WorldObjectTypePlayer && ImGui::BeginPopup("player edit")) {
+        if (editor->selectedObjectType == ObjectTypePlayer && ImGui::BeginPopup("player edit")) {
             if (ImGui::Selectable("focus")) editorCameraFocus(editor->player.model.transform.t, 1);
             ImGui::EndPopup();
         }
@@ -2422,21 +2438,21 @@ void editorUpdate() {
             for (uint objIndex = 0; objIndex < editor->staticObjects.size(); objIndex++) {
                 StaticObject& object = editor->staticObjects[objIndex];
                 ImGui::PushID(objID++);
-                if (ImGui::Selectable(object.name.c_str(), editor->selectedObjectType == WorldObjectTypeStaticObject && editor->selectedObjectIndex == objIndex)) {
-                    editor->selectedObjectType = WorldObjectTypeStaticObject;
+                if (ImGui::Selectable(object.name.c_str(), editor->selectedObjectType == ObjectTypeStaticObject && editor->selectedObjectIndex == objIndex)) {
+                    editor->selectedObjectType = ObjectTypeStaticObject;
                     editor->selectedObjectIndex = objIndex;
                 }
                 ImGui::PopID();
-                if (editor->selectedObjectType == WorldObjectTypeStaticObject && editor->selectedObjectIndex == objIndex && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                if (editor->selectedObjectType == ObjectTypeStaticObject && editor->selectedObjectIndex == objIndex && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
                     ImGui::OpenPopup("static object edit");
                 }
-                if (editor->selectedObjectType == WorldObjectTypeStaticObject && editor->selectedObjectIndex == objIndex && ImGui::BeginPopup("static object edit")) {
+                if (editor->selectedObjectType == ObjectTypeStaticObject && editor->selectedObjectIndex == objIndex && ImGui::BeginPopup("static object edit")) {
                     if (ImGui::Selectable("focus")) {
                         editorCameraFocus(object.model.transform.t, 1);
                     }
                     if (ImGui::Selectable("delete")) {
                         object.toBeDeleted = true;
-                        editor->selectedObjectType = WorldObjectTypeNone;
+                        editor->selectedObjectType = ObjectTypeNone;
                     }
                     ImGui::EndPopup();
                 }
@@ -2448,21 +2464,21 @@ void editorUpdate() {
             for (uint objIndex = 0; objIndex < editor->dynamicObjects.size(); objIndex++) {
                 DynamicObject& object = editor->dynamicObjects[objIndex];
                 ImGui::PushID(objID++);
-                if (ImGui::Selectable(object.name.c_str(), editor->selectedObjectType == WorldObjectTypeDynamicObject && editor->selectedObjectIndex == objIndex)) {
-                    editor->selectedObjectType = WorldObjectTypeDynamicObject;
+                if (ImGui::Selectable(object.name.c_str(), editor->selectedObjectType == ObjectTypeDynamicObject && editor->selectedObjectIndex == objIndex)) {
+                    editor->selectedObjectType = ObjectTypeDynamicObject;
                     editor->selectedObjectIndex = objIndex;
                 }
                 ImGui::PopID();
-                if (editor->selectedObjectType == WorldObjectTypeDynamicObject && editor->selectedObjectIndex == objIndex && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                if (editor->selectedObjectType == ObjectTypeDynamicObject && editor->selectedObjectIndex == objIndex && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
                     ImGui::OpenPopup("dynamic object edit");
                 }
-                if (editor->selectedObjectType == WorldObjectTypeDynamicObject && editor->selectedObjectIndex == objIndex && ImGui::BeginPopup("dynamic object edit")) {
+                if (editor->selectedObjectType == ObjectTypeDynamicObject && editor->selectedObjectIndex == objIndex && ImGui::BeginPopup("dynamic object edit")) {
                     if (ImGui::Selectable("focus")) {
                         editorCameraFocus(object.model.transform.t, 1);
                     }
                     if (ImGui::Selectable("delete")) {
                         object.toBeDeleted = true;
-                        editor->selectedObjectType = WorldObjectTypeNone;
+                        editor->selectedObjectType = ObjectTypeNone;
                     }
                     ImGui::EndPopup();
                 }
@@ -2476,7 +2492,7 @@ void editorUpdate() {
     // ImGui::SetNextWindowPos(propertiesWindowPos);
     // ImGui::SetNextWindowSize(propertiesWindowSize);
     if (ImGui::Begin("Properties")) {
-        if (editor->selectedObjectType == WorldObjectTypePlayer) {
+        if (editor->selectedObjectType == ObjectTypePlayer) {
             ImGui::Text("Player");
             modelInstanceImgui(&editor->player.model);
             if (ImGui::TreeNode("Animations")) {
@@ -2508,12 +2524,12 @@ void editorUpdate() {
                 ImGui::InputFloat3("Acceleration", &editor->player.acceleration.x);
                 ImGui::TreePop();
             }
-        } else if (editor->selectedObjectType == WorldObjectTypeStaticObject) {
+        } else if (editor->selectedObjectType == ObjectTypeStaticObject) {
             StaticObject& object = editor->staticObjects[editor->selectedObjectIndex];
             ImGui::Text("Static Object #%d", editor->selectedObjectIndex);
             ImGui::Text("Name \"%s\"", object.name.c_str());
             modelInstanceImgui(&object.model);
-        } else if (editor->selectedObjectType == WorldObjectTypeDynamicObject) {
+        } else if (editor->selectedObjectType == ObjectTypeDynamicObject) {
             DynamicObject& object = editor->dynamicObjects[editor->selectedObjectIndex];
             ImGui::Text("Dynamic Object #%d", editor->selectedObjectIndex);
             ImGui::Text("Name \"%s\"", object.name.c_str());
@@ -2627,15 +2643,15 @@ void editorUpdate() {
             }
         }
     };
-    if (editor->selectedObjectType == WorldObjectTypePlayer) {
+    if (editor->selectedObjectType == ObjectTypePlayer) {
         Transform transform = editor->player.model.transform;
         transform.t += editor->player.spawnPosition.toFloat3();
         transformGizmo(&transform);
         transform.t -= editor->player.spawnPosition.toFloat3();
         editor->player.model.transform = transform;
-    } else if (editor->selectedObjectType == WorldObjectTypeStaticObject && editor->selectedObjectIndex < editor->staticObjects.size()) {
+    } else if (editor->selectedObjectType == ObjectTypeStaticObject && editor->selectedObjectIndex < editor->staticObjects.size()) {
         transformGizmo(&editor->staticObjects[editor->selectedObjectIndex].model.transform);
-    } else if (editor->selectedObjectType == WorldObjectTypeDynamicObject && editor->selectedObjectIndex < editor->dynamicObjects.size()) {
+    } else if (editor->selectedObjectType == ObjectTypeDynamicObject && editor->selectedObjectIndex < editor->dynamicObjects.size()) {
         transformGizmo(&editor->dynamicObjects[editor->selectedObjectIndex].model.transform);
     }
     // static const XMMATRIX gridMat = XMMatrixIdentity();
@@ -2676,6 +2692,11 @@ void gameUpdate() {
             assert(WaitForSingleObjectEx(d3d.collisionQueriesFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
         }
         CollisionQueryResult queryResult = d3d.collisionQueryResultsBufferPtr[1];
+        printf("player Movement: %s\nqueryResultDistance: %s\nqueryResultInstance: %d\n", 
+            player.movement.toString().c_str(),
+            queryResult.distance.toString().c_str(),
+            queryResult.instanceIndex
+        );
         if (queryResult.instanceIndex == UINT_MAX) {
             if (player.movement != float3(0, 0, 0)) {
                 player.position += player.movement;
@@ -2685,7 +2706,6 @@ void gameUpdate() {
                 player.PitchYawRoll = float3(0, angle, 0);
             }
         } else {
-
         }
     }
     {
@@ -2720,12 +2740,6 @@ void gameUpdate() {
                 player.movement = moveDir * player.runSpeed * (float)frameTime;
                 player.model.animation = &player.model.model->animations[player.runAnimationIndex];
             }
-
-            player.position += player.movement;
-            playerCameraTranslate(player.movement);
-            float angle = acosf(moveDir.dot(float3(0, 0, -1)));
-            if (player.movement.x > 0) angle = -angle;
-            player.PitchYawRoll = float3(0, angle, 0);
         }
     }
     {
@@ -2752,10 +2766,12 @@ void update() {
     ImGui::Render();
 }
 
-void addTLASInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransform, WorldObjectType objectType, uint objectIndex) {
+void addTLASInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransform, ObjectType objectType, uint objectIndex) {
     ZoneScopedN("addTLASInstance");
     bool selected = false;
-    if (editor && editor->active) selected = editor->selectedObjectType == objectType && editor->selectedObjectIndex == objectIndex;
+    if (editor && editor->active) {
+        selected = editor->selectedObjectType == objectType && editor->selectedObjectIndex == objectIndex;
+    }
     TLASInstanceInfo tlasInstanceInfo = {.objectType = objectType, .objectIndex = objectIndex, .selected = selected, .skinJointsDescriptor = UINT32_MAX, .blasGeometriesOffset = (uint)blasGeometriesInfos.size()};
     for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance.meshNodes.size(); meshNodeIndex++) {
         ModelNode* meshNode = modelInstance.model->meshNodes[meshNodeIndex];
@@ -2767,6 +2783,7 @@ void addTLASInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
         transform = XMMatrixMultiply(transform, objectTransform);
         transform = XMMatrixTranspose(transform);
         D3D12_RAYTRACING_INSTANCE_DESC instanceDesc = {.InstanceID = d3d.cbvSrvUavDescriptorCount, .InstanceMask = 0xff, .AccelerationStructure = instanceMeshNode.blas->GetResource()->GetGPUVirtualAddress()};
+        if (objectType == ObjectTypePlayer) { instanceDesc.InstanceMask = 0x01; }
         memcpy(instanceDesc.Transform, &transform, sizeof(instanceDesc.Transform));
         tlasInstancesBuildInfos.push_back(instanceDesc);
         tlasInstancesInfos.push_back(tlasInstanceInfo);
@@ -2852,8 +2869,8 @@ void render() {
         D3D12_SHADER_RESOURCE_VIEW_DESC tlasViewDesc = {.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .RaytracingAccelerationStructure = {.Location = d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress()}};
         D3D12_SHADER_RESOURCE_VIEW_DESC tlasInstancesInfosDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.tlasInstancesInfosBuffer->GetSize() / sizeof(struct TLASInstanceInfo)), .StructureByteStride = sizeof(struct TLASInstanceInfo)}};
         D3D12_SHADER_RESOURCE_VIEW_DESC blasGeometriesInfosDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.blasGeometriesInfosBuffer->GetSize() / sizeof(struct BLASGeometryInfo)), .StructureByteStride = sizeof(struct BLASGeometryInfo)}};
-        D3D12_SHADER_RESOURCE_VIEW_DESC collisionQueriesDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = 1, .StructureByteStride = sizeof(struct CollisionQuery)}};
-        D3D12_UNORDERED_ACCESS_VIEW_DESC collisionQueryResultsDesc = {.ViewDimension = D3D12_UAV_DIMENSION_BUFFER, .Buffer = {.NumElements = 1, .StructureByteStride = sizeof(struct CollisionQueryResult)}};
+        D3D12_SHADER_RESOURCE_VIEW_DESC collisionQueriesDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.collisionQueriesBuffer->GetSize() / sizeof(struct CollisionQuery)), .StructureByteStride = sizeof(struct CollisionQuery)}};
+        D3D12_UNORDERED_ACCESS_VIEW_DESC collisionQueryResultsDesc = {.ViewDimension = D3D12_UAV_DIMENSION_BUFFER, .Buffer = {.NumElements = (uint)(d3d.collisionQueryResultsBuffer->GetSize() / sizeof(struct CollisionQueryResult)), .StructureByteStride = sizeof(struct CollisionQueryResult)}};
 
         D3DDescriptor renderTextureSRVDescriptor = d3dAppendSRVDescriptor(&renderTextureSRVDesc, d3d.renderTexture->GetResource());
         D3DDescriptor renderTextureUAVDescriptor = d3dAppendUAVDescriptor(&renderTextureUAVDesc, d3d.renderTexture->GetResource());
@@ -2875,28 +2892,28 @@ void render() {
         ZoneScopedN("buildTLAS");
         if (editor && editor->active) {
             modelInstanceBuildSkinnedMeshesBLASs(&editor->player.model);
-            addTLASInstance(editor->player.model, XMMatrixTranslationFromVector((editor->player.spawnPosition - editor->camera.position).toXMVector()), WorldObjectTypePlayer, 0);
+            addTLASInstance(editor->player.model, XMMatrixTranslationFromVector((editor->player.spawnPosition - editor->camera.position).toXMVector()), ObjectTypePlayer, 0);
             for (uint objIndex = 0; objIndex < editor->staticObjects.size(); objIndex++) {
                 modelInstanceBuildSkinnedMeshesBLASs(&editor->staticObjects[objIndex].model);
-                addTLASInstance(editor->staticObjects[objIndex].model, XMMatrixTranslationFromVector((-editor->camera.position).toXMVector()), WorldObjectTypeStaticObject, objIndex);
+                addTLASInstance(editor->staticObjects[objIndex].model, XMMatrixTranslationFromVector((-editor->camera.position).toXMVector()), ObjectTypeStaticObject, objIndex);
             }
             for (uint objIndex = 0; objIndex < editor->dynamicObjects.size(); objIndex++) {
                 modelInstanceBuildSkinnedMeshesBLASs(&editor->dynamicObjects[objIndex].model);
-                addTLASInstance(editor->dynamicObjects[objIndex].model, XMMatrixTranslationFromVector((-editor->camera.position).toXMVector()), WorldObjectTypeDynamicObject, objIndex);
+                addTLASInstance(editor->dynamicObjects[objIndex].model, XMMatrixTranslationFromVector((-editor->camera.position).toXMVector()), ObjectTypeDynamicObject, objIndex);
             }
         } else {
             modelInstanceBuildSkinnedMeshesBLASs(&player.model);
             XMVECTOR translate = (player.position - player.camera.position).toXMVector();
             XMVECTOR rotate = XMQuaternionRotationRollPitchYaw(0, player.PitchYawRoll.y, 0);
-            XMMATRIX transformMat = XMMatrixAffineTransformation(XMVectorSet(1, 1, 1, 0), player.model.transform.t.toXMVector(), rotate, translate);
-            addTLASInstance(player.model, transformMat, WorldObjectTypePlayer, 0);
+            XMMATRIX transformMat = XMMatrixAffineTransformation(XMVectorSet(1, 1, 1, 0), XMVectorSet(0, 0, 0, 0), rotate, translate);
+            addTLASInstance(player.model, transformMat, ObjectTypePlayer, 0);
             for (uint objIndex = 0; objIndex < staticObjects.size(); objIndex++) {
                 modelInstanceBuildSkinnedMeshesBLASs(&staticObjects[objIndex].model);
-                addTLASInstance(staticObjects[objIndex].model, XMMatrixTranslationFromVector((-player.camera.position).toXMVector()), WorldObjectTypeStaticObject, objIndex);
+                addTLASInstance(staticObjects[objIndex].model, XMMatrixTranslationFromVector((-player.camera.position).toXMVector()), ObjectTypeStaticObject, objIndex);
             }
             for (uint objIndex = 0; objIndex < dynamicObjects.size(); objIndex++) {
                 modelInstanceBuildSkinnedMeshesBLASs(&dynamicObjects[objIndex].model);
-                addTLASInstance(dynamicObjects[objIndex].model, XMMatrixTranslationFromVector((-player.camera.position).toXMVector()), WorldObjectTypeDynamicObject, objIndex);
+                addTLASInstance(dynamicObjects[objIndex].model, XMMatrixTranslationFromVector((-player.camera.position).toXMVector()), ObjectTypeDynamicObject, objIndex);
             }
         }
         {
@@ -2934,8 +2951,10 @@ void render() {
             float tanHalfFovY = 1.0f / cameraProjMat.m[1][1];
             rayDesc.dir = (float3(cameraViewMat.m[0][0], cameraViewMat.m[0][1], cameraViewMat.m[0][2]) * pixelCoord.x * tanHalfFovY * aspect) - (float3(cameraViewMat.m[1][0], cameraViewMat.m[1][1], cameraViewMat.m[1][2]) * pixelCoord.y * tanHalfFovY) + (float3(cameraViewMat.m[2][0], cameraViewMat.m[2][1], cameraViewMat.m[2][2]));
             rayDesc.dir = rayDesc.dir.normalize();
-            d3d.collisionQueriesBufferPtr[0] = {.rayDesc = rayDesc};
+            d3d.collisionQueriesBufferPtr[0] = {.rayDesc = rayDesc, .instanceInclusionMask = 0xff};
         }
+
+        d3d.collisionQueriesBufferPtr[1] = {.rayDesc = {.origin = player.position - player.camera.position, .min = 0.0f, .dir = player.movement, .max = player.movement.length()}, .instanceInclusionMask = 0xfe};
 
         D3D12_RESOURCE_BARRIER collisionQueryResultsBarriers[2] = {
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
@@ -2946,7 +2965,7 @@ void render() {
         void* missIDs[1] = {d3d.collisionQueryMissID};
         void* hitGroupIDs[1] = {d3d.collisionQueryHitGroupID};
         D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantBuffer->GetResource(), d3d.constantBufferPtr, &d3d.constantBufferOffset, d3d.collisionQueryRayGenID, missIDs, hitGroupIDs);
-        dispatchDesc.Width = 1, dispatchDesc.Height = 1, dispatchDesc.Depth = 1;
+        dispatchDesc.Width = 2, dispatchDesc.Height = 1, dispatchDesc.Depth = 1;
         assert(d3d.constantBufferOffset < d3d.constantBuffer->GetSize());
 
         d3d.graphicsCmdList->SetPipelineState1(d3d.collisionQuery);

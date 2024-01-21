@@ -17,6 +17,9 @@
     <Filter Include="RTXDI\HLSL">
       <UniqueIdentifier>{47654515-7078-4d56-8bd9-c467bb1b0635}</UniqueIdentifier>
     </Filter>
+    <Filter Include="ufbx">
+      <UniqueIdentifier>{6d24651d-3a03-407a-80b7-ef9bb9ac2734}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\main.cpp">
@@ -39,6 +42,9 @@
     </ClCompile>
     <ClCompile Include="include\rtxdi-sdk\src\RtxdiUtils.cpp">
       <Filter>RTXDI</Filter>
+    </ClCompile>
+    <ClCompile Include="include\ufbx\ufbx.c">
+      <Filter>ufbx</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -115,5 +121,10 @@
     <FxCompile Include="include\rtxdi-sdk\shaders\ResamplingCompileTest.hlsl">
       <Filter>RTXDI\HLSL</Filter>
     </FxCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\ufbx\ufbx.h">
+      <Filter>ufbx</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

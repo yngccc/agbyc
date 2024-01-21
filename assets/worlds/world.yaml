@@ -1,6 +1,6 @@
 editorCamera:
-  position: [8879,24047,-37344]
-  pitchYaw: [0.3910489,-0.37809858]
+  position: [-12163,9659,51789]
+  pitchYaw: [0.07685534,2.773922]
   moveSpeed: 15.687
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
@@ -10,8 +10,8 @@ player:
   rotate: [-0,0,-0,1]
   translate: [0,0,0]
   spawnPosition: [0,0,0]
-  walkSpeed: 0.1
-  runSpeed: 0.5
+  walkSpeed: 1
+  runSpeed: 5
   idleAnimationIndex: 6
   walkAnimationIndex: 7
   runAnimationIndex: 5
@@ -38,7 +38,7 @@ staticObjects:
     file: models\cesiumMan\cesiumMan.gltf
     scale: [2.76,2.76,2.76]
     rotate: [-0,0,-0,1]
-    translate: [-1.006432,0,-1.3228992]
+    translate: [-1.0405915,0,0]
   - name: cube2
     file: models/cube/cube.gltf
     scale: [1,1,1]

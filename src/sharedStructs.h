@@ -77,24 +77,24 @@ struct RenderInfo {
 #endif
 };
 
-enum WorldObjectType : uint {
-    WorldObjectTypeNone,
-    WorldObjectTypePlayer,
-    WorldObjectTypeSkybox,
-    WorldObjectTypeStaticObject,
-    WorldObjectTypeDynamicObject,
+enum ObjectType : uint {
+    ObjectTypeNone,
+    ObjectTypePlayer,
+    ObjectTypeSkybox,
+    ObjectTypeStaticObject,
+    ObjectTypeDynamicObject,
 };
 
 struct TLASInstanceInfo {
 #ifdef __cplusplus
-    WorldObjectType objectType;
+    ObjectType objectType;
     uint objectIndex;
     uint selected;
     uint skinJointsDescriptor;
     uint blasGeometriesOffset;
     uint padding[3];
 #else
-    WorldObjectType objectType;
+    ObjectType objectType;
     uint objectIndex;
     uint selected;
     uint skinJointsDescriptor;
@@ -123,8 +123,12 @@ struct RayDesc {
 struct CollisionQuery {
 #ifdef __cplusplus
     RayDesc rayDesc;
+    uint instanceInclusionMask;
+    uint padding[3];
 #else
     RayDesc rayDesc;
+    uint instanceInclusionMask;
+    uint padding[3];
 #endif
 };
 

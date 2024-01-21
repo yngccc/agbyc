@@ -17,9 +17,9 @@ void rayGen() {
     COLLISION_QUERY_RESULTS_DESCRIPTOR(collisionQueryResults);
     
     uint collisionQueryIndex = DispatchRaysIndex().x;
-    RayDesc rayDesc = collisionQueries[collisionQueryIndex].rayDesc;
+    CollisionQuery query = collisionQueries[collisionQueryIndex];
     RayPayload rayPayload;
-    TraceRay(bvh, RAY_FLAG_NONE, 0xff, 0, 0, 0, rayDesc, rayPayload);
+    TraceRay(bvh, RAY_FLAG_NONE, query.instanceInclusionMask, 0, 0, 0, query.rayDesc, rayPayload);
     collisionQueryResults[collisionQueryIndex] = rayPayload.collisionQueryResult;
 }
 
@@ -32,5 +32,4 @@ void miss(inout RayPayload payload) {
 void closestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
     payload.collisionQueryResult.instanceIndex = InstanceIndex();
     payload.collisionQueryResult.distance = WorldRayDirection() * RayTCurrent();
-
 }
