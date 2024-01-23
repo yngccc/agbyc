@@ -61,7 +61,7 @@ using namespace DirectX;
 
 #include <d3d12ma/d3d12memalloc.cpp>
 
-#define TRACY_ENABLE
+//#define TRACY_ENABLE
 #include <tracy/tracy/tracy.hpp>
 #include <tracy/tracyclient.cpp>
 
@@ -727,6 +727,9 @@ static Controller controller = {};
 
 static std::filesystem::path worldFilePath;
 static std::list<Model> models;
+static ModelInstance shapeCube;
+static ModelInstance shapeCylinder;
+static ModelInstance shapeSphere;
 static Player player;
 static std::vector<StaticObject> staticObjects;
 static std::vector<DynamicObject> dynamicObjects;
@@ -1837,6 +1840,10 @@ ModelInstance loadModel(const std::filesystem::path& filePath) {
             assert(SUCCEEDED(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &mesh.blas, {}, nullptr)));
             blasDesc.Width = prebuildInfo.ScratchDataSizeInBytes;
             assert(SUCCEEDED(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &mesh.blasScratch, {}, nullptr)));
+            std::wstring name = std::format(L"{}_mesh_{}_blas", filePath.stem().wstring(), meshIndex);
+            std::wstring scratchName = name + L"_scratch";
+            mesh.blas->GetResource()->SetName(name.c_str());
+            mesh.blasScratch->GetResource()->SetName(scratchName.c_str());
             D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = mesh.blas->GetResource()->GetGPUVirtualAddress(), .Inputs = inputs, .ScratchAccelerationStructureData = mesh.blasScratch->GetResource()->GetGPUVirtualAddress()};
             d3d.transferCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
         }
@@ -1960,7 +1967,13 @@ ModelInstance loadModel(const std::filesystem::path& filePath) {
     return modelInstance;
 }
 
-void worldLoad(const std::filesystem::path& path) {
+void loadSimpleAssets() {
+    shapeCube = loadModel("models/cube/cube.gltf");
+    shapeCylinder = loadModel("models/cylinder/cylinder.gltf");
+    shapeSphere = loadModel("models/sphere/sphere.gltf");
+}
+
+void loadWorld(const std::filesystem::path& path) {
     if (!std::filesystem::exists(path)) assert(false);
 
     std::string yamlStr = fileReadStr(path);
@@ -2036,7 +2049,7 @@ void worldLoad(const std::filesystem::path& path) {
     }
 }
 
-void worldSave() {
+void saveWorld() {
     if (!editor) return;
 
     ryml::Tree yamlTree;
@@ -2692,11 +2705,10 @@ void gameUpdate() {
             assert(WaitForSingleObjectEx(d3d.collisionQueriesFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
         }
         CollisionQueryResult queryResult = d3d.collisionQueryResultsBufferPtr[1];
-        printf("player Movement: %s\nqueryResultDistance: %s\nqueryResultInstance: %d\n", 
-            player.movement.toString().c_str(),
-            queryResult.distance.toString().c_str(),
-            queryResult.instanceIndex
-        );
+        printf("player Movement: %s\nqueryResultDistance: %s\nqueryResultInstance: %d\n",
+               player.movement.toString().c_str(),
+               queryResult.distance.toString().c_str(),
+               queryResult.instanceIndex);
         if (queryResult.instanceIndex == UINT_MAX) {
             if (player.movement != float3(0, 0, 0)) {
                 player.position += player.movement;
@@ -2770,7 +2782,9 @@ void addTLASInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
     ZoneScopedN("addTLASInstance");
     bool selected = false;
     if (editor && editor->active) {
-        selected = editor->selectedObjectType == objectType && editor->selectedObjectIndex == objectIndex;
+        if (objectType != ObjectTypeNone) {
+            selected = editor->selectedObjectType == objectType && editor->selectedObjectIndex == objectIndex;
+        }
     }
     TLASInstanceInfo tlasInstanceInfo = {.objectType = objectType, .objectIndex = objectIndex, .selected = selected, .skinJointsDescriptor = UINT32_MAX, .blasGeometriesOffset = (uint)blasGeometriesInfos.size()};
     for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance.meshNodes.size(); meshNodeIndex++) {
@@ -3068,7 +3082,7 @@ void render() {
     }
 }
 
-int main(int argc, char** argv) {
+int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) {
     assert(QueryPerformanceFrequency(&perfFrequency));
     if (commandLineContain(L"showConsole")) { showConsole(); }
     settingsLoad();
@@ -3076,7 +3090,8 @@ int main(int argc, char** argv) {
     windowShow();
     d3dInit(commandLineContain(L"d3ddebug"));
     d3dApplySettings();
-    worldLoad(assetsDir / "worlds/world.yaml");
+    loadSimpleAssets();
+    loadWorld(assetsDir / "worlds/world.yaml");
     while (!quit) {
         QueryPerformanceCounter(&perfCounters[0]);
         ZoneScoped;
@@ -3094,7 +3109,7 @@ int main(int argc, char** argv) {
         QueryPerformanceCounter(&perfCounters[1]);
         frameTime = (double)(perfCounters[1].QuadPart - perfCounters[0].QuadPart) / (double)perfFrequency.QuadPart;
     }
-    worldSave();
+    saveWorld();
     settingsSave();
     return EXIT_SUCCESS;
 }
