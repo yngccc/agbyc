@@ -59,11 +59,9 @@ using namespace DirectX;
 #undef snprintf
 #undef vsnprintf
 
-#include <d3d12ma/d3d12memalloc.cpp>
+#include <d3d12ma/d3d12memalloc.h>
 
-//#define TRACY_ENABLE
 #include <tracy/tracy/tracy.hpp>
-#include <tracy/tracyclient.cpp>
 
 typedef int8_t int8;
 typedef int16_t int16;

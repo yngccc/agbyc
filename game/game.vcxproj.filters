@@ -8,10 +8,19 @@
     <Filter Include="Source Files\hlsl">
       <UniqueIdentifier>{48b9c6d8-307f-4578-bfe8-a3904a49f153}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\libs">
+      <UniqueIdentifier>{9905ef11-e9a9-4865-9b34-67cf306fa657}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\src\main.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\tracy\TracyClient.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\d3d12MA\D3D12MemAlloc.cpp">
+      <Filter>Source Files\libs</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
