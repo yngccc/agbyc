@@ -1,5 +1,5 @@
 #include "shared.hlsli"
-#include "../sharedStructs.h"
+#include "../structsHLSL.h"
 
 GlobalRootSignature globalRootSig = { "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED)" };
 RaytracingPipelineConfig pipelineConfig = { 1 };

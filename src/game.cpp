@@ -3,7 +3,6 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
-#include <iostream>
 #include <list>
 #include <span>
 #include <stack>
@@ -30,10 +29,7 @@
 #include <windowsx.h>
 #include <xinput.h>
 
-#define _XM_SSE4_INTRINSICS_
-#include <directxmath.h>
 #include <directxtex.h>
-using namespace DirectX;
 
 #define RYML_SINGLE_HDR_DEFINE_NOW
 #include <rapidyaml/rapidyaml-0.5.0.hpp>
@@ -46,289 +42,16 @@ using namespace DirectX;
 // #define STB_DS_IMPLEMENTATION
 // #include <stb/stb_ds.h>
 
-#define IMGUI_DISABLE_OBSOLETE_FUNCTIONS
-#define IMGUI_DISABLE_OBSOLETE_KEYIO
-#define IMGUI_DISABLE_DEMO_WINDOWS
-#define IMGUI_USE_STB_SPRINTF
-#define IMGUI_STB_SPRINTF_FILENAME <stb/stb_sprintf.h>
-#include <imgui/imgui.cpp>
-#include <imgui/imgui_draw.cpp>
-#include <imgui/imgui_tables.cpp>
-#include <imgui/imgui_widgets.cpp>
-#include <imgui/imguizmo.cpp>
-#undef snprintf
-#undef vsnprintf
+#include <imgui/imgui.h>
+#include <imgui/imgui_internal.h>
+#include <imgui/imguizmo.h>
 
 #include <d3d12ma/d3d12memalloc.h>
 
 #include <tracy/tracy/tracy.hpp>
 
-typedef int8_t int8;
-typedef int16_t int16;
-typedef int64_t int64;
-typedef uint8_t uint8;
-typedef uint16_t uint16;
-typedef uint64_t uint64;
-typedef uint32_t uint;
-
-static const float euler = 2.71828182845904523536f;
-static const float pi = 3.14159265358979323846f;
-static const float sqrt2 = 1.41421356237309504880f;
-
-#define kilobytes(n) (1024 * (n))
-#define megabytes(n) (1024 * 1024 * (n))
-#define gigabytes(n) (1024 * 1024 * 1024 * (n))
-#define radian(d) (d * (pi / 180.0f))
-#define degree(r) (r * (180.0f / pi))
-
-template <typename T, uint N>
-constexpr uint countof(const T (&)[N]) { return N; }
-
-template <typename T>
-uint64 vectorSizeof(const std::vector<T>& v) { return v.size() * sizeof(T); }
-
-template <typename T, typename T2>
-T align(T x, T2 n) {
-    T remainder = x % (T)n;
-    return remainder == 0 ? x : x + ((T)n - remainder);
-}
-
-bool getBit(uint n, uint index) {
-    return (n >> index) & 1;
-}
-
-uint setBit(uint n, uint index) {
-    return n |= (1 << index);
-}
-
-uint unsetBit(uint n, uint index) {
-    return n &= ~(1 << index);
-}
-
-uint toggleBit(uint n, uint index) {
-    return n ^= (1 << index);
-}
-
-struct int2 {
-    int x = 0, y = 0;
-};
-
-struct uint8_4 {
-    uint8 x = 0, y = 0, z = 0, w = 0;
-    std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
-};
-
-struct uint16_4 {
-    uint16 x = 0, y = 0, z = 0, w = 0;
-    void operator=(uint8_4 v) { x = v.x, y = v.y, z = v.z, w = v.w; }
-    std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
-};
-
-struct uint_4 {
-    uint x = 0, y = 0, z = 0, w = 0;
-    std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
-};
-
-struct float2 {
-    float x = 0, y = 0;
-
-    float2() = default;
-    float2(float x, float y) : x(x), y(y) {}
-    bool operator==(float2 v) const { return x == v.x && y == v.y; }
-    bool operator!=(float2 v) const { return x != v.x || y != v.y; }
-    float2 operator+(float v) const { return float2(x + v, y + v); }
-    float2 operator+(float2 v) const { return float2(x + v.x, y + v.y); }
-    float2 operator-(float v) const { return float2(x - v, y - v); }
-    float2 operator-(float2 v) const { return float2(x - v.x, y - v.y); }
-    float2 operator*(float v) const { return float2(x * v, y * v); }
-    float2 operator*(float2 v) const { return float2(x * v.x, y * v.y); }
-    float2 operator/(float v) const { return float2(x / v, y / v); }
-    float2 operator/(float2 v) const { return float2(x / v.x, y / v.y); }
-    void operator<<(ryml::ConstNodeRef node) { node[0] >> x, node[1] >> y; }
-    void operator>>(ryml::NodeRef node) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << x, node.append_child() << y; }
-    std::string toString() const { return std::format("[{}, {}]", x, y); }
-    float length() const { return sqrtf(x * x + y * y); }
-    float2 normalize() const {
-        float l = length();
-        return (l > 0) ? float2(x / l, y / l) : float2(x, y);
-    }
-};
-
-struct float3 {
-    float x = 0, y = 0, z = 0;
-
-    float3() = default;
-    float3(float x, float y, float z) : x(x), y(y), z(z) {}
-    float3(const float* v) : x(v[0]), y(v[1]), z(v[2]) {}
-    float3(const XMVECTOR& v) : x(XMVectorGetX(v)), y(XMVectorGetY(v)), z(XMVectorGetZ(v)) {}
-    void operator=(const XMVECTOR& v) { x = XMVectorGetX(v), y = XMVectorGetY(v), z = XMVectorGetZ(v); }
-    bool operator==(const float3& v) const { return x == v.x && y == v.y && z == v.z; }
-    bool operator!=(const float3& v) const { return x != v.x || y != v.y || z != v.z; }
-    float3 operator+(float3 v) const { return float3(x + v.x, y + v.y, z + v.z); }
-    void operator+=(float3 v) { x += v.x, y += v.y, z += v.z; }
-    float3 operator-() const { return float3(-x, -y, -z); }
-    float3 operator-(float3 v) const { return float3(x - v.x, y - v.y, z - v.z); }
-    void operator-=(float3 v) { x -= v.x, y -= v.y, z -= v.z; }
-    float3 operator*(float s) const { return float3(x * s, y * s, z * s); }
-    float3 operator*(float3 s) const { return float3(x * s.x, y * s.y, z * s.z); }
-    void operator*=(float s) { x *= s, y *= s, z *= s; }
-    void operator*=(float3 s) { x *= s.x, y *= s.y, z *= s.z; }
-    float3 operator/(float s) const { return float3(x / s, y / s, z / s); }
-    float3 operator/(float3 s) const { return float3(x / s.x, y / s.y, z / s.z); }
-    void operator/=(float s) { x /= s, y /= s, z /= s; }
-    void operator/=(float3 s) { x /= s.x, y /= s.y, z /= s.z; }
-    void operator<<(ryml::ConstNodeRef node) { node[0] >> x, node[1] >> y, node[2] >> z; }
-    void operator>>(ryml::NodeRef node) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << x, node.append_child() << y, node.append_child() << z; }
-    XMVECTOR toXMVector() const { return XMVectorSet(x, y, z, 0); }
-    std::string toString() const { return std::format("[{}, {}, {}]", x, y, z); }
-    float dot(float3 v) const { return x * v.x + y * v.y + z * v.z; }
-    float3 cross(float3 v) const { return float3(y * v.z - z * v.y, z * v.x - x * v.z, x * v.y - y * v.x); }
-    float length() const { return sqrtf(x * x + y * y + z * z); }
-    float lengthSquared() const { return x * x + y * y + z * z; }
-    float3 normalize() const {
-        float l = length();
-        return (l > 0) ? float3(x / l, y / l, z / l) : float3(x, y, z);
-    }
-};
-
-struct float4 {
-    float x = 0, y = 0, z = 0, w = 1;
-
-    float4() = default;
-    float4(float x, float y, float z, float w) : x(x), y(y), z(z), w(w) {}
-    float4(const float* v) : x(v[0]), y(v[1]), z(v[2]), w(v[3]) {}
-    float4(const XMVECTOR& v) : x(XMVectorGetX(v)), y(XMVectorGetY(v)), z(XMVectorGetZ(v)), w(XMVectorGetW(v)) {}
-    void operator=(const XMVECTOR& v) { x = XMVectorGetX(v), y = XMVectorGetY(v), z = XMVectorGetZ(v), w = XMVectorGetW(v); }
-    void operator=(const float3& v) { x = v.x, y = v.y, z = v.z, w = 0; }
-    void operator<<(ryml::ConstNodeRef node) { node[0] >> x, node[1] >> y, node[2] >> z, node[3] >> w; }
-    void operator>>(ryml::NodeRef node) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << x, node.append_child() << y, node.append_child() << z, node.append_child() << w; }
-    float3 xyz() const { return float3(x, y, z); }
-    XMVECTOR toXMVector() const { return XMVectorSet(x, y, z, w); }
-    std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
-};
-
-struct Position {
-    // 0.1mm precision
-    int x = 0, y = 0, z = 0;
-
-    void operator<<(ryml::ConstNodeRef node) { node[0] >> x, node[1] >> y, node[2] >> z; }
-    void operator>>(ryml::NodeRef node) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << x, node.append_child() << y, node.append_child() << z; }
-    void operator=(float3 p) { x = int(p.x * 10000.0), y = int(p.y * 10000.0), z = int(p.z * 10000.0); }
-    Position operator+(float3 p) const { return Position{x + int(p.x * 10000.0), y + int(p.y * 10000.0), z + int(p.z * 10000.0)}; }
-    void operator+=(float3 p) { x += int(p.x * 10000.0), y += int(p.y * 10000.0), z += int(p.z * 10000.0); }
-    Position operator-() const { return Position{-x, -y, -z}; }
-    float3 operator-(Position p) const { return float3((x - p.x) * 0.0001f, (y - p.y) * 0.0001f, (z - p.z) * 0.0001f); }
-    float3 toFloat3() const { return float3(x * 0.0001f, y * 0.0001f, z * 0.0001f); }
-    XMVECTOR toXMVector() const { return XMVectorSet(x * 0.0001f, y * 0.0001f, z * 0.0001f, 0); }
-};
-
-struct Transform {
-    float3 s = {1, 1, 1};
-    float4 r = {0, 0, 0, 1};
-    float3 t = {0, 0, 0};
-
-    void operator<<(ryml::ConstNodeRef node) { s << node["scale"], r << node["rotate"], t << node["translate"]; }
-    void operator>>(ryml::NodeRef node) { s >> node["scale"], r >> node["rotate"], t >> node["translate"]; }
-    Transform operator*(const Transform& transform) const { return Transform{.s = s * transform.s, .r = XMQuaternionMultiply(r.toXMVector(), transform.r.toXMVector()), .t = t + transform.t}; }
-    XMMATRIX toMat() const { return XMMatrixAffineTransformation(s.toXMVector(), XMVectorSet(0, 0, 0, 0), r.toXMVector(), t.toXMVector()); }
-    void imgui() {
-        if (ImGui::TreeNode("Transform")) {
-            ImGui::InputFloat3("S", &s.x), ImGui::SameLine();
-            if (ImGui::Button("reset##scale")) s = float3(1, 1, 1);
-            ImGui::InputFloat4("R", &r.x), ImGui::SameLine();
-            if (ImGui::Button("reset##rotate")) r = float4(0, 0, 0, 1);
-            ImGui::InputFloat3("T", &t.x), ImGui::SameLine();
-            if (ImGui::Button("reset##translate")) t = float3(0, 0, 0);
-            ImGui::TreePop();
-        }
-    }
-};
-
-float3 lerp(const float3& a, const float3& b, float t) { return a + ((b - a) * t); };
-
-float4 slerp(const float4& a, const float4& b, float t) { return float4(XMQuaternionSlerp(a.toXMVector(), b.toXMVector(), t)); };
-
-std::string toString(const XMVECTOR& vec) { return std::format("|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n", XMVectorGetX(vec), XMVectorGetY(vec), XMVectorGetZ(vec), XMVectorGetW(vec)); }
-
-std::string toString(const XMMATRIX& mat) {
-    return std::format("|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n",
-                       XMVectorGetX(mat.r[0]), XMVectorGetX(mat.r[1]), XMVectorGetX(mat.r[2]), XMVectorGetX(mat.r[3]),
-                       XMVectorGetY(mat.r[0]), XMVectorGetY(mat.r[1]), XMVectorGetY(mat.r[2]), XMVectorGetY(mat.r[3]),
-                       XMVectorGetZ(mat.r[0]), XMVectorGetZ(mat.r[1]), XMVectorGetZ(mat.r[2]), XMVectorGetZ(mat.r[3]),
-                       XMVectorGetW(mat.r[0]), XMVectorGetW(mat.r[1]), XMVectorGetW(mat.r[2]), XMVectorGetW(mat.r[3]));
-}
-
-XMVECTOR quaternionBetween(float3 v1, float3 v2) {
-    float3 a = v1.cross(v2);
-    float w = sqrtf(v1.lengthSquared() * v2.lengthSquared() + v1.dot(v2));
-    return XMVectorSet(a.x, a.y, a.z, w);
-}
-
-std::filesystem::path exeDir = [] {
-    wchar_t buf[512];
-    DWORD n = GetModuleFileNameW(nullptr, buf, countof(buf));
-    assert(n < countof(buf));
-    std::filesystem::path path(buf);
-    return path.parent_path();
-}();
-
-std::filesystem::path assetsDir = [] {
-    wchar_t buf[512];
-    DWORD n = GetModuleFileNameW(nullptr, buf, countof(buf));
-    assert(n < countof(buf));
-    std::filesystem::path path(buf);
-    return path.parent_path().parent_path().parent_path() / "assets";
-}();
-
-bool fileExists(const std::filesystem::path& path) {
-    DWORD dwAttrib = GetFileAttributesW(path.c_str());
-    return (dwAttrib != INVALID_FILE_ATTRIBUTES && !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
-}
-
-std::string fileReadStr(const std::filesystem::path& path) {
-    std::ifstream file(path);
-    std::string str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    return str;
-}
-
-std::vector<uint8> fileReadBytes(const std::filesystem::path& path) {
-    HANDLE hwnd = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    assert(hwnd != INVALID_HANDLE_VALUE);
-    DWORD size = GetFileSize(hwnd, nullptr);
-    assert(size != INVALID_FILE_SIZE);
-    std::vector<uint8> data(size);
-    DWORD byteRead;
-    assert(ReadFile(hwnd, data.data(), size, &byteRead, nullptr));
-    assert(byteRead == size);
-    CloseHandle(hwnd);
-    return data;
-}
-
-void fileWriteStr(const std::filesystem::path& path, const std::string& str) {
-    std::ofstream file(path);
-    file << str;
-}
-
-bool commandLineContain(const wchar_t* arg) {
-    int argsCount;
-    LPWSTR* args = CommandLineToArgvW(GetCommandLineW(), &argsCount);
-    for (int i = 1; i < argsCount; i++) {
-        if (wcscmp(arg, args[i]) == 0) return true;
-    }
-    return false;
-}
-
-void showConsole() {
-    if (AllocConsole()) {
-        freopen_s((FILE**)stdin, "CONIN$", "r", stdin);
-        freopen_s((FILE**)stdout, "CONOUT$", "w", stdout);
-        freopen_s((FILE**)stderr, "CONOUT$", "w", stderr);
-        HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
-        // HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
-        // HANDLE hStderr = GetStdHandle(STD_ERROR_HANDLE);
-        assert(SetConsoleMode(hStdin, ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT));
-    }
-}
+#include "common.h"
+#include "structsHLSL.h"
 
 enum WindowMode {
     WindowModeWindowed,
@@ -373,8 +96,6 @@ struct D3DDescriptor {
     D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle;
     D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle;
 };
-
-#include "sharedStructs.h"
 
 struct D3D {
     IDXGIFactory7* dxgiFactory;
@@ -456,10 +177,7 @@ struct D3D {
     D3D12MA::Allocation* collisionQueryResultsBuffer;
     CollisionQueryResult* collisionQueryResultsBufferPtr;
 
-    ID3D12PipelineState* vertexSkinningPSO;
-    ID3D12RootSignature* vertexSkinningRootSig;
-
-    ID3D12StateObject* renderScenePSO;
+    ID3D12StateObject* renderScene;
     ID3D12StateObjectProperties* renderSceneProps;
     ID3D12RootSignature* renderSceneRootSig;
     void* renderSceneRayGenID;
@@ -475,15 +193,18 @@ struct D3D {
     void* collisionQueryMissID;
     void* collisionQueryHitGroupID;
 
-    ID3D12PipelineState* postProcessPSO;
+    ID3D12PipelineState* vertexSkinning;
+    ID3D12RootSignature* vertexSkinningRootSig;
+
+    ID3D12PipelineState* postProcess;
     ID3D12RootSignature* postProcessRootSig;
 
-    ID3D12PipelineState* imguiPSO;
+    ID3D12PipelineState* imgui;
     ID3D12RootSignature* imguiRootSig;
 };
 
 struct ModelImage {
-    D3D12MA::Allocation* gpuData = nullptr;
+    D3D12MA::Allocation* gpuData;
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc;
 };
 
@@ -491,22 +212,22 @@ struct ModelTextureSampler {
 };
 
 struct ModelTexture {
-    ModelImage* image = nullptr;
+    ModelImage* image;
     ModelTextureSampler sampler;
 };
 
 struct ModelMaterial {
     std::string name;
     float4 baseColorFactor = {1, 1, 1, 1};
-    ModelTexture* baseColorTexture = nullptr;
+    ModelTexture* baseColorTexture;
 };
 
 struct ModelPrimitive {
-    uint verticesBufferOffset = 0;
-    uint verticesCount = 0;
-    uint indicesBufferOffset = 0;
-    uint indicesCount = 0;
-    ModelMaterial* material = nullptr;
+    uint verticesBufferOffset;
+    uint verticesCount;
+    uint indicesBufferOffset;
+    uint indicesCount;
+    ModelMaterial* material;
 };
 
 struct ModelMesh {
@@ -514,16 +235,16 @@ struct ModelMesh {
     std::vector<ModelPrimitive> primitives;
     std::vector<Vertex> vertices;
     std::vector<uint> indices;
-    D3D12MA::Allocation* verticesBuffer = nullptr;
-    D3D12MA::Allocation* indicesBuffer = nullptr;
-    D3D12MA::Allocation* blas = nullptr;
-    D3D12MA::Allocation* blasScratch = nullptr;
+    D3D12MA::Allocation* verticesBuffer;
+    D3D12MA::Allocation* indicesBuffer;
+    D3D12MA::Allocation* blas;
+    D3D12MA::Allocation* blasScratch;
 };
 
 struct ModelNode;
 
 struct ModelJoint {
-    ModelNode* node = nullptr;
+    ModelNode* node;
     XMMATRIX inverseBindMat;
 };
 
@@ -533,12 +254,12 @@ struct ModelSkin {
 
 struct ModelNode {
     std::string name;
-    ModelNode* parent = nullptr;
+    ModelNode* parent;
     std::vector<ModelNode*> children;
     XMMATRIX globalTransform;
     XMMATRIX localTransform;
-    ModelMesh* mesh = nullptr;
-    ModelSkin* skin = nullptr;
+    ModelMesh* mesh;
+    ModelSkin* skin;
 };
 
 enum ModelAnimationSamplerInterpolation {
@@ -707,9 +428,46 @@ struct Editor {
     std::vector<DynamicObject> dynamicObjects;
 };
 
+struct GameState {
+    bool quit = false;
+    LARGE_INTEGER perfFrequency = {};
+    LARGE_INTEGER perfCounters[2] = {};
+    uint64 frameCount = 0;
+    double frameTime = 0;
+    uint mouseSelectX = UINT_MAX;
+    uint mouseSelectY = UINT_MAX;
+    int2 mouseDeltaRaw = {0, 0};
+    float mouseWheel = 0;
+    float mouseSensitivity = 0.2f;
+    float controllerSensitivity = 2.0f;
+
+    Settings settings = {};
+    Window window = {};
+    D3D d3d = {};
+    Controller controller = {};
+
+    std::filesystem::path worldFilePath;
+    std::list<Model> models;
+    ModelInstance shapeCube;
+    ModelInstance shapeCylinder;
+    ModelInstance shapeSphere;
+    Player player;
+    std::vector<StaticObject> staticObjects;
+    std::vector<DynamicObject> dynamicObjects;
+    Skybox skybox;
+    std::vector<Light> lights;
+    std::vector<D3D12_RAYTRACING_INSTANCE_DESC> tlasInstancesBuildInfos;
+    std::vector<TLASInstanceInfo> tlasInstancesInfos;
+    std::vector<BLASGeometryInfo> blasGeometriesInfos;
+
+    Editor* editor = new Editor();
+    // Editor* editor = nullptr;
+};
+
 static bool quit = false;
 static LARGE_INTEGER perfFrequency = {};
 static LARGE_INTEGER perfCounters[2] = {};
+static uint64 frameCount = 0;
 static double frameTime = 0;
 static uint mouseSelectX = UINT_MAX;
 static uint mouseSelectY = UINT_MAX;
@@ -739,6 +497,78 @@ static std::vector<BLASGeometryInfo> blasGeometriesInfos;
 
 Editor* editor = new Editor();
 // Editor* editor = nullptr;
+
+std::string getLastErrorStr() {
+    DWORD err = GetLastError();
+    std::string message = std::system_category().message(err);
+    return message;
+}
+
+std::filesystem::path exeDir = [] {
+    wchar_t buf[512];
+    DWORD n = GetModuleFileNameW(nullptr, buf, countof(buf));
+    assert(n < countof(buf));
+    std::filesystem::path path(buf);
+    return path.parent_path();
+}();
+
+std::filesystem::path assetsDir = [] {
+    wchar_t buf[512];
+    DWORD n = GetModuleFileNameW(nullptr, buf, countof(buf));
+    assert(n < countof(buf));
+    std::filesystem::path path(buf);
+    return path.parent_path().parent_path().parent_path() / "assets";
+}();
+
+bool fileExists(const std::filesystem::path& path) {
+    DWORD dwAttrib = GetFileAttributesW(path.c_str());
+    return (dwAttrib != INVALID_FILE_ATTRIBUTES && !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
+}
+
+std::string fileReadStr(const std::filesystem::path& path) {
+    std::ifstream file(path);
+    std::string str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    return str;
+}
+
+std::vector<uint8> fileReadBytes(const std::filesystem::path& path) {
+    HANDLE hwnd = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    assert(hwnd != INVALID_HANDLE_VALUE);
+    DWORD size = GetFileSize(hwnd, nullptr);
+    assert(size != INVALID_FILE_SIZE);
+    std::vector<uint8> data(size);
+    DWORD byteRead;
+    assert(ReadFile(hwnd, data.data(), size, &byteRead, nullptr));
+    assert(byteRead == size);
+    CloseHandle(hwnd);
+    return data;
+}
+
+void fileWriteStr(const std::filesystem::path& path, const std::string& str) {
+    std::ofstream file(path);
+    file << str;
+}
+
+bool commandLineContain(const wchar_t* arg) {
+    int argsCount;
+    LPWSTR* args = CommandLineToArgvW(GetCommandLineW(), &argsCount);
+    for (int i = 1; i < argsCount; i++) {
+        if (wcscmp(arg, args[i]) == 0) return true;
+    }
+    return false;
+}
+
+void showConsole() {
+    if (AllocConsole()) {
+        freopen_s((FILE**)stdin, "CONIN$", "r", stdin);
+        freopen_s((FILE**)stdout, "CONOUT$", "w", stdout);
+        freopen_s((FILE**)stderr, "CONOUT$", "w", stderr);
+        HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+        // HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
+        // HANDLE hStderr = GetStdHandle(STD_ERROR_HANDLE);
+        assert(SetConsoleMode(hStdin, ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT));
+    }
+}
 
 void settingsLoad() {
     if (fileExists(exeDir / "settings.yaml")) {
@@ -1010,7 +840,15 @@ D3D12MA::Allocation* d3dCreate2DImageDDS(const std::filesystem::path& ddsFilePat
     return image;
 }
 
-void d3dInit(bool debug) {
+void d3dWaitRenderDone() {
+    if (d3d.renderDoneFence->GetCompletedValue() < d3d.renderDoneFenceValue) {
+        assert(SUCCEEDED(d3d.renderDoneFence->SetEventOnCompletion(d3d.renderDoneFenceValue, d3d.renderDoneFenceEvent)));
+        assert(WaitForSingleObjectEx(d3d.renderDoneFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
+    }
+}
+
+void d3dInit() {
+    bool debug = commandLineContain(L"d3ddebug");
     uint factoryFlags = 0;
     if (debug) {
         factoryFlags = DXGI_CREATE_FACTORY_DEBUG;
@@ -1233,97 +1071,152 @@ void d3dInit(bool debug) {
         d3dTransferQueueSubmitRecording();
         d3dTransferQueueWait();
     }
+}
+
+void d3dUpdateShaders() {
     {
-        std::vector<uint8> rtByteCode = fileReadBytes(exeDir / "renderScene.cso");
-        assert(SUCCEEDED(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.renderSceneRootSig))));
-        D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"primaryRayMiss"}, {L"primaryRayHitGroup"}, {L"primaryRayClosestHit"}, {L"secondaryRayMiss"}, {L"secondaryRayHitGroup"}, {L"secondaryRayClosestHit"}};
-        D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
-        D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
-        D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
-        assert(SUCCEEDED(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.renderScenePSO))));
-        assert(SUCCEEDED(d3d.renderScenePSO->QueryInterface(IID_PPV_ARGS(&d3d.renderSceneProps))));
-        assert(d3d.renderSceneRayGenID = d3d.renderSceneProps->GetShaderIdentifier(L"rayGen"));
-        assert(d3d.renderScenePrimaryRayMissID = d3d.renderSceneProps->GetShaderIdentifier(L"primaryRayMiss"));
-        assert(d3d.renderScenePrimaryRayHitGroupID = d3d.renderSceneProps->GetShaderIdentifier(L"primaryRayHitGroup"));
-        assert(d3d.renderSceneSecondaryRayMissID = d3d.renderSceneProps->GetShaderIdentifier(L"secondaryRayMiss"));
-        assert(d3d.renderSceneSecondaryRayHitGroupID = d3d.renderSceneProps->GetShaderIdentifier(L"secondaryRayHitGroup"));
+        static std::filesystem::path shaderPath = exeDir / "renderScene.cso";
+        static std::filesystem::file_time_type prevLastWriteTime = {};
+        std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
+        if (lastWriteTime > prevLastWriteTime) {
+            prevLastWriteTime = lastWriteTime;
+            d3dWaitRenderDone();
+            if (d3d.renderScene) d3d.renderScene->Release();
+            if (d3d.renderSceneProps) d3d.renderSceneProps->Release();
+            if (d3d.renderSceneRootSig) d3d.renderSceneRootSig->Release();
+            std::vector<uint8> rtByteCode = fileReadBytes(shaderPath);
+            D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"primaryRayMiss"}, {L"primaryRayHitGroup"}, {L"primaryRayClosestHit"}, {L"secondaryRayMiss"}, {L"secondaryRayHitGroup"}, {L"secondaryRayClosestHit"}};
+            D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
+            D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
+            D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
+            assert(SUCCEEDED(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.renderScene))));
+            assert(SUCCEEDED(d3d.renderScene->QueryInterface(IID_PPV_ARGS(&d3d.renderSceneProps))));
+            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.renderSceneRootSig))));
+            assert(d3d.renderSceneRayGenID = d3d.renderSceneProps->GetShaderIdentifier(L"rayGen"));
+            assert(d3d.renderScenePrimaryRayMissID = d3d.renderSceneProps->GetShaderIdentifier(L"primaryRayMiss"));
+            assert(d3d.renderScenePrimaryRayHitGroupID = d3d.renderSceneProps->GetShaderIdentifier(L"primaryRayHitGroup"));
+            assert(d3d.renderSceneSecondaryRayMissID = d3d.renderSceneProps->GetShaderIdentifier(L"secondaryRayMiss"));
+            assert(d3d.renderSceneSecondaryRayHitGroupID = d3d.renderSceneProps->GetShaderIdentifier(L"secondaryRayHitGroup"));
+        }
     }
     {
-        std::vector<uint8> rtByteCode = fileReadBytes(exeDir / "collisionQuery.cso");
-        assert(SUCCEEDED(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.collisionQueryRootSig))));
-        D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"miss"}, {L"hitGroup"}, {L"closestHit"}};
-        D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
-        D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
-        D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
-        assert(SUCCEEDED(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.collisionQuery))));
-        assert(SUCCEEDED(d3d.collisionQuery->QueryInterface(IID_PPV_ARGS(&d3d.collisionQueryProps))));
-        assert(d3d.collisionQueryRayGenID = d3d.collisionQueryProps->GetShaderIdentifier(L"rayGen"));
-        assert(d3d.collisionQueryMissID = d3d.collisionQueryProps->GetShaderIdentifier(L"miss"));
-        assert(d3d.collisionQueryHitGroupID = d3d.collisionQueryProps->GetShaderIdentifier(L"hitGroup"));
+        static std::filesystem::path shaderPath = exeDir / "collisionQuery.cso";
+        static std::filesystem::file_time_type prevLastWriteTime = {};
+        std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
+        if (lastWriteTime > prevLastWriteTime) {
+            prevLastWriteTime = lastWriteTime;
+            d3dWaitRenderDone();
+            if (d3d.collisionQuery) d3d.collisionQuery->Release();
+            if (d3d.collisionQueryProps) d3d.collisionQueryProps->Release();
+            if (d3d.collisionQueryRootSig) d3d.collisionQueryRootSig->Release();
+            std::vector<uint8> rtByteCode = fileReadBytes(shaderPath);
+            D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"miss"}, {L"hitGroup"}, {L"closestHit"}};
+            D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
+            D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
+            D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
+            assert(SUCCEEDED(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.collisionQuery))));
+            assert(SUCCEEDED(d3d.collisionQuery->QueryInterface(IID_PPV_ARGS(&d3d.collisionQueryProps))));
+            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.collisionQueryRootSig))));
+            assert(d3d.collisionQueryRayGenID = d3d.collisionQueryProps->GetShaderIdentifier(L"rayGen"));
+            assert(d3d.collisionQueryMissID = d3d.collisionQueryProps->GetShaderIdentifier(L"miss"));
+            assert(d3d.collisionQueryHitGroupID = d3d.collisionQueryProps->GetShaderIdentifier(L"hitGroup"));
+        }
     }
     {
-        std::vector<uint8> vsByteCode = fileReadBytes(exeDir / "postProcessVS.cso");
-        std::vector<uint8> psByteCode = fileReadBytes(exeDir / "postProcessPS.cso");
-        assert(SUCCEEDED(d3d.device->CreateRootSignature(0, psByteCode.data(), psByteCode.size(), IID_PPV_ARGS(&d3d.postProcessRootSig))));
-        D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {
-            .VS = {vsByteCode.data(), vsByteCode.size()},
-            .PS = {psByteCode.data(), psByteCode.size()},
-            .BlendState = {.RenderTarget = {{.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL}}},
-            .SampleMask = 0xffffffff,
-            .RasterizerState = {.FillMode = D3D12_FILL_MODE_SOLID, .CullMode = D3D12_CULL_MODE_BACK},
-            .PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            .NumRenderTargets = 1,
-            .RTVFormats = {d3d.swapChainFormat},
-            .SampleDesc = {.Count = 1},
-        };
-        assert(SUCCEEDED(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.postProcessPSO))));
+        static std::filesystem::path shaderPath = exeDir / "vertexSkinning.cso";
+        static std::filesystem::file_time_type prevLastWriteTime = {};
+        std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
+        if (lastWriteTime > prevLastWriteTime) {
+            prevLastWriteTime = lastWriteTime;
+            d3dWaitRenderDone();
+            if (d3d.vertexSkinning) d3d.vertexSkinning->Release();
+            if (d3d.vertexSkinningRootSig) d3d.vertexSkinningRootSig->Release();
+            std::vector<uint8> csByteCode = fileReadBytes(shaderPath);
+            D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {.pRootSignature = d3d.vertexSkinningRootSig, .CS = {.pShaderBytecode = csByteCode.data(), .BytecodeLength = csByteCode.size()}};
+            assert(SUCCEEDED(d3d.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&d3d.vertexSkinning))));
+            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, csByteCode.data(), csByteCode.size(), IID_PPV_ARGS(&d3d.vertexSkinningRootSig))));
+        }
     }
     {
-        std::vector<uint8> vsByteCode = fileReadBytes(exeDir / "ImGuiVS.cso");
-        std::vector<uint8> psByteCode = fileReadBytes(exeDir / "ImGuiPS.cso");
-        assert(SUCCEEDED(d3d.device->CreateRootSignature(0, vsByteCode.data(), vsByteCode.size(), IID_PPV_ARGS(&d3d.imguiRootSig))));
-        D3D12_INPUT_ELEMENT_DESC inputElemDescs[] = {
-            {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-            {"COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 16, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-        };
-        D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {
-            .VS = {vsByteCode.data(), vsByteCode.size()},
-            .PS = {psByteCode.data(), psByteCode.size()},
-            .BlendState = {
-                .RenderTarget = {{
-                    .BlendEnable = true,
-                    .SrcBlend = D3D12_BLEND_SRC_ALPHA,
-                    .DestBlend = D3D12_BLEND_INV_SRC_ALPHA,
-                    .BlendOp = D3D12_BLEND_OP_ADD,
-                    .SrcBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA,
-                    .DestBlendAlpha = D3D12_BLEND_ZERO,
-                    .BlendOpAlpha = D3D12_BLEND_OP_ADD,
-                    .RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL,
-                }}},
-            .SampleMask = 0xffffffff,
-            .RasterizerState = {.FillMode = D3D12_FILL_MODE_SOLID, .CullMode = D3D12_CULL_MODE_NONE, .DepthClipEnable = true},
-            .InputLayout = {inputElemDescs, countof(inputElemDescs)},
-            .PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            .NumRenderTargets = 1,
-            .RTVFormats = {d3d.swapChainFormat},
-            .SampleDesc = {.Count = 1},
-        };
-        assert(SUCCEEDED(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.imguiPSO))));
+        static std::filesystem::path shaderPathVS = exeDir / "postProcessVS.cso";
+        static std::filesystem::path shaderPathPS = exeDir / "postProcessPS.cso";
+        static std::filesystem::file_time_type prevLastWriteTimeVS = {};
+        static std::filesystem::file_time_type prevLastWriteTimePS = {};
+        std::filesystem::file_time_type lastWriteTimeVS = std::filesystem::last_write_time(shaderPathVS);
+        std::filesystem::file_time_type lastWriteTimePS = std::filesystem::last_write_time(shaderPathPS);
+        if (lastWriteTimeVS > prevLastWriteTimeVS || lastWriteTimePS > prevLastWriteTimePS) {
+            prevLastWriteTimeVS = lastWriteTimeVS;
+            prevLastWriteTimePS = lastWriteTimePS;
+            d3dWaitRenderDone();
+            if (d3d.postProcess) d3d.postProcess->Release();
+            if (d3d.postProcessRootSig) d3d.postProcessRootSig->Release();
+            std::vector<uint8> vsByteCode = fileReadBytes(shaderPathVS);
+            std::vector<uint8> psByteCode = fileReadBytes(shaderPathPS);
+            D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {
+                .VS = {vsByteCode.data(), vsByteCode.size()},
+                .PS = {psByteCode.data(), psByteCode.size()},
+                .BlendState = {.RenderTarget = {{.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL}}},
+                .SampleMask = 0xffffffff,
+                .RasterizerState = {.FillMode = D3D12_FILL_MODE_SOLID, .CullMode = D3D12_CULL_MODE_BACK},
+                .PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+                .NumRenderTargets = 1,
+                .RTVFormats = {d3d.swapChainFormat},
+                .SampleDesc = {.Count = 1},
+            };
+            assert(SUCCEEDED(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.postProcess))));
+            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, psByteCode.data(), psByteCode.size(), IID_PPV_ARGS(&d3d.postProcessRootSig))));
+        }
     }
     {
-        std::vector<uint8> csByteCode = fileReadBytes(exeDir / "vertexSkinning.cso");
-        assert(SUCCEEDED(d3d.device->CreateRootSignature(0, csByteCode.data(), csByteCode.size(), IID_PPV_ARGS(&d3d.vertexSkinningRootSig))));
-        D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {.pRootSignature = d3d.vertexSkinningRootSig, .CS = {.pShaderBytecode = csByteCode.data(), .BytecodeLength = csByteCode.size()}};
-        assert(SUCCEEDED(d3d.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&d3d.vertexSkinningPSO))));
+        static std::filesystem::path shaderPathVS = exeDir / "ImGuiVS.cso";
+        static std::filesystem::path shaderPathPS = exeDir / "ImGuiPS.cso";
+        static std::filesystem::file_time_type prevLastWriteTimeVS = {};
+        static std::filesystem::file_time_type prevLastWriteTimePS = {};
+        std::filesystem::file_time_type lastWriteTimeVS = std::filesystem::last_write_time(shaderPathVS);
+        std::filesystem::file_time_type lastWriteTimePS = std::filesystem::last_write_time(shaderPathPS);
+        if (lastWriteTimeVS > prevLastWriteTimeVS || lastWriteTimePS > prevLastWriteTimePS) {
+            prevLastWriteTimeVS = lastWriteTimeVS;
+            prevLastWriteTimePS = lastWriteTimePS;
+            d3dWaitRenderDone();
+            if (d3d.imgui) d3d.imgui->Release();
+            if (d3d.imguiRootSig) d3d.imguiRootSig->Release();
+            std::vector<uint8> vsByteCode = fileReadBytes(shaderPathVS);
+            std::vector<uint8> psByteCode = fileReadBytes(shaderPathPS);
+            D3D12_INPUT_ELEMENT_DESC inputElemDescs[] = {
+                {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+                {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+                {"COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 16, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            };
+            D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {
+                .VS = {vsByteCode.data(), vsByteCode.size()},
+                .PS = {psByteCode.data(), psByteCode.size()},
+                .BlendState = {
+                    .RenderTarget = {{
+                        .BlendEnable = true,
+                        .SrcBlend = D3D12_BLEND_SRC_ALPHA,
+                        .DestBlend = D3D12_BLEND_INV_SRC_ALPHA,
+                        .BlendOp = D3D12_BLEND_OP_ADD,
+                        .SrcBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA,
+                        .DestBlendAlpha = D3D12_BLEND_ZERO,
+                        .BlendOpAlpha = D3D12_BLEND_OP_ADD,
+                        .RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL,
+                    }}},
+                .SampleMask = 0xffffffff,
+                .RasterizerState = {.FillMode = D3D12_FILL_MODE_SOLID, .CullMode = D3D12_CULL_MODE_NONE, .DepthClipEnable = true},
+                .InputLayout = {inputElemDescs, countof(inputElemDescs)},
+                .PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+                .NumRenderTargets = 1,
+                .RTVFormats = {d3d.swapChainFormat},
+                .SampleDesc = {.Count = 1},
+            };
+            assert(SUCCEEDED(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.imgui))));
+            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, vsByteCode.data(), vsByteCode.size(), IID_PPV_ARGS(&d3d.imguiRootSig))));
+        }
     }
 }
 
 void d3dResizeSwapChain(uint width, uint height) {
-    if (d3d.renderDoneFence->GetCompletedValue() < d3d.renderDoneFenceValue) {
-        assert(SUCCEEDED(d3d.renderDoneFence->SetEventOnCompletion(d3d.renderDoneFenceValue, d3d.renderDoneFenceEvent)));
-        assert(WaitForSingleObjectEx(d3d.renderDoneFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
-    }
+    d3dWaitRenderDone();
     for (ID3D12Resource* image : d3d.swapChainImages) { image->Release(); }
     assert(SUCCEEDED(d3d.swapChain->ResizeBuffers(countof(d3d.swapChainImages), width, height, d3d.swapChainFormat, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH)));
     for (uint imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
@@ -1454,17 +1347,31 @@ void modelInstanceRelease(ModelInstance* modelInstance) {
     for (ModelInstanceSkin& skin : modelInstance->skins) {
         skin.matsBuffer->Release();
     }
-    for (ModelInstanceMeshNode& meshNode : modelInstance->meshNodes) {
-        meshNode.verticesBuffer->Release();
-        meshNode.blas->Release();
-        meshNode.blasScratch->Release();
+    for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance->model->meshNodes.size(); meshNodeIndex++) {
+        if (modelInstance->model->meshNodes[meshNodeIndex]->skin) {
+            modelInstance->meshNodes[meshNodeIndex].verticesBuffer->Release();
+            modelInstance->meshNodes[meshNodeIndex].blas->Release();
+            modelInstance->meshNodes[meshNodeIndex].blasScratch->Release();
+        }
+    }
+}
+
+void transformImgui(Transform* transform) {
+    if (ImGui::TreeNode("Transform")) {
+        ImGui::InputFloat3("S", &transform->s.x), ImGui::SameLine();
+        if (ImGui::Button("reset##scale")) transform->s = float3(1, 1, 1);
+        ImGui::InputFloat4("R", &transform->r.x), ImGui::SameLine();
+        if (ImGui::Button("reset##rotate")) transform->r = float4(0, 0, 0, 1);
+        ImGui::InputFloat3("T", &transform->t.x), ImGui::SameLine();
+        if (ImGui::Button("reset##translate")) transform->t = float3(0, 0, 0);
+        ImGui::TreePop();
     }
 }
 
 void modelInstanceImgui(ModelInstance* modelInstance) {
     if (ImGui::TreeNode("Model")) {
         ImGui::Text(std::format("File: {}", modelInstance->model->filePath.string()).c_str());
-        modelInstance->transform.imgui();
+        transformImgui(&modelInstance->transform);
         if (ImGui::TreeNode("Animations")) {
             for (uint animationIndex = 0; animationIndex < modelInstance->model->animations.size(); animationIndex++) {
                 ModelAnimation& modelAnimation = modelInstance->model->animations[animationIndex];
@@ -1573,7 +1480,7 @@ void modelInstanceBuildSkinnedMeshesBLASs(ModelInstance* modelInstance) {
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = verticesBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
         };
         d3d.graphicsCmdList->ResourceBarrier(1, &verticesBufferBarriers[0]);
-        d3d.graphicsCmdList->SetPipelineState(d3d.vertexSkinningPSO);
+        d3d.graphicsCmdList->SetPipelineState(d3d.vertexSkinning);
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.vertexSkinningRootSig);
         d3d.graphicsCmdList->SetComputeRootShaderResourceView(0, modelInstance->skins[skinIndex].matsBuffer->GetResource()->GetGPUVirtualAddress());
         d3d.graphicsCmdList->SetComputeRootShaderResourceView(1, meshNode->mesh->verticesBuffer->GetResource()->GetGPUVirtualAddress());
@@ -1971,6 +1878,18 @@ void loadSimpleAssets() {
     shapeSphere = loadModel("models/sphere/sphere.gltf");
 }
 
+void operator>>(ryml::ConstNodeRef node, float2& v) { node[0] >> v.x, node[1] >> v.y; }
+void operator>>(ryml::ConstNodeRef node, float3& v) { node[0] >> v.x, node[1] >> v.y, node[2] >> v.z; }
+void operator>>(ryml::ConstNodeRef node, float4& v) { node[0] >> v.x, node[1] >> v.y, node[2] >> v.z, node[3] >> v.w; }
+void operator>>(ryml::ConstNodeRef node, Position& p) { node[0] >> p.x, node[1] >> p.y, node[2] >> p.z; }
+void operator>>(ryml::ConstNodeRef node, Transform& t) { node["scale"] >> t.s, node["rotate"] >> t.r, node["translate"] >> t.t; }
+
+void operator<<(ryml::NodeRef node, float2 v) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << v.x, node.append_child() << v.y; }
+void operator<<(ryml::NodeRef node, float3 v) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << v.x, node.append_child() << v.y, node.append_child() << v.z; }
+void operator<<(ryml::NodeRef node, float4 v) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << v.x, node.append_child() << v.y, node.append_child() << v.z, node.append_child() << v.w; }
+void operator<<(ryml::NodeRef node, Position p) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << p.x, node.append_child() << p.y, node.append_child() << p.z; }
+void operator<<(ryml::NodeRef node, Transform t) { node["scale"] << t.s, node["rotate"] << t.r, node["translate"] << t.t; }
+
 void loadWorld(const std::filesystem::path& path) {
     if (!std::filesystem::exists(path)) assert(false);
 
@@ -1982,8 +1901,8 @@ void loadWorld(const std::filesystem::path& path) {
     if (editor) {
         if (yamlRoot.has_child("editorCamera")) {
             ryml::ConstNodeRef cameraYaml = yamlRoot["editorCamera"];
-            editor->camera.position << cameraYaml["position"];
-            editor->camera.pitchYaw << cameraYaml["pitchYaw"];
+            cameraYaml["position"] >> editor->camera.position;
+            cameraYaml["pitchYaw"] >> editor->camera.pitchYaw;
             editorCameraRotate({0, 0});
             cameraYaml["moveSpeed"] >> editor->camera.moveSpeed;
         } else {
@@ -2008,8 +1927,8 @@ void loadWorld(const std::filesystem::path& path) {
         std::string file;
         playerYaml["file"] >> file;
         player.model = loadModel(file);
-        player.model.transform << playerYaml;
-        player.spawnPosition << playerYaml["spawnPosition"];
+        playerYaml >> player.model.transform;
+        playerYaml["spawnPosition"] >> player.spawnPosition;
         player.position = player.spawnPosition;
         player.state = PlayerStateIdle;
         playerYaml["walkSpeed"] >> player.walkSpeed;
@@ -2019,7 +1938,7 @@ void loadWorld(const std::filesystem::path& path) {
         playerYaml["runAnimationIndex"] >> player.runAnimationIndex;
         playerYaml["jumpAnimationIndex"] >> player.jumpAnimationIndex;
         player.model.animation = &player.model.model->animations[player.idleAnimationIndex];
-        player.camera.lookAtOffset << playerYaml["cameraLookAtOffset"];
+        playerYaml["cameraLookAtOffset"] >> player.camera.lookAtOffset;
         playerYaml["cameraDistance"] >> player.camera.distance;
         player.camera.lookAt = player.position + player.camera.lookAtOffset;
         playerCameraSetPitchYaw({0, 0});
@@ -2032,7 +1951,7 @@ void loadWorld(const std::filesystem::path& path) {
         std::string file;
         staticObjectYaml["file"] >> file;
         obj.model = loadModel(file);
-        obj.model.transform << staticObjectYaml;
+        staticObjectYaml >> obj.model.transform;
         if (editor) editor->staticObjects.push_back(obj);
     }
     ryml::ConstNodeRef dynamicObjectsYaml = yamlRoot["dynamicObjects"];
@@ -2042,7 +1961,7 @@ void loadWorld(const std::filesystem::path& path) {
         std::string file;
         dynamicObjectYaml["file"] >> file;
         obj.model = loadModel(file);
-        obj.model.transform << dynamicObjectYaml;
+        dynamicObjectYaml >> obj.model.transform;
         if (editor) editor->dynamicObjects.push_back(obj);
     }
 }
@@ -2056,8 +1975,8 @@ void saveWorld() {
 
     ryml::NodeRef cameraYaml = yamlRoot["editorCamera"];
     cameraYaml |= ryml::MAP;
-    editor->camera.position >> cameraYaml["position"];
-    editor->camera.pitchYaw >> cameraYaml["pitchYaw"];
+    cameraYaml["position"] << editor->camera.position;
+    cameraYaml["pitchYaw"] << editor->camera.pitchYaw;
     cameraYaml["moveSpeed"] << editor->camera.moveSpeed;
 
     ryml::NodeRef skyboxYaml = yamlRoot["skybox"];
@@ -2067,15 +1986,15 @@ void saveWorld() {
     ryml::NodeRef playerYaml = yamlRoot["player"];
     playerYaml |= ryml::MAP;
     playerYaml["file"] << editor->player.model.model->filePath.string();
-    editor->player.model.transform >> playerYaml;
-    editor->player.spawnPosition >> playerYaml["spawnPosition"];
+    playerYaml << editor->player.model.transform;
+    playerYaml["spawnPosition"] << editor->player.spawnPosition;
     playerYaml["walkSpeed"] << editor->player.walkSpeed;
     playerYaml["runSpeed"] << editor->player.runSpeed;
     playerYaml["idleAnimationIndex"] << editor->player.idleAnimationIndex;
     playerYaml["walkAnimationIndex"] << editor->player.walkAnimationIndex;
     playerYaml["runAnimationIndex"] << editor->player.runAnimationIndex;
     playerYaml["jumpAnimationIndex"] << editor->player.jumpAnimationIndex;
-    editor->player.camera.lookAtOffset >> playerYaml["cameraLookAtOffset"];
+    playerYaml["cameraLookAtOffset"] << editor->player.camera.lookAtOffset;
     playerYaml["cameraDistance"] << editor->player.camera.distance;
 
     ryml::NodeRef staticObjectsYaml = yamlRoot["staticObjects"];
@@ -2085,7 +2004,7 @@ void saveWorld() {
         staticObjectYaml |= ryml::MAP;
         staticObjectYaml["name"] << staticObject.name;
         staticObjectYaml["file"] << staticObject.model.model->filePath.string();
-        staticObject.model.transform >> staticObjectYaml;
+        staticObjectYaml << staticObject.model.transform;
     }
 
     ryml::NodeRef dynamicObjectsYaml = yamlRoot["dynamicObjects"];
@@ -2095,7 +2014,7 @@ void saveWorld() {
         dynamicObjectYaml |= ryml::MAP;
         dynamicObjectYaml["name"] << dynamicObject.name;
         dynamicObjectYaml["file"] << dynamicObject.model.model->filePath.string();
-        dynamicObject.model.transform >> dynamicObjectYaml;
+        dynamicObjectYaml << dynamicObject.model.transform;
     }
 
     std::string yamlStr = ryml::emitrs_yaml<std::string>(yamlTree);
@@ -2341,7 +2260,7 @@ void editorUpdate() {
 
     static ImVec2 mousePosPrev = ImGui::GetMousePos();
     ImVec2 mousePos = ImGui::GetMousePos();
-    ImVec2 mouseDelta = mousePos - mousePosPrev;
+    ImVec2 mouseDelta = {mousePos.x - mousePosPrev.x, mousePos.y - mousePosPrev.y};
     mousePosPrev = mousePos;
 
     static std::vector<std::string> logs = {};
@@ -2703,18 +2622,16 @@ void gameUpdate() {
             assert(WaitForSingleObjectEx(d3d.collisionQueriesFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
         }
         CollisionQueryResult queryResult = d3d.collisionQueryResultsBufferPtr[1];
-        printf("player Movement: %s\nqueryResultDistance: %s\nqueryResultInstance: %d\n",
-               player.movement.toString().c_str(),
-               queryResult.distance.toString().c_str(),
-               queryResult.instanceIndex);
+        std::string str = std::format("player Movement: {}\nqueryResultDistance: {}\nqueryResultInstance: {}\n", player.movement.toString(), queryResult.distance.toString(), queryResult.instanceIndex);
+        printf("%s", str.c_str());
         if (queryResult.instanceIndex == UINT_MAX) {
-            if (player.movement != float3(0, 0, 0)) {
-                player.position += player.movement;
-                playerCameraTranslate(player.movement);
-                float angle = acosf(player.movement.normalize().dot(float3(0, 0, -1)));
-                if (player.movement.x > 0) angle = -angle;
-                player.PitchYawRoll = float3(0, angle, 0);
-            }
+            // if (player.movement != float3(0, 0, 0)) {
+            //     player.position += player.movement;
+            //     playerCameraTranslate(player.movement);
+            //     float angle = acosf(player.movement.normalize().dot(float3(0, 0, -1)));
+            //     if (player.movement.x > 0) angle = -angle;
+            //     player.PitchYawRoll = float3(0, angle, 0);
+            // }
         } else {
         }
     }
@@ -2751,6 +2668,13 @@ void gameUpdate() {
                 player.model.animation = &player.model.model->animations[player.runAnimationIndex];
             }
         }
+        // if (player.movement != float3(0, 0, 0)) {
+        //     player.position += player.movement;
+        //     playerCameraTranslate(player.movement);
+        //     float angle = acosf(player.movement.normalize().dot(float3(0, 0, -1)));
+        //     if (player.movement.x > 0) angle = -angle;
+        //     player.PitchYawRoll = float3(0, angle, 0);
+        // }
     }
     {
         modelInstanceUpdateSkinsMats(&player.model, frameTime);
@@ -2842,11 +2766,7 @@ D3D12_DISPATCH_RAYS_DESC fillRayTracingShaderTable(ID3D12Resource* buffer, uint8
 
 void render() {
     ZoneScopedN("render");
-
-    if (d3d.renderDoneFence->GetCompletedValue() < d3d.renderDoneFenceValue) {
-        assert(SUCCEEDED(d3d.renderDoneFence->SetEventOnCompletion(d3d.renderDoneFenceValue, d3d.renderDoneFenceEvent)));
-        assert(WaitForSingleObjectEx(d3d.renderDoneFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
-    }
+    d3dWaitRenderDone();
 
     assert(SUCCEEDED(d3d.graphicsCmdAllocator->Reset()));
     assert(SUCCEEDED(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
@@ -2927,6 +2847,9 @@ void render() {
                 modelInstanceBuildSkinnedMeshesBLASs(&dynamicObjects[objIndex].model);
                 addTLASInstance(dynamicObjects[objIndex].model, XMMatrixTranslationFromVector((-player.camera.position).toXMVector()), ObjectTypeDynamicObject, objIndex);
             }
+
+            XMVECTOR q = quaternionBetween(float3(0, 1, 0), player.movement);
+            addTLASInstance(shapeCylinder, XMMatrixAffineTransformation(XMVectorSet(0.05f, 1, 0.05f, 0), XMVectorSet(0, 0, 0, 0), q, (player.position - player.camera.position).toXMVector()), ObjectTypeNone, 0);
         }
         {
             assert(vectorSizeof(tlasInstancesBuildInfos) < d3d.tlasInstancesBuildInfosBuffer->GetSize());
@@ -2966,7 +2889,7 @@ void render() {
             d3d.collisionQueriesBufferPtr[0] = {.rayDesc = rayDesc, .instanceInclusionMask = 0xff};
         }
 
-        d3d.collisionQueriesBufferPtr[1] = {.rayDesc = {.origin = player.position - player.camera.position, .min = 0.0f, .dir = player.movement, .max = player.movement.length()}, .instanceInclusionMask = 0xfe};
+        d3d.collisionQueriesBufferPtr[1] = {.rayDesc = {.origin = player.position - player.camera.position, .min = 0.0f, .dir = player.movement.normalize(), .max = 10}, .instanceInclusionMask = 0xfe};
 
         D3D12_RESOURCE_BARRIER collisionQueryResultsBarriers[2] = {
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
@@ -3005,7 +2928,7 @@ void render() {
         D3D12_RESOURCE_BARRIER renderTextureTransition = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.renderTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}};
         d3d.graphicsCmdList->ResourceBarrier(1, &renderTextureTransition);
 
-        d3d.graphicsCmdList->SetPipelineState1(d3d.renderScenePSO);
+        d3d.graphicsCmdList->SetPipelineState1(d3d.renderScene);
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.renderSceneRootSig);
         d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
 
@@ -3025,13 +2948,13 @@ void render() {
         d3d.graphicsCmdList->RSSetViewports(1, &viewport);
         d3d.graphicsCmdList->RSSetScissorRects(1, &scissor);
         {
-            d3d.graphicsCmdList->SetPipelineState(d3d.postProcessPSO);
+            d3d.graphicsCmdList->SetPipelineState(d3d.postProcess);
             d3d.graphicsCmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.postProcessRootSig);
             d3d.graphicsCmdList->DrawInstanced(3, 1, 0, 0);
         }
         {
-            d3d.graphicsCmdList->SetPipelineState(d3d.imguiPSO);
+            d3d.graphicsCmdList->SetPipelineState(d3d.imgui);
             float blendFactor[] = {0, 0, 0, 0};
             d3d.graphicsCmdList->OMSetBlendFactor(blendFactor);
             d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.imguiRootSig);
@@ -3071,28 +2994,49 @@ void render() {
 
         assert(SUCCEEDED(d3d.graphicsCmdList->Close()));
         d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
+
+        assert(SUCCEEDED(d3d.swapChain->Present(0, 0)));
+
         d3d.renderDoneFenceValue += 1;
         d3d.graphicsQueue->Signal(d3d.renderDoneFence, d3d.renderDoneFenceValue);
     }
-    {
-        ZoneScopedN("present");
-        assert(SUCCEEDED(d3d.swapChain->Present(0, 0)));
+}
+
+typedef int (*gameUpdateLiveReloadProc)(void* gameState);
+gameUpdateLiveReloadProc gameUpdateLiveReload = nullptr;
+
+void updateGameLiveReloadProcs() {
+    static HMODULE gameLiveReloadDLL = nullptr;
+    static std::filesystem::path gameLiveReloadDLLPath = exeDir / "gameLiveReload.dll";
+    static std::filesystem::path gameLiveReloadDLLCopyPath = exeDir / "gameLiveReloadCopy.dll";
+    static std::filesystem::file_time_type prevLastWriteTime = {};
+    std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(gameLiveReloadDLLPath);
+    if (lastWriteTime > prevLastWriteTime) {
+        prevLastWriteTime = lastWriteTime;
+        FreeLibrary(gameLiveReloadDLL);
+        CopyFileW(gameLiveReloadDLLPath.c_str(), gameLiveReloadDLLCopyPath.c_str(), false);
+        gameLiveReloadDLL = LoadLibraryW(gameLiveReloadDLLCopyPath.c_str());
+        assert(gameLiveReloadDLL);
+        gameUpdateLiveReload = (gameUpdateLiveReloadProc)GetProcAddress(gameLiveReloadDLL, "gameUpdateLiveReload");
+        assert(gameUpdateLiveReload);
     }
 }
 
 int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) {
     assert(QueryPerformanceFrequency(&perfFrequency));
-    if (commandLineContain(L"showConsole")) { showConsole(); }
+    showConsole();
     settingsLoad();
     windowInit();
     windowShow();
-    d3dInit(commandLineContain(L"d3ddebug"));
+    d3dInit();
     d3dApplySettings();
     loadSimpleAssets();
     loadWorld(assetsDir / "worlds/world.yaml");
     while (!quit) {
         QueryPerformanceCounter(&perfCounters[0]);
         ZoneScoped;
+        updateGameLiveReloadProcs();
+        d3dUpdateShaders();
         mouseDeltaRaw = {0, 0};
         mouseWheel = 0;
         controllerGetStateXInput();
@@ -3103,6 +3047,7 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
         }
         update();
         render();
+        frameCount += 1;
         FrameMark;
         QueryPerformanceCounter(&perfCounters[1]);
         frameTime = (double)(perfCounters[1].QuadPart - perfCounters[0].QuadPart) / (double)perfFrequency.QuadPart;

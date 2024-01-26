@@ -102,17 +102,17 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <IncludePath>$(SolutionDir)include;$(SolutionDir)include\rtxdi-sdk\include;$(IncludePath)</IncludePath>
     <LibraryPath>$(SolutionDir)lib/debug;$(LibraryPath)</LibraryPath>
-    <TargetName>agbyc_debug</TargetName>
+    <TargetName>$(ProjectName)</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <IncludePath>$(SolutionDir)include;$(SolutionDir)include\rtxdi-sdk\include;$(IncludePath)</IncludePath>
     <LibraryPath>$(SolutionDir)lib/release;$(LibraryPath)</LibraryPath>
-    <TargetName>agbyc_release</TargetName>
+    <TargetName>$(ProjectName)</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Profile|x64'">
     <IncludePath>$(SolutionDir)include;$(SolutionDir)include\rtxdi-sdk\include;$(IncludePath)</IncludePath>
     <LibraryPath>$(SolutionDir)lib/release;$(LibraryPath)</LibraryPath>
-    <TargetName>agbyc_profile</TargetName>
+    <TargetName>$(ProjectName)</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -211,13 +211,21 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\include\d3d12MA\D3D12MemAlloc.cpp" />
+    <ClCompile Include="..\include\imgui\imgui.cpp" />
+    <ClCompile Include="..\include\imgui\ImGuizmo.cpp" />
+    <ClCompile Include="..\include\imgui\imgui_draw.cpp" />
+    <ClCompile Include="..\include\imgui\imgui_tables.cpp" />
+    <ClCompile Include="..\include\imgui\imgui_widgets.cpp" />
     <ClCompile Include="..\include\tracy\TracyClient.cpp" />
-    <ClCompile Include="..\src\main.cpp" />
+    <ClCompile Include="..\src\game.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\src\sharedStructs.h" />
+    <ClInclude Include="..\include\imgui\imconfig.h" />
+    <ClInclude Include="..\src\structsHLSL.h" />
+    <ClInclude Include="..\src\common.h" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="..\assets\worlds\world.yaml" />
     <None Include="..\src\hlsl\shared.hlsli" />
     <None Include="packages.config" />
   </ItemGroup>
@@ -238,6 +246,9 @@
       <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">/enable-16bit-types %(AdditionalOptions)</AdditionalOptions>
       <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Profile|x64'">/enable-16bit-types %(AdditionalOptions)</AdditionalOptions>
       <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">/enable-16bit-types %(AdditionalOptions)</AdditionalOptions>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Profile|x64'">false</ExcludedFromBuild>
     </FxCompile>
     <FxCompile Include="..\src\hlsl\imguiPS.hlsl">
       <EntryPointName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">pixelShader</EntryPointName>

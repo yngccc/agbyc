@@ -1,5 +1,5 @@
 #include "shared.hlsli"
-#include "../sharedStructs.h"
+#include "../structsHLSL.h"
 
 #define rootSig "RootFlags(0), SRV(t0), SRV(t1), UAV(u0), RootConstants(num32BitConstants=1, b0)"
 

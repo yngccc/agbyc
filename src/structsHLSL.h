@@ -1,3 +1,5 @@
+// structs shared between cpp and hlsl
+
 struct Vertex {
 #ifdef __cplusplus
     float3 position;

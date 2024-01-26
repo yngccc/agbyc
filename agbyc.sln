@@ -5,6 +5,8 @@ VisualStudioVersion = 17.8.34330.188
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "game", "game\game.vcxproj", "{EB622943-4BA4-4DAE-8DBB-DCDF53BE51C9}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "gameLiveReload", "gameLiveReload\gameLiveReload.vcxproj", "{EA62248D-E337-4BAE-A06E-D12149645EB4}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -27,6 +29,18 @@ Global
 		{EB622943-4BA4-4DAE-8DBB-DCDF53BE51C9}.Release|x64.Build.0 = Release|x64
 		{EB622943-4BA4-4DAE-8DBB-DCDF53BE51C9}.Release|x86.ActiveCfg = Release|Win32
 		{EB622943-4BA4-4DAE-8DBB-DCDF53BE51C9}.Release|x86.Build.0 = Release|Win32
+		{EA62248D-E337-4BAE-A06E-D12149645EB4}.Debug|x64.ActiveCfg = Debug|x64
+		{EA62248D-E337-4BAE-A06E-D12149645EB4}.Debug|x64.Build.0 = Debug|x64
+		{EA62248D-E337-4BAE-A06E-D12149645EB4}.Debug|x86.ActiveCfg = Debug|Win32
+		{EA62248D-E337-4BAE-A06E-D12149645EB4}.Debug|x86.Build.0 = Debug|Win32
+		{EA62248D-E337-4BAE-A06E-D12149645EB4}.Profile|x64.ActiveCfg = Debug|x64
+		{EA62248D-E337-4BAE-A06E-D12149645EB4}.Profile|x64.Build.0 = Debug|x64
+		{EA62248D-E337-4BAE-A06E-D12149645EB4}.Profile|x86.ActiveCfg = Debug|Win32
+		{EA62248D-E337-4BAE-A06E-D12149645EB4}.Profile|x86.Build.0 = Debug|Win32
+		{EA62248D-E337-4BAE-A06E-D12149645EB4}.Release|x64.ActiveCfg = Release|x64
+		{EA62248D-E337-4BAE-A06E-D12149645EB4}.Release|x64.Build.0 = Release|x64
+		{EA62248D-E337-4BAE-A06E-D12149645EB4}.Release|x86.ActiveCfg = Release|Win32
+		{EA62248D-E337-4BAE-A06E-D12149645EB4}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

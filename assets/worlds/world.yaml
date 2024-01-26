@@ -1,6 +1,6 @@
 editorCamera:
-  position: [19864,22127,54109]
-  pitchYaw: [0.20961663,-2.9228928]
+  position: [6590,17567,32721]
+  pitchYaw: [0.23903058,-2.9161968]
   moveSpeed: 15.687
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
@@ -23,30 +23,25 @@ staticObjects:
     file: models/cube/cube.gltf
     scale: [100,1,100]
     rotate: [0,0,0,1]
-    translate: [0,-1,0]
-  - name: cubeReference
-    file: models/cube/cube.gltf
-    scale: [1,1,1]
-    rotate: [0,0,0,1]
-    translate: [3,0,0]
+    translate: [0,-1.01,0]
   - name: bot
     file: models\xbot\xbot.gltf
     scale: [7.4099994,7.4099994,7.4099994]
     rotate: [-0,0,-0,1]
-    translate: [1.1099292,0,-1.0304776]
+    translate: [1.1099292,0,-3.537915]
   - name: cesiumMan
     file: models\cesiumMan\cesiumMan.gltf
     scale: [2.76,2.76,2.76]
     rotate: [-0,0,-0,1]
     translate: [-1.0405915,0,0]
-  - name: cube2
-    file: models/cube/cube.gltf
-    scale: [1,1,1]
-    rotate: [0,0,0,1]
-    translate: [-3,0,0]
   - name: cylinder
     file: models/cylinder/cylinder.gltf
-    scale: [0.1,3.033533,0.1]
-    rotate: [-0,0,-0,1]
+    scale: [1,1,1]
+    rotate: [0,0,0,1]
     translate: [0,0,-3.5263143]
+  - name: cube
+    file: models/cube/cube.gltf
+    scale: [1,1,1]
+    rotate: [-0,0,-0,1]
+    translate: [2.9033751,0,0]
 dynamicObjects: []

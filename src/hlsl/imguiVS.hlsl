@@ -1,5 +1,5 @@
 #include "shared.hlsli"
-#include "../sharedStructs.h"
+#include "../structsHLSL.h"
 
 #define rootSig \
 "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT | CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED), " \
