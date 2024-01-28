@@ -1,6 +1,6 @@
 editorCamera:
-  position: [6590,17567,32721]
-  pitchYaw: [0.23903058,-2.9161968]
+  position: [-16503,21462,36858]
+  pitchYaw: [0.286706,3.0158112]
   moveSpeed: 15.687
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
@@ -34,14 +34,14 @@ staticObjects:
     scale: [2.76,2.76,2.76]
     rotate: [-0,0,-0,1]
     translate: [-1.0405915,0,0]
-  - name: cylinder
-    file: models/cylinder/cylinder.gltf
-    scale: [1,1,1]
-    rotate: [0,0,0,1]
-    translate: [0,0,-3.5263143]
   - name: cube
     file: models/cube/cube.gltf
     scale: [1,1,1]
     rotate: [-0,0,-0,1]
     translate: [2.9033751,0,0]
+  - name: animatedCube
+    file: models\animatedCube\AnimatedCube.gltf
+    scale: [1,1,1]
+    rotate: [-0,0,-0,1]
+    translate: [-3.31921,0.98782265,0]
 dynamicObjects: []

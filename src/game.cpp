@@ -285,8 +285,8 @@ enum ModelAnimationChannelType {
 };
 
 struct ModelAnimationChannel {
-    ModelNode* node = nullptr;
-    ModelAnimationSampler* sampler = nullptr;
+    ModelNode* node;
+    ModelAnimationSampler* sampler;
     ModelAnimationChannelType type;
 };
 
@@ -294,12 +294,12 @@ struct ModelAnimation {
     std::string name;
     std::vector<ModelAnimationChannel> channels;
     std::vector<ModelAnimationSampler> samplers;
-    double timeLength = 0.0f;
+    double timeLength;
 };
 
 struct Model {
     std::filesystem::path filePath;
-    cgltf_data* gltfData = nullptr;
+    cgltf_data* gltfData;
     std::vector<ModelNode> nodes;
     std::vector<ModelNode*> rootNodes;
     std::vector<ModelNode*> meshNodes;
@@ -319,16 +319,17 @@ struct ModelInstanceSkin {
 };
 
 struct ModelInstanceMeshNode {
+    XMMATRIX transformMat;
     D3D12MA::Allocation* verticesBuffer;
     D3D12MA::Allocation* blas;
     D3D12MA::Allocation* blasScratch;
 };
 
 struct ModelInstance {
-    Model* model = nullptr;
+    Model* model;
     Transform transform;
-    ModelAnimation* animation = nullptr;
-    double animationTime = 0;
+    ModelAnimation* animation;
+    double animationTime;
     std::vector<ModelInstanceSkin> skins;
     std::vector<ModelInstanceMeshNode> meshNodes;
 };
@@ -794,10 +795,11 @@ void d3dTransferQueueWait() {
     }
 }
 
-D3D12MA::Allocation* d3dCreate2DImage(const D3D12_RESOURCE_DESC& resourceDesc, D3D12_SUBRESOURCE_DATA* imageMips) {
+D3D12MA::Allocation* d3dCreate2DImage(const D3D12_RESOURCE_DESC& resourceDesc, D3D12_SUBRESOURCE_DATA* imageMips, const wchar_t* name = nullptr) {
     D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
     D3D12MA::Allocation* image;
     assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image, {}, nullptr)));
+    if (name) { image->GetResource()->SetName(name); }
     d3d.stagingBufferOffset = align(d3d.stagingBufferOffset, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT mipFootprints[16];
     uint rowCounts[16];
@@ -813,7 +815,7 @@ D3D12MA::Allocation* d3dCreate2DImage(const D3D12_RESOURCE_DESC& resourceDesc, D
     return image;
 }
 
-D3D12MA::Allocation* d3dCreate2DImageDDS(const std::filesystem::path& ddsFilePath) {
+D3D12MA::Allocation* d3dCreate2DImageDDS(const std::filesystem::path& ddsFilePath, const wchar_t* name = nullptr) {
     ScratchImage scratchImage;
     assert(SUCCEEDED(LoadFromDDSFile(ddsFilePath.c_str(), DDS_FLAGS_NONE, nullptr, scratchImage)));
     assert(scratchImage.GetImageCount() == scratchImage.GetMetadata().mipLevels);
@@ -822,6 +824,7 @@ D3D12MA::Allocation* d3dCreate2DImageDDS(const std::filesystem::path& ddsFilePat
     D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint)scratchImageInfo.width, .Height = (uint)scratchImageInfo.height, .DepthOrArraySize = (uint16)scratchImageInfo.arraySize, .MipLevels = (uint16)scratchImageInfo.mipLevels, .Format = scratchImageInfo.format, .SampleDesc = {.Count = 1}};
     D3D12MA::Allocation* image;
     assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image, {}, nullptr)));
+    if (name) { image->GetResource()->SetName(name); }
     d3d.stagingBufferOffset = align(d3d.stagingBufferOffset, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT mipFootprints[16];
     uint rowCounts[16];
@@ -1309,253 +1312,8 @@ void modelTraverseNodesAndGetGlobalTransforms(Model* model, ModelNode* node, con
     }
 }
 
-void modelInstanceInit(ModelInstance* modelInstance, Model* model) {
-    modelInstance->model = model;
-    if (model->animations.size() > 0) {
-        modelInstance->animation = &model->animations[0];
-        modelInstance->animationTime = 0;
-    }
-    modelInstance->skins.resize(model->skins.size());
-    for (uint skinIndex = 0; skinIndex < model->skins.size(); skinIndex++) {
-        modelInstance->skins[skinIndex].transforms.resize(model->skins[skinIndex].joints.size());
-        modelInstance->skins[skinIndex].mats.resize(model->skins[skinIndex].joints.size());
-        D3D12MA::ALLOCATION_DESC jointBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
-        D3D12_RESOURCE_DESC jointBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = vectorSizeof(modelInstance->skins[skinIndex].mats), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
-        assert(SUCCEEDED(d3d.allocator->CreateResource(&jointBufferAllocDesc, &jointBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &modelInstance->skins[skinIndex].matsBuffer, {}, nullptr)));
-        assert(SUCCEEDED(modelInstance->skins[skinIndex].matsBuffer->GetResource()->Map(0, nullptr, (void**)&modelInstance->skins[skinIndex].matsBufferPtr)));
-    }
-    modelInstance->meshNodes.resize(model->meshNodes.size());
-    for (uint meshNodeIndex = 0; meshNodeIndex < model->meshNodes.size(); meshNodeIndex++) {
-        ModelNode* meshNode = model->meshNodes[meshNodeIndex];
-        if (!meshNode->skin) {
-            modelInstance->meshNodes[meshNodeIndex] = {.verticesBuffer = meshNode->mesh->verticesBuffer, .blas = meshNode->mesh->blas, .blasScratch = meshNode->mesh->blasScratch};
-        } else {
-            D3D12MA::ALLOCATION_DESC verticesBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-            D3D12_RESOURCE_DESC verticesBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = meshNode->mesh->verticesBuffer->GetSize(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
-            assert(SUCCEEDED(d3d.allocator->CreateResource(&verticesBufferAllocDesc, &verticesBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &modelInstance->meshNodes[meshNodeIndex].verticesBuffer, {}, nullptr)));
-            D3D12MA::ALLOCATION_DESC blasAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-            D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
-            blasDesc.Width = meshNode->mesh->blas->GetSize();
-            assert(SUCCEEDED(d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &modelInstance->meshNodes[meshNodeIndex].blas, {}, nullptr)));
-            blasDesc.Width = meshNode->mesh->blasScratch->GetSize();
-            assert(SUCCEEDED(d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &modelInstance->meshNodes[meshNodeIndex].blasScratch, {}, nullptr)));
-        }
-    }
-}
 
-void modelInstanceRelease(ModelInstance* modelInstance) {
-    for (ModelInstanceSkin& skin : modelInstance->skins) {
-        skin.matsBuffer->Release();
-    }
-    for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance->model->meshNodes.size(); meshNodeIndex++) {
-        if (modelInstance->model->meshNodes[meshNodeIndex]->skin) {
-            modelInstance->meshNodes[meshNodeIndex].verticesBuffer->Release();
-            modelInstance->meshNodes[meshNodeIndex].blas->Release();
-            modelInstance->meshNodes[meshNodeIndex].blasScratch->Release();
-        }
-    }
-}
-
-void transformImgui(Transform* transform) {
-    if (ImGui::TreeNode("Transform")) {
-        ImGui::InputFloat3("S", &transform->s.x), ImGui::SameLine();
-        if (ImGui::Button("reset##scale")) transform->s = float3(1, 1, 1);
-        ImGui::InputFloat4("R", &transform->r.x), ImGui::SameLine();
-        if (ImGui::Button("reset##rotate")) transform->r = float4(0, 0, 0, 1);
-        ImGui::InputFloat3("T", &transform->t.x), ImGui::SameLine();
-        if (ImGui::Button("reset##translate")) transform->t = float3(0, 0, 0);
-        ImGui::TreePop();
-    }
-}
-
-void modelInstanceImgui(ModelInstance* modelInstance) {
-    if (ImGui::TreeNode("Model")) {
-        ImGui::Text(std::format("File: {}", modelInstance->model->filePath.string()).c_str());
-        transformImgui(&modelInstance->transform);
-        if (ImGui::TreeNode("Animations")) {
-            for (uint animationIndex = 0; animationIndex < modelInstance->model->animations.size(); animationIndex++) {
-                ModelAnimation& modelAnimation = modelInstance->model->animations[animationIndex];
-                ImGui::Text(std::format("#{}: {}", animationIndex, modelAnimation.name).c_str());
-                ImGui::SameLine(ImGui::GetWindowWidth() * 0.8f);
-                ImGui::PushID(animationIndex);
-                if (ImGui::Button("play")) {
-                    modelInstance->animation = &modelAnimation;
-                    modelInstance->animationTime = 0;
-                }
-                ImGui::PopID();
-            }
-            ImGui::TreePop();
-        }
-        if (ImGui::TreeNode("Hierarchy")) {
-            for (ModelNode* rootNode : modelInstance->model->rootNodes) {
-                modelTraverseNodesImGui(rootNode);
-            }
-            ImGui::TreePop();
-        }
-        ImGui::TreePop();
-    }
-}
-
-void modelInstanceUpdateSkinsMats(ModelInstance* modelInstance, double time) {
-    ZoneScopedN("updateSkinsMats");
-    if (modelInstance->skins.size() == 0) return;
-
-    modelInstance->animationTime += time;
-    if (modelInstance->animationTime > modelInstance->animation->timeLength) {
-        modelInstance->animationTime -= modelInstance->animation->timeLength;
-    }
-
-    std::vector<Transform> nodeLocalTransforms(modelInstance->model->nodes.size());
-    std::vector<XMMATRIX> nodeLocalTransformMats(modelInstance->model->nodes.size());
-    std::vector<XMMATRIX> nodeGlobalTransformMats(modelInstance->model->nodes.size());
-    {
-        ZoneScopedN("get nodeLocalTransforms");
-        for (ModelAnimationChannel& channel : modelInstance->animation->channels) {
-            float4 frame0 = channel.sampler->keyFrames[0].xyzw;
-            float4 frame1 = channel.sampler->keyFrames[1].xyzw;
-            float percentage = 0;
-            for (uint frameIndex = 1; frameIndex < channel.sampler->keyFrames.size(); frameIndex++) {
-                ModelAnimationSamplerKeyFrame& keyFrame = channel.sampler->keyFrames[frameIndex];
-                if (modelInstance->animationTime <= keyFrame.time) {
-                    ModelAnimationSamplerKeyFrame& keyFramePrevious = channel.sampler->keyFrames[frameIndex - 1];
-                    frame0 = keyFramePrevious.xyzw;
-                    frame1 = keyFrame.xyzw;
-                    percentage = ((float)modelInstance->animationTime - keyFramePrevious.time) / (keyFrame.time - keyFramePrevious.time);
-                    break;
-                }
-            }
-            int64 nodeIndex = channel.node - &modelInstance->model->nodes[0];
-            if (channel.type == AnimationChannelTypeTranslate) {
-                if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
-                    nodeLocalTransforms[nodeIndex].t = lerp(frame0.xyz(), frame1.xyz(), percentage);
-                } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
-                    nodeLocalTransforms[nodeIndex].t = percentage < 1.0f ? frame0.xyz() : frame1.xyz();
-                }
-            } else if (channel.type == AnimationChannelTypeRotate) {
-                if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
-                    nodeLocalTransforms[nodeIndex].r = slerp(frame0, frame1, percentage);
-                } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
-                    nodeLocalTransforms[nodeIndex].r = percentage < 1.0f ? frame0 : frame1;
-                }
-            } else if (channel.type == AnimationChannelTypeScale) {
-                if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
-                    nodeLocalTransforms[nodeIndex].s = lerp(frame0.xyz(), frame1.xyz(), percentage);
-                } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
-                    nodeLocalTransforms[nodeIndex].s = percentage < 1.0f ? frame0.xyz() : frame1.xyz();
-                }
-            }
-        }
-        for (uint nodeIndex = 0; nodeIndex < modelInstance->model->nodes.size(); nodeIndex++) {
-            nodeLocalTransformMats[nodeIndex] = nodeLocalTransforms[nodeIndex].toMat();
-        }
-    }
-    {
-        ZoneScopedN("get nodeGlobalTransformMats");
-        for (ModelNode* rootNode : modelInstance->model->rootNodes) {
-            modelTraverseNodesAndGetGlobalTransforms(modelInstance->model, rootNode, XMMatrixIdentity(), nodeLocalTransformMats, nodeGlobalTransformMats);
-        }
-    }
-    for (uint skinIndex = 0; skinIndex < modelInstance->model->skins.size(); skinIndex++) {
-        ModelSkin& skin = modelInstance->model->skins[skinIndex];
-        ModelInstanceSkin& instanceSkin = modelInstance->skins[skinIndex];
-        for (uint jointIndex = 0; jointIndex < skin.joints.size(); jointIndex++) {
-            int64 nodeIndex = skin.joints[jointIndex].node - &modelInstance->model->nodes[0];
-            instanceSkin.mats[jointIndex] = XMMatrixTranspose(XMMatrixMultiply(skin.joints[jointIndex].inverseBindMat, nodeGlobalTransformMats[nodeIndex]));
-        }
-        memcpy(instanceSkin.matsBufferPtr, instanceSkin.mats.data(), vectorSizeof(instanceSkin.mats));
-    }
-}
-
-void modelInstanceBuildSkinnedMeshesBLASs(ModelInstance* modelInstance) {
-    if (modelInstance->skins.size() == 0) return;
-    std::vector<D3D12_RESOURCE_BARRIER> blasBarriers;
-    for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance->model->meshNodes.size(); meshNodeIndex++) {
-        ModelNode* meshNode = modelInstance->model->meshNodes[meshNodeIndex];
-        ModelInstanceMeshNode& instanceMeshNode = modelInstance->meshNodes[meshNodeIndex];
-        if (!meshNode->skin) continue;
-        uint skinIndex = (uint)(meshNode->skin - &modelInstance->model->skins[0]);
-        D3D12MA::Allocation* verticesBuffer = modelInstance->meshNodes[meshNodeIndex].verticesBuffer;
-        D3D12_RESOURCE_BARRIER verticesBufferBarriers[2] = {
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = verticesBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = verticesBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
-        };
-        d3d.graphicsCmdList->ResourceBarrier(1, &verticesBufferBarriers[0]);
-        d3d.graphicsCmdList->SetPipelineState(d3d.vertexSkinning);
-        d3d.graphicsCmdList->SetComputeRootSignature(d3d.vertexSkinningRootSig);
-        d3d.graphicsCmdList->SetComputeRootShaderResourceView(0, modelInstance->skins[skinIndex].matsBuffer->GetResource()->GetGPUVirtualAddress());
-        d3d.graphicsCmdList->SetComputeRootShaderResourceView(1, meshNode->mesh->verticesBuffer->GetResource()->GetGPUVirtualAddress());
-        d3d.graphicsCmdList->SetComputeRootUnorderedAccessView(2, verticesBuffer->GetResource()->GetGPUVirtualAddress());
-        d3d.graphicsCmdList->SetComputeRoot32BitConstant(3, (uint)meshNode->mesh->vertices.size(), 0);
-        d3d.graphicsCmdList->Dispatch((uint)meshNode->mesh->vertices.size() / 32 + 1, 1, 1);
-        d3d.graphicsCmdList->ResourceBarrier(1, &verticesBufferBarriers[1]);
-
-        std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
-        geometryDescs.reserve(meshNode->mesh->primitives.size());
-        for (const ModelPrimitive& primitive : meshNode->mesh->primitives) {
-            geometryDescs.push_back({
-                .Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
-                .Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE,
-                .Triangles = {
-                    .IndexFormat = DXGI_FORMAT_R32_UINT,
-                    .VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
-                    .IndexCount = (uint)primitive.indicesCount,
-                    .VertexCount = (uint)primitive.verticesCount,
-                    .IndexBuffer = meshNode->mesh->indicesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.indicesBufferOffset * sizeof(uint),
-                    .VertexBuffer = {.StartAddress = verticesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.verticesBufferOffset * sizeof(struct Vertex), .StrideInBytes = sizeof(struct Vertex)},
-                },
-            });
-        }
-        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS blasInputs = {
-            .Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL,
-            .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD,
-            .NumDescs = (uint)geometryDescs.size(),
-            .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY,
-            .pGeometryDescs = geometryDescs.data(),
-        };
-        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC blasDesc = {.DestAccelerationStructureData = instanceMeshNode.blas->GetResource()->GetGPUVirtualAddress(), .Inputs = blasInputs, .ScratchAccelerationStructureData = instanceMeshNode.blasScratch->GetResource()->GetGPUVirtualAddress()};
-        d3d.graphicsCmdList->BuildRaytracingAccelerationStructure(&blasDesc, 0, nullptr);
-        blasBarriers.push_back({.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = instanceMeshNode.blas->GetResource()}});
-    }
-    d3d.graphicsCmdList->ResourceBarrier((uint)blasBarriers.size(), blasBarriers.data());
-}
-
-void playerCameraSetPitchYaw(float2 pitchYawNew) {
-    player.camera.pitchYaw.x = std::clamp(pitchYawNew.x, -pi * 0.1f, pi * 0.4f);
-    player.camera.pitchYaw.y = std::remainderf(pitchYawNew.y, pi * 2.0f);
-    XMVECTOR quaternion = XMQuaternionRotationRollPitchYaw(player.camera.pitchYaw.x, player.camera.pitchYaw.y, 0);
-    float3 dir = float3(XMVector3Rotate(XMVectorSet(0, 0, -1, 0), quaternion)).normalize();
-    player.camera.position = player.camera.lookAt + (dir * player.camera.distance);
-}
-void playerCameraTranslate(float3 translate) {
-    player.camera.position += translate;
-    player.camera.lookAt += translate;
-}
-
-void editorCameraRotate(float2 pitchYawDelta) {
-    editor->camera.pitchYaw.x += pitchYawDelta.x;
-    editor->camera.pitchYaw.y += pitchYawDelta.y;
-    editor->camera.pitchYaw.x = std::clamp(editor->camera.pitchYaw.x, -pi * 0.4f, pi * 0.4f);
-    editor->camera.pitchYaw.y = std::remainderf(editor->camera.pitchYaw.y, pi * 2.0f);
-    XMVECTOR quaternion = XMQuaternionRotationRollPitchYaw(editor->camera.pitchYaw.x, editor->camera.pitchYaw.y, 0);
-    float3 dir = XMVector3Rotate(XMVectorSet(0, 0, 1, 0), quaternion);
-    editor->camera.lookAt = editor->camera.position + dir;
-}
-void editorCameraTranslate(float3 translate) {
-    float3 dz = (editor->camera.lookAt - editor->camera.position).normalize();
-    float3 dx = dz.cross({0, 1, 0});
-    float3 dy = dz.cross({1, 0, 0});
-    editor->camera.position += dx * translate.x;
-    editor->camera.lookAt += dx * translate.x;
-    editor->camera.position += dy * translate.y;
-    editor->camera.lookAt += dy * translate.y;
-    editor->camera.position += dz * translate.z;
-    editor->camera.lookAt += dz * translate.z;
-}
-
-void editorCameraFocus(float3 position, float distance) {
-}
-
-ModelInstance loadModel(const std::filesystem::path& filePath) {
+ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
     assert(filePath.extension() == ".gltf");
     Model* model = nullptr;
     for (Model& m : models) {
@@ -1702,8 +1460,10 @@ ModelInstance loadModel(const std::filesystem::path& filePath) {
             D3D12_RESOURCE_DESC verticeIndicesBuffersDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
             verticeIndicesBuffersDesc.Width = vectorSizeof(mesh.vertices);
             assert(SUCCEEDED(d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.verticesBuffer, {}, nullptr)));
+            mesh.verticesBuffer->GetResource()->SetName(std::format(L"{}Mesh{}VerticesBuffer", filePath.stem().wstring(), meshIndex).c_str());
             verticeIndicesBuffersDesc.Width = vectorSizeof(mesh.indices);
             assert(SUCCEEDED(d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.indicesBuffer, {}, nullptr)));
+            mesh.verticesBuffer->GetResource()->SetName(std::format(L"{}Mesh{}IndicesBuffer", filePath.stem().wstring(), meshIndex).c_str());
 
             memcpy(d3d.stagingBufferPtr + d3d.stagingBufferOffset, mesh.vertices.data(), vectorSizeof(mesh.vertices));
             d3d.transferCmdList->CopyBufferRegion(mesh.verticesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(mesh.vertices));
@@ -1743,12 +1503,10 @@ ModelInstance loadModel(const std::filesystem::path& filePath) {
             D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
             blasDesc.Width = prebuildInfo.ResultDataMaxSizeInBytes;
             assert(SUCCEEDED(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &mesh.blas, {}, nullptr)));
+            mesh.blas->GetResource()->SetName(std::format(L"{}Mesh{}Blas", filePath.stem().wstring(), meshIndex).c_str());
             blasDesc.Width = prebuildInfo.ScratchDataSizeInBytes;
             assert(SUCCEEDED(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &mesh.blasScratch, {}, nullptr)));
-            std::wstring name = std::format(L"{}_mesh_{}_blas", filePath.stem().wstring(), meshIndex);
-            std::wstring scratchName = name + L"_scratch";
-            mesh.blas->GetResource()->SetName(name.c_str());
-            mesh.blasScratch->GetResource()->SetName(scratchName.c_str());
+            mesh.blasScratch->GetResource()->SetName(std::format(L"{}Mesh{}BlasScratch", filePath.stem().wstring(), meshIndex).c_str());
             D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = mesh.blas->GetResource()->GetGPUVirtualAddress(), .Inputs = inputs, .ScratchAccelerationStructureData = mesh.blasScratch->GetResource()->GetGPUVirtualAddress()};
             d3d.transferCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
         }
@@ -1840,7 +1598,7 @@ ModelInstance loadModel(const std::filesystem::path& filePath) {
             std::filesystem::path imageDDSFilePath = imageFilePath;
             imageDDSFilePath.replace_extension(".dds");
             assert(std::filesystem::exists(imageDDSFilePath));
-            image.gpuData = d3dCreate2DImageDDS(imageDDSFilePath);
+            image.gpuData = d3dCreate2DImageDDS(imageDDSFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str());
             D3D12_RESOURCE_DESC imageDesc = image.gpuData->GetResource()->GetDesc();
             image.srvDesc = {.Format = imageDesc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = imageDesc.MipLevels}};
             D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = image.gpuData->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
@@ -1867,15 +1625,268 @@ ModelInstance loadModel(const std::filesystem::path& filePath) {
         d3dTransferQueueSubmitRecording();
         d3dTransferQueueWait();
     }
+
     ModelInstance modelInstance = {};
-    modelInstanceInit(&modelInstance, model);
+    modelInstance.model = model;
+    if (model->animations.size() > 0) {
+        modelInstance.animation = &model->animations[0];
+        modelInstance.animationTime = 0;
+    }
+    modelInstance.skins.resize(model->skins.size());
+    for (uint skinIndex = 0; skinIndex < model->skins.size(); skinIndex++) {
+        modelInstance.skins[skinIndex].transforms.resize(model->skins[skinIndex].joints.size());
+        modelInstance.skins[skinIndex].mats.resize(model->skins[skinIndex].joints.size());
+        D3D12MA::ALLOCATION_DESC jointBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
+        D3D12_RESOURCE_DESC jointBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = vectorSizeof(modelInstance.skins[skinIndex].mats), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
+        assert(SUCCEEDED(d3d.allocator->CreateResource(&jointBufferAllocDesc, &jointBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &modelInstance.skins[skinIndex].matsBuffer, {}, nullptr)));
+        assert(SUCCEEDED(modelInstance.skins[skinIndex].matsBuffer->GetResource()->Map(0, nullptr, (void**)&modelInstance.skins[skinIndex].matsBufferPtr)));
+    }
+    modelInstance.meshNodes.resize(model->meshNodes.size());
+    for (uint meshNodeIndex = 0; meshNodeIndex < model->meshNodes.size(); meshNodeIndex++) {
+        ModelNode* meshNode = model->meshNodes[meshNodeIndex];
+        ModelInstanceMeshNode& instanceMeshNode = modelInstance.meshNodes[meshNodeIndex];
+        instanceMeshNode.transformMat = meshNode->globalTransform;
+        if (!meshNode->skin) {
+            instanceMeshNode.verticesBuffer = meshNode->mesh->verticesBuffer; 
+            instanceMeshNode.blas = meshNode->mesh->blas;
+            instanceMeshNode.blasScratch = meshNode->mesh->blasScratch;
+        } else {
+            D3D12MA::ALLOCATION_DESC verticesBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+            D3D12_RESOURCE_DESC verticesBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = meshNode->mesh->verticesBuffer->GetSize(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+            assert(SUCCEEDED(d3d.allocator->CreateResource(&verticesBufferAllocDesc, &verticesBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &instanceMeshNode.verticesBuffer, {}, nullptr)));
+            D3D12MA::ALLOCATION_DESC blasAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+            D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+            blasDesc.Width = meshNode->mesh->blas->GetSize();
+            assert(SUCCEEDED(d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &instanceMeshNode.blas, {}, nullptr)));
+            blasDesc.Width = meshNode->mesh->blasScratch->GetSize();
+            assert(SUCCEEDED(d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &instanceMeshNode.blasScratch, {}, nullptr)));
+        }
+    }
     return modelInstance;
 }
 
+void modelInstanceRelease(ModelInstance* modelInstance) {
+    for (ModelInstanceSkin& skin : modelInstance->skins) {
+        skin.matsBuffer->Release();
+    }
+    for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance->model->meshNodes.size(); meshNodeIndex++) {
+        if (modelInstance->model->meshNodes[meshNodeIndex]->skin) {
+            modelInstance->meshNodes[meshNodeIndex].verticesBuffer->Release();
+            modelInstance->meshNodes[meshNodeIndex].blas->Release();
+            modelInstance->meshNodes[meshNodeIndex].blasScratch->Release();
+        }
+    }
+}
+
+void transformImgui(Transform* transform) {
+    if (ImGui::TreeNode("Transform")) {
+        ImGui::InputFloat3("S", &transform->s.x), ImGui::SameLine();
+        if (ImGui::Button("reset##scale")) transform->s = float3(1, 1, 1);
+        ImGui::InputFloat4("R", &transform->r.x), ImGui::SameLine();
+        if (ImGui::Button("reset##rotate")) transform->r = float4(0, 0, 0, 1);
+        ImGui::InputFloat3("T", &transform->t.x), ImGui::SameLine();
+        if (ImGui::Button("reset##translate")) transform->t = float3(0, 0, 0);
+        ImGui::TreePop();
+    }
+}
+
+void modelInstanceImgui(ModelInstance* modelInstance) {
+    if (ImGui::TreeNode("Model")) {
+        ImGui::Text(std::format("File: {}", modelInstance->model->filePath.string()).c_str());
+        transformImgui(&modelInstance->transform);
+        if (ImGui::TreeNode("Animations")) {
+            for (uint animationIndex = 0; animationIndex < modelInstance->model->animations.size(); animationIndex++) {
+                ModelAnimation& modelAnimation = modelInstance->model->animations[animationIndex];
+                ImGui::Text(std::format("#{}: {}", animationIndex, modelAnimation.name).c_str());
+                ImGui::SameLine(ImGui::GetWindowWidth() * 0.8f);
+                ImGui::PushID(animationIndex);
+                if (ImGui::Button("play")) {
+                    modelInstance->animation = &modelAnimation;
+                    modelInstance->animationTime = 0;
+                }
+                ImGui::PopID();
+            }
+            ImGui::TreePop();
+        }
+        if (ImGui::TreeNode("Hierarchy")) {
+            for (ModelNode* rootNode : modelInstance->model->rootNodes) {
+                modelTraverseNodesImGui(rootNode);
+            }
+            ImGui::TreePop();
+        }
+        ImGui::TreePop();
+    }
+}
+
+void modelInstanceUpdateAnimation(ModelInstance* modelInstance, double time) {
+    ZoneScopedN("modelInstanceUpdateAnimation");
+    if (!modelInstance->animation) {
+        for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance->meshNodes.size(); meshNodeIndex++) {
+            modelInstance->meshNodes[meshNodeIndex].transformMat = modelInstance->model->meshNodes[meshNodeIndex]->globalTransform;
+        }
+    } else {
+        modelInstance->animationTime += time;
+        if (modelInstance->animationTime > modelInstance->animation->timeLength) {
+            modelInstance->animationTime -= modelInstance->animation->timeLength;
+        }
+        std::vector<Transform> nodeLocalTransforms(modelInstance->model->nodes.size());
+        std::vector<XMMATRIX> nodeLocalTransformMats(modelInstance->model->nodes.size());
+        std::vector<XMMATRIX> nodeGlobalTransformMats(modelInstance->model->nodes.size());
+        {
+            ZoneScopedN("get nodeLocalTransforms");
+            for (ModelAnimationChannel& channel : modelInstance->animation->channels) {
+                float4 frame0 = channel.sampler->keyFrames[0].xyzw;
+                float4 frame1 = channel.sampler->keyFrames[1].xyzw;
+                float percentage = 0;
+                for (uint frameIndex = 1; frameIndex < channel.sampler->keyFrames.size(); frameIndex++) {
+                    ModelAnimationSamplerKeyFrame& keyFrame = channel.sampler->keyFrames[frameIndex];
+                    if (modelInstance->animationTime <= keyFrame.time) {
+                        ModelAnimationSamplerKeyFrame& keyFramePrevious = channel.sampler->keyFrames[frameIndex - 1];
+                        frame0 = keyFramePrevious.xyzw;
+                        frame1 = keyFrame.xyzw;
+                        percentage = ((float)modelInstance->animationTime - keyFramePrevious.time) / (keyFrame.time - keyFramePrevious.time);
+                        break;
+                    }
+                }
+                int64 nodeIndex = channel.node - &modelInstance->model->nodes[0];
+                if (channel.type == AnimationChannelTypeTranslate) {
+                    if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
+                        nodeLocalTransforms[nodeIndex].t = lerp(frame0.xyz(), frame1.xyz(), percentage);
+                    } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
+                        nodeLocalTransforms[nodeIndex].t = percentage < 1.0f ? frame0.xyz() : frame1.xyz();
+                    }
+                } else if (channel.type == AnimationChannelTypeRotate) {
+                    if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
+                        nodeLocalTransforms[nodeIndex].r = slerp(frame0, frame1, percentage);
+                    } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
+                        nodeLocalTransforms[nodeIndex].r = percentage < 1.0f ? frame0 : frame1;
+                    }
+                } else if (channel.type == AnimationChannelTypeScale) {
+                    if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
+                        nodeLocalTransforms[nodeIndex].s = lerp(frame0.xyz(), frame1.xyz(), percentage);
+                    } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
+                        nodeLocalTransforms[nodeIndex].s = percentage < 1.0f ? frame0.xyz() : frame1.xyz();
+                    }
+                }
+            }
+            for (uint nodeIndex = 0; nodeIndex < modelInstance->model->nodes.size(); nodeIndex++) {
+                nodeLocalTransformMats[nodeIndex] = nodeLocalTransforms[nodeIndex].toMat();
+            }
+        }
+        {
+            ZoneScopedN("get nodeGlobalTransformMats");
+            for (ModelNode* rootNode : modelInstance->model->rootNodes) {
+                modelTraverseNodesAndGetGlobalTransforms(modelInstance->model, rootNode, XMMatrixIdentity(), nodeLocalTransformMats, nodeGlobalTransformMats);
+            }
+        }
+        for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance->meshNodes.size(); meshNodeIndex++) {
+            uint nodeIndex = modelInstance->model->meshNodes[meshNodeIndex] - &modelInstance->model->nodes[0];
+            modelInstance->meshNodes[meshNodeIndex].transformMat = XMMatrixMultiply(modelInstance->model->meshNodes[meshNodeIndex]->globalTransform, nodeGlobalTransformMats[nodeIndex]);
+        }
+        for (uint skinIndex = 0; skinIndex < modelInstance->model->skins.size(); skinIndex++) {
+            ModelSkin& skin = modelInstance->model->skins[skinIndex];
+            ModelInstanceSkin& instanceSkin = modelInstance->skins[skinIndex];
+            for (uint jointIndex = 0; jointIndex < skin.joints.size(); jointIndex++) {
+                int64 nodeIndex = skin.joints[jointIndex].node - &modelInstance->model->nodes[0];
+                instanceSkin.mats[jointIndex] = XMMatrixTranspose(XMMatrixMultiply(skin.joints[jointIndex].inverseBindMat, nodeGlobalTransformMats[nodeIndex]));
+            }
+            memcpy(instanceSkin.matsBufferPtr, instanceSkin.mats.data(), vectorSizeof(instanceSkin.mats));
+        }
+    }
+}
+
+void modelInstanceBuildSkinnedMeshesBLASs(ModelInstance* modelInstance) {
+    if (modelInstance->skins.size() == 0) return;
+    std::vector<D3D12_RESOURCE_BARRIER> blasBarriers;
+    for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance->model->meshNodes.size(); meshNodeIndex++) {
+        ModelNode* meshNode = modelInstance->model->meshNodes[meshNodeIndex];
+        if (!meshNode->skin) continue;
+        ModelInstanceMeshNode& instanceMeshNode = modelInstance->meshNodes[meshNodeIndex];
+        uint skinIndex = (uint)(meshNode->skin - &modelInstance->model->skins[0]);
+        D3D12MA::Allocation* verticesBuffer = modelInstance->meshNodes[meshNodeIndex].verticesBuffer;
+        D3D12_RESOURCE_BARRIER verticesBufferBarriers[2] = {
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = verticesBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = verticesBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
+        };
+        d3d.graphicsCmdList->ResourceBarrier(1, &verticesBufferBarriers[0]);
+        d3d.graphicsCmdList->SetPipelineState(d3d.vertexSkinning);
+        d3d.graphicsCmdList->SetComputeRootSignature(d3d.vertexSkinningRootSig);
+        d3d.graphicsCmdList->SetComputeRootShaderResourceView(0, modelInstance->skins[skinIndex].matsBuffer->GetResource()->GetGPUVirtualAddress());
+        d3d.graphicsCmdList->SetComputeRootShaderResourceView(1, meshNode->mesh->verticesBuffer->GetResource()->GetGPUVirtualAddress());
+        d3d.graphicsCmdList->SetComputeRootUnorderedAccessView(2, verticesBuffer->GetResource()->GetGPUVirtualAddress());
+        d3d.graphicsCmdList->SetComputeRoot32BitConstant(3, (uint)meshNode->mesh->vertices.size(), 0);
+        d3d.graphicsCmdList->Dispatch((uint)meshNode->mesh->vertices.size() / 32 + 1, 1, 1);
+        d3d.graphicsCmdList->ResourceBarrier(1, &verticesBufferBarriers[1]);
+
+        std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
+        geometryDescs.reserve(meshNode->mesh->primitives.size());
+        for (const ModelPrimitive& primitive : meshNode->mesh->primitives) {
+            geometryDescs.push_back({
+                .Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
+                .Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE,
+                .Triangles = {
+                    .IndexFormat = DXGI_FORMAT_R32_UINT,
+                    .VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
+                    .IndexCount = (uint)primitive.indicesCount,
+                    .VertexCount = (uint)primitive.verticesCount,
+                    .IndexBuffer = meshNode->mesh->indicesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.indicesBufferOffset * sizeof(uint),
+                    .VertexBuffer = {.StartAddress = verticesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.verticesBufferOffset * sizeof(struct Vertex), .StrideInBytes = sizeof(struct Vertex)},
+                },
+            });
+        }
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS blasInputs = {
+            .Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL,
+            .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD,
+            .NumDescs = (uint)geometryDescs.size(),
+            .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY,
+            .pGeometryDescs = geometryDescs.data(),
+        };
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC blasDesc = {.DestAccelerationStructureData = instanceMeshNode.blas->GetResource()->GetGPUVirtualAddress(), .Inputs = blasInputs, .ScratchAccelerationStructureData = instanceMeshNode.blasScratch->GetResource()->GetGPUVirtualAddress()};
+        d3d.graphicsCmdList->BuildRaytracingAccelerationStructure(&blasDesc, 0, nullptr);
+        blasBarriers.push_back({.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = instanceMeshNode.blas->GetResource()}});
+    }
+    d3d.graphicsCmdList->ResourceBarrier((uint)blasBarriers.size(), blasBarriers.data());
+}
+
+void playerCameraSetPitchYaw(float2 pitchYawNew) {
+    player.camera.pitchYaw.x = std::clamp(pitchYawNew.x, -pi * 0.1f, pi * 0.4f);
+    player.camera.pitchYaw.y = std::remainderf(pitchYawNew.y, pi * 2.0f);
+    XMVECTOR quaternion = XMQuaternionRotationRollPitchYaw(player.camera.pitchYaw.x, player.camera.pitchYaw.y, 0);
+    float3 dir = float3(XMVector3Rotate(XMVectorSet(0, 0, -1, 0), quaternion)).normalize();
+    player.camera.position = player.camera.lookAt + (dir * player.camera.distance);
+}
+void playerCameraTranslate(float3 translate) {
+    player.camera.position += translate;
+    player.camera.lookAt += translate;
+}
+
+void editorCameraRotate(float2 pitchYawDelta) {
+    editor->camera.pitchYaw.x += pitchYawDelta.x;
+    editor->camera.pitchYaw.y += pitchYawDelta.y;
+    editor->camera.pitchYaw.x = std::clamp(editor->camera.pitchYaw.x, -pi * 0.4f, pi * 0.4f);
+    editor->camera.pitchYaw.y = std::remainderf(editor->camera.pitchYaw.y, pi * 2.0f);
+    XMVECTOR quaternion = XMQuaternionRotationRollPitchYaw(editor->camera.pitchYaw.x, editor->camera.pitchYaw.y, 0);
+    float3 dir = XMVector3Rotate(XMVectorSet(0, 0, 1, 0), quaternion);
+    editor->camera.lookAt = editor->camera.position + dir;
+}
+void editorCameraTranslate(float3 translate) {
+    float3 dz = (editor->camera.lookAt - editor->camera.position).normalize();
+    float3 dx = dz.cross({0, 1, 0});
+    float3 dy = dz.cross({1, 0, 0});
+    editor->camera.position += dx * translate.x;
+    editor->camera.lookAt += dx * translate.x;
+    editor->camera.position += dy * translate.y;
+    editor->camera.lookAt += dy * translate.y;
+    editor->camera.position += dz * translate.z;
+    editor->camera.lookAt += dz * translate.z;
+}
+
+void editorCameraFocus(float3 position, float distance) {
+}
 void loadSimpleAssets() {
-    shapeCube = loadModel("models/cube/cube.gltf");
-    shapeCylinder = loadModel("models/cylinder/cylinder.gltf");
-    shapeSphere = loadModel("models/sphere/sphere.gltf");
+    shapeCube = modelInstanceInit("models/cube/cube.gltf");
+    shapeCylinder = modelInstanceInit("models/cylinder/cylinder.gltf");
+    shapeSphere = modelInstanceInit("models/sphere/sphere.gltf");
 }
 
 void operator>>(ryml::ConstNodeRef node, float2& v) { node[0] >> v.x, node[1] >> v.y; }
@@ -1926,7 +1937,7 @@ void loadWorld(const std::filesystem::path& path) {
         ryml::ConstNodeRef playerYaml = yamlRoot["player"];
         std::string file;
         playerYaml["file"] >> file;
-        player.model = loadModel(file);
+        player.model = modelInstanceInit(file);
         playerYaml >> player.model.transform;
         playerYaml["spawnPosition"] >> player.spawnPosition;
         player.position = player.spawnPosition;
@@ -1950,7 +1961,7 @@ void loadWorld(const std::filesystem::path& path) {
         staticObjectYaml["name"] >> obj.name;
         std::string file;
         staticObjectYaml["file"] >> file;
-        obj.model = loadModel(file);
+        obj.model = modelInstanceInit(file);
         staticObjectYaml >> obj.model.transform;
         if (editor) editor->staticObjects.push_back(obj);
     }
@@ -1960,7 +1971,7 @@ void loadWorld(const std::filesystem::path& path) {
         dynamicObjectYaml["name"] >> obj.name;
         std::string file;
         dynamicObjectYaml["file"] >> file;
-        obj.model = loadModel(file);
+        obj.model = modelInstanceInit(file);
         dynamicObjectYaml >> obj.model.transform;
         if (editor) editor->dynamicObjects.push_back(obj);
     }
@@ -2253,9 +2264,9 @@ void editorUpdate() {
         }
     }
     {
-        modelInstanceUpdateSkinsMats(&editor->player.model, frameTime);
-        for (StaticObject& obj : editor->staticObjects) modelInstanceUpdateSkinsMats(&obj.model, frameTime);
-        for (DynamicObject& obj : editor->dynamicObjects) modelInstanceUpdateSkinsMats(&obj.model, frameTime);
+        modelInstanceUpdateAnimation(&editor->player.model, frameTime);
+        for (StaticObject& obj : editor->staticObjects) modelInstanceUpdateAnimation(&obj.model, frameTime);
+        for (DynamicObject& obj : editor->dynamicObjects) modelInstanceUpdateAnimation(&obj.model, frameTime);
     }
 
     static ImVec2 mousePosPrev = ImGui::GetMousePos();
@@ -2495,10 +2506,10 @@ void editorUpdate() {
             } else {
                 std::filesystem::path path = std::filesystem::relative(filePath, assetsDir);
                 if (objectType == 0) {
-                    StaticObject staticObject = {.name = objectName, .model = loadModel(path)};
+                    StaticObject staticObject = {.name = objectName, .model = modelInstanceInit(path)};
                     editor->staticObjects.push_back(std::move(staticObject));
                 } else if (objectType == 1) {
-                    DynamicObject dynamicObject = {.name = objectName, .model = loadModel(path)};
+                    DynamicObject dynamicObject = {.name = objectName, .model = modelInstanceInit(path)};
                     editor->dynamicObjects.push_back(std::move(dynamicObject));
                 }
             }
@@ -2677,9 +2688,9 @@ void gameUpdate() {
         // }
     }
     {
-        modelInstanceUpdateSkinsMats(&player.model, frameTime);
-        for (StaticObject& obj : staticObjects) modelInstanceUpdateSkinsMats(&obj.model, frameTime);
-        for (DynamicObject& obj : dynamicObjects) modelInstanceUpdateSkinsMats(&obj.model, frameTime);
+        modelInstanceUpdateAnimation(&player.model, frameTime);
+        for (StaticObject& obj : staticObjects) modelInstanceUpdateAnimation(&obj.model, frameTime);
+        for (DynamicObject& obj : dynamicObjects) modelInstanceUpdateAnimation(&obj.model, frameTime);
     }
 }
 
@@ -2713,7 +2724,7 @@ void addTLASInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
         ModelNode* meshNode = modelInstance.model->meshNodes[meshNodeIndex];
         ModelInstanceMeshNode& instanceMeshNode = modelInstance.meshNodes[meshNodeIndex];
         uint meshIndex = (uint)(meshNode->mesh - &modelInstance.model->meshes[0]);
-        XMMATRIX transform = meshNode->globalTransform;
+        XMMATRIX transform = instanceMeshNode.transformMat;
         transform = XMMatrixMultiply(transform, XMMatrixScaling(1, 1, -1)); // convert RH to LH
         transform = XMMatrixMultiply(transform, modelInstance.transform.toMat());
         transform = XMMatrixMultiply(transform, objectTransform);
@@ -2847,7 +2858,6 @@ void render() {
                 modelInstanceBuildSkinnedMeshesBLASs(&dynamicObjects[objIndex].model);
                 addTLASInstance(dynamicObjects[objIndex].model, XMMatrixTranslationFromVector((-player.camera.position).toXMVector()), ObjectTypeDynamicObject, objIndex);
             }
-
             XMVECTOR q = quaternionBetween(float3(0, 1, 0), player.movement);
             addTLASInstance(shapeCylinder, XMMatrixAffineTransformation(XMVectorSet(0.05f, 1, 0.05f, 0), XMVectorSet(0, 0, 0, 0), q, (player.position - player.camera.position).toXMVector()), ObjectTypeNone, 0);
         }
@@ -3024,6 +3034,7 @@ void updateGameLiveReloadProcs() {
 
 int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) {
     assert(QueryPerformanceFrequency(&perfFrequency));
+    assert(SetCurrentDirectoryW(exeDir.c_str()));
     showConsole();
     settingsLoad();
     windowInit();
