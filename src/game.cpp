@@ -1312,7 +1312,6 @@ void modelTraverseNodesAndGetGlobalTransforms(Model* model, ModelNode* node, con
     }
 }
 
-
 ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
     assert(filePath.extension() == ".gltf");
     Model* model = nullptr;
@@ -1451,8 +1450,8 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
                     if (jointWeightsBuffer) vertex.jointWeights = jointWeightsBuffer[vertexIndex];
                     mesh.vertices.push_back(vertex);
                 }
-                if (indices->component_type == cgltf_component_type_r_16u) mesh.indices.append_range(std::span((uint16*)indicesBuffer, indices->count));
-                else if (indices->component_type == cgltf_component_type_r_32u) mesh.indices.append_range(std::span((uint*)indicesBuffer, indices->count));
+                if (indices->component_type == cgltf_component_type_r_16u) std::copy_n((uint16*)indicesBuffer, indices->count, std::back_inserter(mesh.indices));
+                else if (indices->component_type == cgltf_component_type_r_32u) std::copy_n((uint*)indicesBuffer, indices->count, std::back_inserter(mesh.indices));
                 if (gltfPrimitive.material) primitive.material = &model->materials[gltfPrimitive.material - gltfData->materials];
             }
 
@@ -1607,7 +1606,7 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
         for (uint textureIndex = 0; textureIndex < gltfData->textures_count; textureIndex++) {
             cgltf_texture& gltfTexture = gltfData->textures[textureIndex];
             ModelTexture& texture = model->textures[textureIndex];
-            assert(gltfTexture.image && gltfTexture.sampler);
+            assert(gltfTexture.image);
             texture.image = &model->images[gltfTexture.image - &gltfData->images[0]];
         }
         for (uint materialIndex = 0; materialIndex < gltfData->materials_count; materialIndex++) {
@@ -1647,7 +1646,7 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
         ModelInstanceMeshNode& instanceMeshNode = modelInstance.meshNodes[meshNodeIndex];
         instanceMeshNode.transformMat = meshNode->globalTransform;
         if (!meshNode->skin) {
-            instanceMeshNode.verticesBuffer = meshNode->mesh->verticesBuffer; 
+            instanceMeshNode.verticesBuffer = meshNode->mesh->verticesBuffer;
             instanceMeshNode.blas = meshNode->mesh->blas;
             instanceMeshNode.blasScratch = meshNode->mesh->blasScratch;
         } else {
@@ -1780,7 +1779,7 @@ void modelInstanceUpdateAnimation(ModelInstance* modelInstance, double time) {
             }
         }
         for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance->meshNodes.size(); meshNodeIndex++) {
-            uint nodeIndex = modelInstance->model->meshNodes[meshNodeIndex] - &modelInstance->model->nodes[0];
+            int64 nodeIndex = modelInstance->model->meshNodes[meshNodeIndex] - &modelInstance->model->nodes[0];
             modelInstance->meshNodes[meshNodeIndex].transformMat = XMMatrixMultiply(modelInstance->model->meshNodes[meshNodeIndex]->globalTransform, nodeGlobalTransformMats[nodeIndex]);
         }
         for (uint skinIndex = 0; skinIndex < modelInstance->model->skins.size(); skinIndex++) {
@@ -2243,7 +2242,7 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
 void editorUpdate() {
     if (ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
         editor->active = false;
-        windowHideCursor(true);
+        //windowHideCursor(true);
         resetToEditor();
         return;
     }
@@ -2351,7 +2350,7 @@ void editorUpdate() {
         if (ImGui::BeginMenu("Game")) {
             if (ImGui::MenuItem("Play", "CTRL+P")) {
                 editor->active = false;
-                windowHideCursor(false);
+                //windowHideCursor(true);
                 resetToEditor();
             }
             ImGui::EndMenu();
@@ -2636,14 +2635,21 @@ void gameUpdate() {
         std::string str = std::format("player Movement: {}\nqueryResultDistance: {}\nqueryResultInstance: {}\n", player.movement.toString(), queryResult.distance.toString(), queryResult.instanceIndex);
         printf("%s", str.c_str());
         if (queryResult.instanceIndex == UINT_MAX) {
-            // if (player.movement != float3(0, 0, 0)) {
-            //     player.position += player.movement;
-            //     playerCameraTranslate(player.movement);
-            //     float angle = acosf(player.movement.normalize().dot(float3(0, 0, -1)));
-            //     if (player.movement.x > 0) angle = -angle;
-            //     player.PitchYawRoll = float3(0, angle, 0);
-            // }
+            printf("null\n");
+            if (player.movement != float3(0, 0, 0)) {
+                player.position += player.movement;
+                playerCameraTranslate(player.movement);
+                float angle = acosf(player.movement.normalize().dot(float3(0, 0, -1)));
+                if (player.movement.x > 0) angle = -angle;
+                player.PitchYawRoll = float3(0, angle, 0);
+            }
         } else {
+            TLASInstanceInfo& instanceInfo = tlasInstancesInfos[queryResult.instanceIndex];
+            if (instanceInfo.objectType == ObjectTypeStaticObject) {
+                printf("%s\n", staticObjects[instanceInfo.objectIndex].name.c_str());
+            } else {
+                printf("wtf\n");
+            }
         }
     }
     {
@@ -2729,8 +2735,7 @@ void addTLASInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
         transform = XMMatrixMultiply(transform, modelInstance.transform.toMat());
         transform = XMMatrixMultiply(transform, objectTransform);
         transform = XMMatrixTranspose(transform);
-        D3D12_RAYTRACING_INSTANCE_DESC instanceDesc = {.InstanceID = d3d.cbvSrvUavDescriptorCount, .InstanceMask = 0xff, .AccelerationStructure = instanceMeshNode.blas->GetResource()->GetGPUVirtualAddress()};
-        if (objectType == ObjectTypePlayer) { instanceDesc.InstanceMask = 0x01; }
+        D3D12_RAYTRACING_INSTANCE_DESC instanceDesc = {.InstanceID = d3d.cbvSrvUavDescriptorCount, .InstanceMask = objectType, .AccelerationStructure = instanceMeshNode.blas->GetResource()->GetGPUVirtualAddress()};
         memcpy(instanceDesc.Transform, &transform, sizeof(instanceDesc.Transform));
         tlasInstancesBuildInfos.push_back(instanceDesc);
         tlasInstancesInfos.push_back(tlasInstanceInfo);
@@ -2859,7 +2864,7 @@ void render() {
                 addTLASInstance(dynamicObjects[objIndex].model, XMMatrixTranslationFromVector((-player.camera.position).toXMVector()), ObjectTypeDynamicObject, objIndex);
             }
             XMVECTOR q = quaternionBetween(float3(0, 1, 0), player.movement);
-            addTLASInstance(shapeCylinder, XMMatrixAffineTransformation(XMVectorSet(0.05f, 1, 0.05f, 0), XMVectorSet(0, 0, 0, 0), q, (player.position - player.camera.position).toXMVector()), ObjectTypeNone, 0);
+            addTLASInstance(shapeCylinder, XMMatrixAffineTransformation(XMVectorSet(0.05f, player.movement.length(), 0.05f, 0), XMVectorSet(0, 0, 0, 0), q, (player.position - player.camera.position).toXMVector()), ObjectTypeNone, 0);
         }
         {
             assert(vectorSizeof(tlasInstancesBuildInfos) < d3d.tlasInstancesBuildInfosBuffer->GetSize());
@@ -2896,10 +2901,10 @@ void render() {
             float tanHalfFovY = 1.0f / cameraProjMat.m[1][1];
             rayDesc.dir = (float3(cameraViewMat.m[0][0], cameraViewMat.m[0][1], cameraViewMat.m[0][2]) * pixelCoord.x * tanHalfFovY * aspect) - (float3(cameraViewMat.m[1][0], cameraViewMat.m[1][1], cameraViewMat.m[1][2]) * pixelCoord.y * tanHalfFovY) + (float3(cameraViewMat.m[2][0], cameraViewMat.m[2][1], cameraViewMat.m[2][2]));
             rayDesc.dir = rayDesc.dir.normalize();
-            d3d.collisionQueriesBufferPtr[0] = {.rayDesc = rayDesc, .instanceInclusionMask = 0xff};
+            d3d.collisionQueriesBufferPtr[0] = {.rayDesc = rayDesc, .instanceInclusionMask = 0xff & ~ObjectTypeNone};
         }
 
-        d3d.collisionQueriesBufferPtr[1] = {.rayDesc = {.origin = player.position - player.camera.position, .min = 0.0f, .dir = player.movement.normalize(), .max = 10}, .instanceInclusionMask = 0xfe};
+        d3d.collisionQueriesBufferPtr[1] = {.rayDesc = {.origin = player.position - player.camera.position, .min = 0.0f, .dir = player.movement.normalize(), .max = player.movement.length()}, .instanceInclusionMask = 0xff & ~(ObjectTypeNone | ObjectTypePlayer)};
 
         D3D12_RESOURCE_BARRIER collisionQueryResultsBarriers[2] = {
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},

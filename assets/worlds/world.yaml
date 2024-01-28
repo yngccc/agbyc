@@ -1,6 +1,6 @@
 editorCamera:
-  position: [-16503,21462,36858]
-  pitchYaw: [0.286706,3.0158112]
+  position: [-1427,22321,58561]
+  pitchYaw: [0.29221615,3.1406207]
   moveSpeed: 15.687
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
@@ -28,12 +28,12 @@ staticObjects:
     file: models\xbot\xbot.gltf
     scale: [7.4099994,7.4099994,7.4099994]
     rotate: [-0,0,-0,1]
-    translate: [1.1099292,0,-3.537915]
+    translate: [1.1099292,-0.030011415,-3.537915]
   - name: cesiumMan
     file: models\cesiumMan\cesiumMan.gltf
     scale: [2.76,2.76,2.76]
     rotate: [-0,0,-0,1]
-    translate: [-1.0405915,0,0]
+    translate: [-1.0405915,-0.05785811,0]
   - name: cube
     file: models/cube/cube.gltf
     scale: [1,1,1]
@@ -44,4 +44,14 @@ staticObjects:
     scale: [1,1,1]
     rotate: [-0,0,-0,1]
     translate: [-3.31921,0.98782265,0]
+  - name: fish
+    file: models\fish\BarramundiFish.gltf
+    scale: [3.4299998,3.4299998,3.4299998]
+    rotate: [-0,0,-0,1]
+    translate: [1.2489251,1.9492137,-0.43860224]
+  - name: cylinder
+    file: models/cylinder/cylinder.gltf
+    scale: [1,1,1]
+    rotate: [-0,0,-0,1]
+    translate: [0,-0.015607089,2.0579576]
 dynamicObjects: []

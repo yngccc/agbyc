@@ -80,11 +80,11 @@ struct RenderInfo {
 };
 
 enum ObjectType : uint {
-    ObjectTypeNone,
-    ObjectTypePlayer,
-    ObjectTypeSkybox,
-    ObjectTypeStaticObject,
-    ObjectTypeDynamicObject,
+    ObjectTypeNone = 0x01,
+    ObjectTypePlayer = 0x01 << 1,
+    ObjectTypeSkybox = 0x01 << 2,
+    ObjectTypeStaticObject = 0x01 << 3,
+    ObjectTypeDynamicObject = 0x01 << 4,
 };
 
 struct TLASInstanceInfo {
