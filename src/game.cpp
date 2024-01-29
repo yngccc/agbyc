@@ -31,14 +31,11 @@
 
 #include <directxtex.h>
 
-#define RYML_SINGLE_HDR_DEFINE_NOW
 #include <rapidyaml/rapidyaml-0.5.0.hpp>
 
-#define CGLTF_IMPLEMENTATION
 #include <cgltf/cgltf.h>
 
-// #define STB_IMAGE_IMPLEMENTATION
-// #include <stb/stb_image.h>
+ #include <stb/stb_image.h>
 // #define STB_DS_IMPLEMENTATION
 // #include <stb/stb_ds.h>
 
@@ -813,6 +810,10 @@ D3D12MA::Allocation* d3dCreate2DImage(const D3D12_RESOURCE_DESC& resourceDesc, D
     assert(UpdateSubresources(d3d.transferCmdList, image->GetResource(), d3d.stagingBuffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, imageMips) == requiredSize);
     d3d.stagingBufferOffset += (uint)requiredSize;
     return image;
+}
+
+D3D12MA::Allocation* d3dCreate2DImageSTB(const std::filesystem::path& ddsFilePath, const wchar_t* name = nullptr) {
+    return nullptr;
 }
 
 D3D12MA::Allocation* d3dCreate2DImageDDS(const std::filesystem::path& ddsFilePath, const wchar_t* name = nullptr) {
@@ -1596,8 +1597,11 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
             std::filesystem::path imageFilePath = gltfFileFolderPath / gltfImage.uri;
             std::filesystem::path imageDDSFilePath = imageFilePath;
             imageDDSFilePath.replace_extension(".dds");
-            assert(std::filesystem::exists(imageDDSFilePath));
-            image.gpuData = d3dCreate2DImageDDS(imageDDSFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str());
+            if (std::filesystem::exists(imageDDSFilePath)) {
+                image.gpuData = d3dCreate2DImageDDS(imageDDSFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str());
+            } else if (std::filesystem::exists(imageFilePath)) {
+                image.gpuData = d3dCreate2DImageSTB(imageFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str());
+            }
             D3D12_RESOURCE_DESC imageDesc = image.gpuData->GetResource()->GetDesc();
             image.srvDesc = {.Format = imageDesc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = imageDesc.MipLevels}};
             D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = image.gpuData->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
@@ -2242,7 +2246,7 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
 void editorUpdate() {
     if (ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
         editor->active = false;
-        //windowHideCursor(true);
+        // windowHideCursor(true);
         resetToEditor();
         return;
     }
@@ -2350,7 +2354,7 @@ void editorUpdate() {
         if (ImGui::BeginMenu("Game")) {
             if (ImGui::MenuItem("Play", "CTRL+P")) {
                 editor->active = false;
-                //windowHideCursor(true);
+                // windowHideCursor(true);
                 resetToEditor();
             }
             ImGui::EndMenu();

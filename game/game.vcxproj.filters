@@ -40,6 +40,15 @@
     <ClCompile Include="..\include\imgui\ImGuizmo.cpp">
       <Filter>Source Files\libs</Filter>
     </ClCompile>
+    <ClCompile Include="..\include\stb\stb_image.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\cgltf\cgltf.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\rapidyaml\rapidyaml-0.5.0.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\structsHLSL.h">
