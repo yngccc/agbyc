@@ -1,7 +1,7 @@
 #include <cstdint>
-#include <vector>
-#include <string>
 #include <format>
+#include <string>
+#include <vector>
 #define _XM_SSE4_INTRINSICS_
 #include <directxmath.h>
 using namespace DirectX;
@@ -167,7 +167,6 @@ struct Transform {
     float4 r = {0, 0, 0, 1};
     float3 t = {0, 0, 0};
 
-    Transform operator*(const Transform& transform) const { return Transform{.s = s * transform.s, .r = XMQuaternionMultiply(r.toXMVector(), transform.r.toXMVector()), .t = t + transform.t}; }
     XMMATRIX toMat() const { return XMMatrixAffineTransformation(s.toXMVector(), XMVectorSet(0, 0, 0, 0), r.toXMVector(), t.toXMVector()); }
 };
 
@@ -189,11 +188,10 @@ XMVECTOR quaternionBetween(float3 v1, float3 v2) {
     float c = v1.dot(v2);
     float k = sqrtf(v1.lengthSquared() * v2.lengthSquared());
     if (c / k == -1) {
-        float3 u = v1.orthogonal().normalize();
-        return XMVectorSet(u.x, u.y, u.z, 0);
+            float3 u = v1.orthogonal().normalize();
+            return XMVectorSet(u.x, u.y, u.z, 0);
     } else {
-        float3 u = v1.cross(v2);
-        return XMQuaternionNormalize(XMVectorSet(u.x, u.y, u.z, c + k));
+            float3 u = v1.cross(v2);
+            return XMQuaternionNormalize(XMVectorSet(u.x, u.y, u.z, c + k));
     }
 }
-

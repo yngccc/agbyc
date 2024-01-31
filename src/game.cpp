@@ -35,7 +35,7 @@
 
 #include <cgltf/cgltf.h>
 
- #include <stb/stb_image.h>
+#include <stb/stb_image.h>
 // #define STB_DS_IMPLEMENTATION
 // #include <stb/stb_ds.h>
 
@@ -147,6 +147,7 @@ struct D3D {
     uint constantBufferOffset = 0;
 
     D3D12MA::Allocation* renderTexture;
+    D3D12MA::Allocation* renderTexturePrevFrame;
     DXGI_FORMAT renderTextureFormat;
 
     D3D12MA::Allocation* imguiImage;
@@ -309,7 +310,6 @@ struct Model {
 };
 
 struct ModelInstanceSkin {
-    std::vector<Transform> transforms;
     std::vector<XMMATRIX> mats;
     D3D12MA::Allocation* matsBuffer;
     uint8* matsBufferPtr;
@@ -792,7 +792,7 @@ void d3dTransferQueueWait() {
     }
 }
 
-D3D12MA::Allocation* d3dCreate2DImage(const D3D12_RESOURCE_DESC& resourceDesc, D3D12_SUBRESOURCE_DATA* imageMips, const wchar_t* name = nullptr) {
+D3D12MA::Allocation* d3dCreateImage(const D3D12_RESOURCE_DESC& resourceDesc, D3D12_SUBRESOURCE_DATA* imageMips, const wchar_t* name = nullptr) {
     D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
     D3D12MA::Allocation* image;
     assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image, {}, nullptr)));
@@ -812,11 +812,31 @@ D3D12MA::Allocation* d3dCreate2DImage(const D3D12_RESOURCE_DESC& resourceDesc, D
     return image;
 }
 
-D3D12MA::Allocation* d3dCreate2DImageSTB(const std::filesystem::path& ddsFilePath, const wchar_t* name = nullptr) {
-    return nullptr;
+D3D12MA::Allocation* d3dCreateImageSTB(const std::filesystem::path& ddsFilePath, const wchar_t* name = nullptr) {
+    int width, height, channelCount;
+    unsigned char* imageData = stbi_load(ddsFilePath.string().c_str(), &width, &height, &channelCount, 4);
+    assert(imageData);
+    D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+    D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint)width, .Height = (uint)height, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
+    D3D12MA::Allocation* image;
+    assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image, {}, nullptr)));
+    if (name) { image->GetResource()->SetName(name); }
+    d3d.stagingBufferOffset = align(d3d.stagingBufferOffset, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT mipFootprint;
+    uint rowCount;
+    uint64 rowSize;
+    uint64 requiredSize;
+    d3d.device->GetCopyableFootprints(&resourceDesc, 0, 1, 0, &mipFootprint, &rowCount, &rowSize, &requiredSize);
+    assert(d3d.stagingBufferOffset + requiredSize < d3d.stagingBuffer->GetSize());
+    mipFootprint.Offset += d3d.stagingBufferOffset;
+    D3D12_SUBRESOURCE_DATA srcData = {.pData = imageData, .RowPitch = width * 4, .SlicePitch = width * height * 4};
+    assert(UpdateSubresources(d3d.transferCmdList, image->GetResource(), d3d.stagingBuffer->GetResource(), 0, 1, requiredSize, &mipFootprint, &rowCount, &rowSize, &srcData) == requiredSize);
+    d3d.stagingBufferOffset += (uint)requiredSize;
+    stbi_image_free(imageData);
+    return image;
 }
 
-D3D12MA::Allocation* d3dCreate2DImageDDS(const std::filesystem::path& ddsFilePath, const wchar_t* name = nullptr) {
+D3D12MA::Allocation* d3dCreateImageDDS(const std::filesystem::path& ddsFilePath, const wchar_t* name = nullptr) {
     ScratchImage scratchImage;
     assert(SUCCEEDED(LoadFromDDSFile(ddsFilePath.c_str(), DDS_FLAGS_NONE, nullptr, scratchImage)));
     assert(scratchImage.GetImageCount() == scratchImage.GetMetadata().mipLevels);
@@ -999,7 +1019,7 @@ void d3dInit() {
             D3D12_RESOURCE_STATES initState;
             const wchar_t* name;
         } descs[] = {
-            {&d3d.stagingBuffer, (void**)&d3d.stagingBufferPtr, megabytes(256), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_SOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"stagingBuffer"},
+            {&d3d.stagingBuffer, (void**)&d3d.stagingBufferPtr, megabytes(512), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_SOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"stagingBuffer"},
             {&d3d.constantBuffer, (void**)&d3d.constantBufferPtr, megabytes(4), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer"},
             {&d3d.tlasInstancesBuildInfosBuffer, (void**)&d3d.tlasInstancesBuildInfosBufferPtr, megabytes(32), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesBuildInfosBuffer"},
             {&d3d.tlasInstancesInfosBuffer, (void**)&d3d.tlasInstancesInfosBufferPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesInfosBuffer"},
@@ -1029,7 +1049,7 @@ void d3dInit() {
             .Height = settings.renderH,
             .DepthOrArraySize = 1,
             .MipLevels = 1,
-            .Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
+            .Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
             .SampleDesc = {.Count = 1},
             .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN,
             .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
@@ -1037,7 +1057,9 @@ void d3dInit() {
 
         D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
         assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr)));
+        assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexturePrevFrame, {}, nullptr)));
         d3d.renderTexture->GetResource()->SetName(L"renderTexture");
+        d3d.renderTexturePrevFrame->GetResource()->SetName(L"renderTexturePrevFrame");
         d3d.renderTextureFormat = renderTextureDesc.Format;
     }
     {
@@ -1058,13 +1080,13 @@ void d3dInit() {
             ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&imguiTextureData, &imguiTextureWidth, &imguiTextureHeight);
             D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint64)imguiTextureWidth, .Height = (uint)imguiTextureHeight, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
             D3D12_SUBRESOURCE_DATA data = {.pData = imguiTextureData, .RowPitch = imguiTextureWidth * 4, .SlicePitch = imguiTextureWidth * imguiTextureHeight * 4};
-            d3d.imguiImage = d3dCreate2DImage(desc, &data);
+            d3d.imguiImage = d3dCreateImage(desc, &data);
         }
         {
             uint8_4 defaultMaterialBaseColorImageData[4] = {{255, 255, 255, 255}, {255, 255, 255, 255}, {255, 255, 255, 255}, {255, 255, 255, 255}};
             D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = 2, .Height = 2, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
             D3D12_SUBRESOURCE_DATA data = {.pData = defaultMaterialBaseColorImageData, .RowPitch = 8, .SlicePitch = 16};
-            d3d.defaultMaterialBaseColorImage = d3dCreate2DImage(desc, &data);
+            d3d.defaultMaterialBaseColorImage = d3dCreateImage(desc, &data);
             d3d.defaultMaterialBaseColorImageSRVDesc = {.Format = desc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = desc.MipLevels}};
         }
         D3D12_RESOURCE_BARRIER barriers[2] = {
@@ -1230,10 +1252,13 @@ void d3dResizeSwapChain(uint width, uint height) {
         d3d.device->CreateRenderTargetView(*image, nullptr, d3d.swapChainImageRTVDescriptors[imageIndex]);
     }
     d3d.renderTexture->Release();
+    d3d.renderTexturePrevFrame->Release();
     D3D12_RESOURCE_DESC renderTextureDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = width, .Height = height, .DepthOrArraySize = 1, .MipLevels = 1, .Format = d3d.renderTextureFormat, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
     D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
     assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr)));
+    assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexturePrevFrame, {}, nullptr)));
     d3d.renderTexture->GetResource()->SetName(L"renderTexture");
+    d3d.renderTexturePrevFrame->GetResource()->SetName(L"renderTexturePrevFrame");
 }
 
 void d3dApplySettings() {
@@ -1598,9 +1623,11 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
             std::filesystem::path imageDDSFilePath = imageFilePath;
             imageDDSFilePath.replace_extension(".dds");
             if (std::filesystem::exists(imageDDSFilePath)) {
-                image.gpuData = d3dCreate2DImageDDS(imageDDSFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str());
+                image.gpuData = d3dCreateImageDDS(imageDDSFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str());
             } else if (std::filesystem::exists(imageFilePath)) {
-                image.gpuData = d3dCreate2DImageSTB(imageFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str());
+                image.gpuData = d3dCreateImageSTB(imageFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str());
+            } else {
+                assert(false);
             }
             D3D12_RESOURCE_DESC imageDesc = image.gpuData->GetResource()->GetDesc();
             image.srvDesc = {.Format = imageDesc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = imageDesc.MipLevels}};
@@ -1637,7 +1664,6 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
     }
     modelInstance.skins.resize(model->skins.size());
     for (uint skinIndex = 0; skinIndex < model->skins.size(); skinIndex++) {
-        modelInstance.skins[skinIndex].transforms.resize(model->skins[skinIndex].joints.size());
         modelInstance.skins[skinIndex].mats.resize(model->skins[skinIndex].joints.size());
         D3D12MA::ALLOCATION_DESC jointBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
         D3D12_RESOURCE_DESC jointBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = vectorSizeof(modelInstance.skins[skinIndex].mats), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
@@ -1930,7 +1956,7 @@ void loadWorld(const std::filesystem::path& path) {
         skybox.hdriTextureFilePath = file;
         d3dTransferQueueStartRecording();
         d3d.stagingBufferOffset = 0;
-        skybox.hdriTexture = d3dCreate2DImageDDS(assetsDir / skybox.hdriTextureFilePath);
+        skybox.hdriTexture = d3dCreateImageDDS(assetsDir / skybox.hdriTextureFilePath);
         D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = skybox.hdriTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
         d3d.transferCmdList->ResourceBarrier(1, &barrier);
         d3dTransferQueueSubmitRecording();
@@ -2823,7 +2849,7 @@ void render() {
         D3D12_SHADER_RESOURCE_VIEW_DESC blasGeometriesInfosDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.blasGeometriesInfosBuffer->GetSize() / sizeof(struct BLASGeometryInfo)), .StructureByteStride = sizeof(struct BLASGeometryInfo)}};
         D3D12_SHADER_RESOURCE_VIEW_DESC collisionQueriesDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.collisionQueriesBuffer->GetSize() / sizeof(struct CollisionQuery)), .StructureByteStride = sizeof(struct CollisionQuery)}};
         D3D12_UNORDERED_ACCESS_VIEW_DESC collisionQueryResultsDesc = {.ViewDimension = D3D12_UAV_DIMENSION_BUFFER, .Buffer = {.NumElements = (uint)(d3d.collisionQueryResultsBuffer->GetSize() / sizeof(struct CollisionQueryResult)), .StructureByteStride = sizeof(struct CollisionQueryResult)}};
-
+        
         D3DDescriptor renderTextureSRVDescriptor = d3dAppendSRVDescriptor(&renderTextureSRVDesc, d3d.renderTexture->GetResource());
         D3DDescriptor renderTextureUAVDescriptor = d3dAppendUAVDescriptor(&renderTextureUAVDesc, d3d.renderTexture->GetResource());
         D3DDescriptor renderInfoDescriptor = d3dAppendCBVDescriptor(&renderInfoCBVDesc);
@@ -3018,6 +3044,8 @@ void render() {
 
         d3d.renderDoneFenceValue += 1;
         d3d.graphicsQueue->Signal(d3d.renderDoneFence, d3d.renderDoneFenceValue);
+
+        std::swap(d3d.renderTexture, d3d.renderTexturePrevFrame);
     }
 }
 

@@ -1,6 +1,6 @@
 editorCamera:
-  position: [-1427,22321,58561]
-  pitchYaw: [0.29221615,3.1406207]
+  position: [-33987,26160,42660]
+  pitchYaw: [0.13031784,2.579183]
   moveSpeed: 15.687
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
@@ -43,7 +43,7 @@ staticObjects:
     file: models\animatedCube\AnimatedCube.gltf
     scale: [1,1,1]
     rotate: [-0,0,-0,1]
-    translate: [-3.31921,0.98782265,0]
+    translate: [-3.31921,0.9366585,0]
   - name: fish
     file: models\fish\BarramundiFish.gltf
     scale: [3.4299998,3.4299998,3.4299998]
@@ -54,4 +54,9 @@ staticObjects:
     scale: [1,1,1]
     rotate: [-0,0,-0,1]
     translate: [0,-0.015607089,2.0579576]
+  - name: sphere
+    file: models/sphere/sphere.gltf
+    scale: [1,1,1]
+    rotate: [-0,0,-0,1]
+    translate: [0,2.9648516,0]
 dynamicObjects: []
