@@ -203,6 +203,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\include\stb\stb_ds.cpp" />
     <ClCompile Include="..\src\gameLiveReload.cpp" />
   </ItemGroup>
   <ItemGroup>

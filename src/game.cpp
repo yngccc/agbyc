@@ -36,8 +36,6 @@
 #include <cgltf/cgltf.h>
 
 #include <stb/stb_image.h>
-// #define STB_DS_IMPLEMENTATION
-// #include <stb/stb_ds.h>
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -493,7 +491,7 @@ static std::vector<D3D12_RAYTRACING_INSTANCE_DESC> tlasInstancesBuildInfos;
 static std::vector<TLASInstanceInfo> tlasInstancesInfos;
 static std::vector<BLASGeometryInfo> blasGeometriesInfos;
 
-Editor* editor = new Editor();
+static Editor* editor = new Editor();
 // Editor* editor = nullptr;
 
 std::string getLastErrorStr() {
@@ -2303,7 +2301,6 @@ void editorUpdate() {
     ImVec2 mouseDelta = {mousePos.x - mousePosPrev.x, mousePos.y - mousePosPrev.y};
     mousePosPrev = mousePos;
 
-    static std::vector<std::string> logs = {};
     static bool addObjectPopup = false;
     ImVec2 mainMenuBarPos;
     ImVec2 mainMenuBarSize;
@@ -2507,10 +2504,6 @@ void editorUpdate() {
         }
     }
     ImGui::End();
-    if (ImGui::Begin("Logs")) {
-        for (std::string& log : logs) { ImGui::BulletText(log.c_str()); }
-    }
-    ImGui::End();
     if (addObjectPopup) {
         ImGui::OpenPopup("Add Object");
         addObjectPopup = false;
@@ -2531,7 +2524,7 @@ void editorUpdate() {
         }
         if (ImGui::Button("Add")) {
             if (objectName[0] == '\0') {
-                logs.push_back("error: object name is empty");
+                ImGui::DebugLog("error: object name is empty");
             } else {
                 std::filesystem::path path = std::filesystem::relative(filePath, assetsDir);
                 if (objectType == 0) {
@@ -2648,6 +2641,7 @@ void editorUpdate() {
             }
         }
     }
+    ImGui::ShowDebugLogWindow();
 }
 
 void gameUpdate() {
@@ -2663,9 +2657,9 @@ void gameUpdate() {
         }
         CollisionQueryResult queryResult = d3d.collisionQueryResultsBufferPtr[1];
         std::string str = std::format("player Movement: {}\nqueryResultDistance: {}\nqueryResultInstance: {}\n", player.movement.toString(), queryResult.distance.toString(), queryResult.instanceIndex);
-        printf("%s", str.c_str());
+        ImGui::DebugLog("%s", str.c_str());
         if (queryResult.instanceIndex == UINT_MAX) {
-            printf("null\n");
+            ImGui::DebugLog("null\n");
             if (player.movement != float3(0, 0, 0)) {
                 player.position += player.movement;
                 playerCameraTranslate(player.movement);
@@ -2676,9 +2670,9 @@ void gameUpdate() {
         } else {
             TLASInstanceInfo& instanceInfo = tlasInstancesInfos[queryResult.instanceIndex];
             if (instanceInfo.objectType == ObjectTypeStaticObject) {
-                printf("%s\n", staticObjects[instanceInfo.objectIndex].name.c_str());
+                ImGui::DebugLog("%s\n", staticObjects[instanceInfo.objectIndex].name.c_str());
             } else {
-                printf("wtf\n");
+                ImGui::DebugLog("wtf\n");
             }
         }
     }
@@ -2728,6 +2722,7 @@ void gameUpdate() {
         for (StaticObject& obj : staticObjects) modelInstanceUpdateAnimation(&obj.model, frameTime);
         for (DynamicObject& obj : dynamicObjects) modelInstanceUpdateAnimation(&obj.model, frameTime);
     }
+    ImGui::ShowDebugLogWindow();
 }
 
 void update() {
@@ -2849,7 +2844,7 @@ void render() {
         D3D12_SHADER_RESOURCE_VIEW_DESC blasGeometriesInfosDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.blasGeometriesInfosBuffer->GetSize() / sizeof(struct BLASGeometryInfo)), .StructureByteStride = sizeof(struct BLASGeometryInfo)}};
         D3D12_SHADER_RESOURCE_VIEW_DESC collisionQueriesDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.collisionQueriesBuffer->GetSize() / sizeof(struct CollisionQuery)), .StructureByteStride = sizeof(struct CollisionQuery)}};
         D3D12_UNORDERED_ACCESS_VIEW_DESC collisionQueryResultsDesc = {.ViewDimension = D3D12_UAV_DIMENSION_BUFFER, .Buffer = {.NumElements = (uint)(d3d.collisionQueryResultsBuffer->GetSize() / sizeof(struct CollisionQueryResult)), .StructureByteStride = sizeof(struct CollisionQueryResult)}};
-        
+
         D3DDescriptor renderTextureSRVDescriptor = d3dAppendSRVDescriptor(&renderTextureSRVDesc, d3d.renderTexture->GetResource());
         D3DDescriptor renderTextureUAVDescriptor = d3dAppendUAVDescriptor(&renderTextureUAVDesc, d3d.renderTexture->GetResource());
         D3DDescriptor renderInfoDescriptor = d3dAppendCBVDescriptor(&renderInfoCBVDesc);
@@ -3072,7 +3067,6 @@ void updateGameLiveReloadProcs() {
 int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) {
     assert(QueryPerformanceFrequency(&perfFrequency));
     assert(SetCurrentDirectoryW(exeDir.c_str()));
-    showConsole();
     settingsLoad();
     windowInit();
     windowShow();
@@ -3100,6 +3094,7 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
         QueryPerformanceCounter(&perfCounters[1]);
         frameTime = (double)(perfCounters[1].QuadPart - perfCounters[0].QuadPart) / (double)perfFrequency.QuadPart;
     }
+    assert(SetCurrentDirectoryW(exeDir.c_str()));
     saveWorld();
     settingsSave();
     return EXIT_SUCCESS;

@@ -2,9 +2,12 @@
 #include <format>
 #include <string>
 #include <vector>
+
 #define _XM_SSE4_INTRINSICS_
 #include <directxmath.h>
 using namespace DirectX;
+
+//#include <stb/stb_ds.h>
 
 typedef int8_t int8;
 typedef int16_t int16;
@@ -188,10 +191,10 @@ XMVECTOR quaternionBetween(float3 v1, float3 v2) {
     float c = v1.dot(v2);
     float k = sqrtf(v1.lengthSquared() * v2.lengthSquared());
     if (c / k == -1) {
-            float3 u = v1.orthogonal().normalize();
-            return XMVectorSet(u.x, u.y, u.z, 0);
+        float3 u = v1.orthogonal().normalize();
+        return XMVectorSet(u.x, u.y, u.z, 0);
     } else {
-            float3 u = v1.cross(v2);
-            return XMQuaternionNormalize(XMVectorSet(u.x, u.y, u.z, c + k));
+        float3 u = v1.cross(v2);
+        return XMQuaternionNormalize(XMVectorSet(u.x, u.y, u.z, c + k));
     }
 }

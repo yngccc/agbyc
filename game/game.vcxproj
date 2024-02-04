@@ -218,6 +218,7 @@
     <ClCompile Include="..\include\imgui\imgui_tables.cpp" />
     <ClCompile Include="..\include\imgui\imgui_widgets.cpp" />
     <ClCompile Include="..\include\rapidyaml\rapidyaml-0.5.0.cpp" />
+    <ClCompile Include="..\include\stb\stb_ds.cpp" />
     <ClCompile Include="..\include\stb\stb_image.cpp" />
     <ClCompile Include="..\include\tracy\TracyClient.cpp" />
     <ClCompile Include="..\src\game.cpp" />
