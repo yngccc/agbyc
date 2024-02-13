@@ -92,7 +92,10 @@
     <FxCompile Include="..\src\hlsl\renderScene.hlsl">
       <Filter>Source Files\hlsl</Filter>
     </FxCompile>
-    <FxCompile Include="..\src\hlsl\vertexSkinning.hlsl">
+    <FxCompile Include="..\src\hlsl\vertexSkinningCS.hlsl">
+      <Filter>Source Files\hlsl</Filter>
+    </FxCompile>
+    <FxCompile Include="..\src\hlsl\shapesCS.hlsl">
       <Filter>Source Files\hlsl</Filter>
     </FxCompile>
   </ItemGroup>

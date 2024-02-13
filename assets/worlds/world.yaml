@@ -1,24 +1,24 @@
 editorCamera:
-  position: [-2710,21700,56935]
-  pitchYaw: [0.15658446,3.0549467]
+  position: [40790,21157,88111]
+  pitchYaw: [-0.30578467,2.8253314]
   moveSpeed: 15.687
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
 player:
-  file: models\girl\girl.gltf
+  file: models\robot\gltf\robot.gltf
   scale: [1,1,1]
   rotate: [-0,0,-0,1]
   translate: [0,0,0]
   spawnPosition: [0,0,0]
   walkSpeed: 1
   runSpeed: 5
-  idleAnimationIndex: 6
-  walkAnimationIndex: 7
-  runAnimationIndex: 5
+  idleAnimationIndex: 4
+  walkAnimationIndex: 5
+  runAnimationIndex: 2
   jumpAnimationIndex: 0
   cameraLookAtOffset: [0,1,0]
   cameraDistance: 3
-staticObjects:
+gameObjects:
   - name: floor
     file: models/cube/cube.gltf
     scale: [100,1,100]
@@ -59,4 +59,18 @@ staticObjects:
     scale: [1,1,1]
     rotate: [-0,0,-0,1]
     translate: [0,2.9648516,0]
-dynamicObjects: []
+  - name: girlDriver
+    file: models\girlDriver\gltf\girlDriver.gltf
+    scale: [0.7098838,0.709886,0.7098838]
+    rotate: [0,0.9840335,0,-0.17798312]
+    translate: [-0.9434476,0.6879333,3.6363218]
+  - name: bot
+    file: models\playerFirstPerson\gltf\playerFirstPerson.gltf
+    scale: [0.9999907,1,0.9999907]
+    rotate: [-0,-0.0997922,-0,0.9950083]
+    translate: [0,-0.056521297,7.094115]
+  - name: robot
+    file: models\robot\gltf\robot.gltf
+    scale: [0.9999985,1,0.9999985]
+    rotate: [0,0.8000281,0,-0.5999625]
+    translate: [5.353129,0,5.0973306]

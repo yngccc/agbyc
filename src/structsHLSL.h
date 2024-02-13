@@ -16,6 +16,22 @@ struct Vertex {
 #endif
 };
 
+struct VertexSkinned {
+#ifdef __cplusplus
+    float3 position;
+    float3 normal;
+    float2 uv;
+    uint16_4 joints;
+    float4 jointWeights;
+#else
+    float3 position;
+    float3 normal;
+    float2 uv;
+    uint16_t joints[4];
+    float4 jointWeights;
+#endif
+};
+
 struct Joint {
 #ifdef __cplusplus
     DirectX::XMMATRIX transform;
@@ -83,8 +99,7 @@ enum ObjectType : uint {
     ObjectTypeNone = 0x01,
     ObjectTypePlayer = 0x01 << 1,
     ObjectTypeSkybox = 0x01 << 2,
-    ObjectTypeStaticObject = 0x01 << 3,
-    ObjectTypeDynamicObject = 0x01 << 4,
+    ObjectTypeGameObject = 0x01 << 3,
 };
 
 struct TLASInstanceInfo {
@@ -141,5 +156,31 @@ struct CollisionQueryResult {
 #else
     float3 distance;
     uint instanceIndex;
+#endif
+};
+
+struct ShapeCircle {
+#ifdef __cplusplus
+    float2 center;;
+    float radius;
+    float padding;
+#else
+    float2 center;;
+    float radius;
+    float padding;
+#endif
+};
+
+struct ShapeLine {
+#ifdef __cplusplus
+    float2 p1;
+    float2 p2;
+    float thickness;
+    float3 padding;
+#else
+    float2 p1;
+    float2 p2;
+    float thickness;
+    float3 padding;
 #endif
 };
