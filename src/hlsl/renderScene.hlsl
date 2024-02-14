@@ -33,7 +33,7 @@ void rayGen() {
     RayDesc primaryRay = generatePinholeCameraRay(pixelCoord, renderInfo.cameraViewMat, renderInfo.cameraProjMat);
     PrimaryRayPayload primaryRayPayload;
     TraceRay(bvh, RAY_FLAG_NONE, 0xff, 0, 0, 0, primaryRay, primaryRayPayload);
-    renderTexture[pixelIndex] = float4(primaryRayPayload.color.xyz, 0);
+    renderTexture[pixelIndex] = float4(primaryRayPayload.color.xyz, 1);
 }
 
 [shader("miss")]

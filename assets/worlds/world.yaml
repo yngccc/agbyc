@@ -1,6 +1,6 @@
 editorCamera:
-  position: [40790,21157,88111]
-  pitchYaw: [-0.30578467,2.8253314]
+  position: [-95205,22276,43513]
+  pitchYaw: [0.043303523,1.7841878]
   moveSpeed: 15.687
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds

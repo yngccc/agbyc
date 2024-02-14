@@ -5,6 +5,7 @@
 
 StructuredBuffer<ShapeCircle> shapeCircles : register(t0);
 StructuredBuffer<ShapeLine> shapeLines : register(t1);
+uint2 counts : register(b0);
 
 float drawCircle(in float2 center, in float radius, in uint2 pixelIndex, in uint2 renderTextureSize) {
     float d = distance(float2(pixelIndex), float2(renderTextureSize) * center);
@@ -46,8 +47,10 @@ void computeShader(uint2 dispatchThreadID : SV_DispatchThreadID, uint2 groupID :
     //g += drawCircle(float2(0.5, 0.5), 0.1, dispatchThreadID, renderTextureSize);
     g += drawLine(float2(0.6, 0.3), float2(0.5, 0.50), 0.001, dispatchThreadID, renderTextureSize);
     renderTexture[dispatchThreadID].rgb += float3(0, g, 0);
-    renderTexture[dispatchThreadID].rgb += float3(0, g, 0);
 
     uint circleCount, circleStride;
+    uint lineCount, lineStride;
     shapeCircles.GetDimensions(circleCount, circleStride);
+    shapeLines.GetDimensions(lineCount, lineStride);
+    
 }

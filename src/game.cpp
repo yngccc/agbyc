@@ -125,9 +125,9 @@ struct D3D {
     DXGI_FORMAT swapChainFormat;
     ID3D12Resource* swapChainImages[2];
     D3D12_CPU_DESCRIPTOR_HANDLE swapChainImageRTVDescriptors[2];
+    D3D12_CPU_DESCRIPTOR_HANDLE swapChainImageUAVDescriptors[2];
 
     ID3D12DescriptorHeap* rtvDescriptorHeap;
-    uint rtvDescriptorSize;
     uint rtvDescriptorCount;
     ID3D12DescriptorHeap* cbvSrvUavDescriptorHeap;
     uint cbvSrvUavDescriptorSize;
@@ -140,18 +140,23 @@ struct D3D {
     uint8* stagingBufferPtr;
     uint stagingBufferOffset = 0;
 
-    D3D12MA::Allocation* constantBuffer;
-    uint8* constantBufferPtr;
-    uint constantBufferOffset = 0;
+    D3D12MA::Allocation* constantsBuffer;
+    uint8* constantsBufferPtr;
+    uint constantsBufferOffset = 0;
 
     D3D12MA::Allocation* renderTexture;
     D3D12MA::Allocation* renderTexturePrevFrame;
     DXGI_FORMAT renderTextureFormat;
 
+    D3D12MA::Allocation* shapeCirclesBuffer;
+    D3D12MA::Allocation* shapeLinesBuffer;
+    uint8* shapeCirclesBufferPtr;
+    uint8* shapeLinesBufferPtr;
+
     D3D12MA::Allocation* imguiImage;
     D3D12MA::Allocation* imguiVertexBuffer;
-    uint8* imguiVertexBufferPtr;
     D3D12MA::Allocation* imguiIndexBuffer;
+    uint8* imguiVertexBufferPtr;
     uint8* imguiIndexBufferPtr;
 
     D3D12MA::Allocation* defaultMaterialBaseColorImage;
@@ -192,11 +197,11 @@ struct D3D {
     ID3D12PipelineState* vertexSkinning;
     ID3D12RootSignature* vertexSkinningRootSig;
 
-    ID3D12PipelineState* shapes;
-    ID3D12RootSignature* shapesRootSig;
-
     ID3D12PipelineState* postProcess;
     ID3D12RootSignature* postProcessRootSig;
+
+    ID3D12PipelineState* shapes;
+    ID3D12RootSignature* shapesRootSig;
 
     ID3D12PipelineState* imgui;
     ID3D12RootSignature* imguiRootSig;
@@ -437,9 +442,9 @@ static Controller controller = {};
 
 static std::filesystem::path worldFilePath;
 static std::list<Model> models;
-static ModelInstance shapeCube;
-static ModelInstance shapeCylinder;
-static ModelInstance shapeSphere;
+static ModelInstance modelInstanceCube;
+static ModelInstance modelInstanceCylinder;
+static ModelInstance modelInstanceSphere;
 static Player player;
 static std::vector<GameObject> gameObjects;
 static Skybox skybox;
@@ -447,6 +452,8 @@ static std::vector<Light> lights;
 static std::vector<D3D12_RAYTRACING_INSTANCE_DESC> tlasInstancesBuildInfos;
 static std::vector<TLASInstanceInfo> tlasInstancesInfos;
 static std::vector<BLASGeometryInfo> blasGeometriesInfos;
+static std::vector<ShapeCircle> shapeCircles;
+static std::vector<ShapeLine> shapeLines;
 
 static Editor* editor = new Editor();
 static ImVec2 editorMainMenuBarPos = {};
@@ -961,14 +968,13 @@ void d3dInit() {
     }
     {
         D3D12_DESCRIPTOR_HEAP_DESC rtvDescriptorHeapDesc = {.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV, .NumDescriptors = 16, .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE};
+        D3D12_DESCRIPTOR_HEAP_DESC uavDescriptorHeapDesc = {.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, .NumDescriptors = 16, .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE};
         assert(SUCCEEDED(d3d.device->CreateDescriptorHeap(&rtvDescriptorHeapDesc, IID_PPV_ARGS(&d3d.rtvDescriptorHeap))));
         d3d.rtvDescriptorCount = 0;
-        d3d.rtvDescriptorSize = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         for (uint imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
-            ID3D12Resource** image = &d3d.swapChainImages[imageIndex];
-            uint offset = d3d.rtvDescriptorSize * d3d.rtvDescriptorCount;
-            d3d.swapChainImageRTVDescriptors[imageIndex] = {d3d.rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
-            d3d.device->CreateRenderTargetView(*image, nullptr, d3d.swapChainImageRTVDescriptors[imageIndex]);
+            ID3D12Resource* image = d3d.swapChainImages[imageIndex];
+            d3d.swapChainImageRTVDescriptors[imageIndex] = {d3d.rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) * d3d.rtvDescriptorCount};
+            d3d.device->CreateRenderTargetView(image, nullptr, d3d.swapChainImageRTVDescriptors[imageIndex]);
             d3d.rtvDescriptorCount += 1;
         }
 
@@ -992,12 +998,14 @@ void d3dInit() {
             const wchar_t* name;
         } descs[] = {
             {&d3d.stagingBuffer, (void**)&d3d.stagingBufferPtr, megabytes(512), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_SOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"stagingBuffer"},
-            {&d3d.constantBuffer, (void**)&d3d.constantBufferPtr, megabytes(4), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer"},
+            {&d3d.constantsBuffer, (void**)&d3d.constantsBufferPtr, megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer"},
             {&d3d.tlasInstancesBuildInfosBuffer, (void**)&d3d.tlasInstancesBuildInfosBufferPtr, megabytes(32), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesBuildInfosBuffer"},
             {&d3d.tlasInstancesInfosBuffer, (void**)&d3d.tlasInstancesInfosBufferPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesInfosBuffer"},
             {&d3d.blasGeometriesInfosBuffer, (void**)&d3d.blasGeometriesInfosBufferPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"blasGeometriesInfosBuffer"},
             {&d3d.tlasBuffer, nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"tlasBuffer"},
             {&d3d.tlasScratchBuffer, nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"tlasScratchBuffer"},
+            {&d3d.shapeCirclesBuffer, (void**)&d3d.shapeCirclesBufferPtr, megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, L"shapeCirclesBuffer"},
+            {&d3d.shapeLinesBuffer, (void**)&d3d.shapeLinesBufferPtr, megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, L"shapeLinesBuffer"},
             {&d3d.imguiVertexBuffer, (void**)&d3d.imguiVertexBufferPtr, megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiVertexBuffer"},
             {&d3d.imguiIndexBuffer, (void**)&d3d.imguiIndexBufferPtr, megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiIndexBuffer"},
             {&d3d.collisionQueriesBuffer, (void**)&d3d.collisionQueriesBufferPtr, megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, L"collisionQueriesBuffer"},
@@ -1127,21 +1135,6 @@ void d3dUpdateShaders() {
         }
     }
     {
-        static std::filesystem::path shaderPath = exeDir / "shapesCS.cso";
-        static std::filesystem::file_time_type prevLastWriteTime = {};
-        std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
-        if (lastWriteTime > prevLastWriteTime) {
-            prevLastWriteTime = lastWriteTime;
-            d3dWaitRenderDone();
-            if (d3d.shapes) d3d.shapes->Release();
-            if (d3d.shapesRootSig) d3d.shapesRootSig->Release();
-            std::vector<uint8> csByteCode = fileReadBytes(shaderPath);
-            D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {.pRootSignature = d3d.shapesRootSig, .CS = {.pShaderBytecode = csByteCode.data(), .BytecodeLength = csByteCode.size()}};
-            assert(SUCCEEDED(d3d.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&d3d.shapes))));
-            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, csByteCode.data(), csByteCode.size(), IID_PPV_ARGS(&d3d.shapesRootSig))));
-        }
-    }
-    {
         static std::filesystem::path shaderPathVS = exeDir / "postProcessVS.cso";
         static std::filesystem::path shaderPathPS = exeDir / "postProcessPS.cso";
         static std::filesystem::file_time_type prevLastWriteTimeVS = {};
@@ -1169,6 +1162,49 @@ void d3dUpdateShaders() {
             };
             assert(SUCCEEDED(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.postProcess))));
             assert(SUCCEEDED(d3d.device->CreateRootSignature(0, psByteCode.data(), psByteCode.size(), IID_PPV_ARGS(&d3d.postProcessRootSig))));
+        }
+    }
+    {
+        static std::filesystem::path shaderPathVS = exeDir / "shapesVS.cso";
+        static std::filesystem::path shaderPathPS = exeDir / "shapesPS.cso";
+        static std::filesystem::file_time_type prevLastWriteTimeVS = {};
+        static std::filesystem::file_time_type prevLastWriteTimePS = {};
+        std::filesystem::file_time_type lastWriteTimeVS = std::filesystem::last_write_time(shaderPathVS);
+        std::filesystem::file_time_type lastWriteTimePS = std::filesystem::last_write_time(shaderPathPS);
+        if (lastWriteTimeVS > prevLastWriteTimeVS || lastWriteTimePS > prevLastWriteTimePS) {
+            prevLastWriteTimeVS = lastWriteTimeVS;
+            prevLastWriteTimePS = lastWriteTimePS;
+            d3dWaitRenderDone();
+            if (d3d.shapes) d3d.shapes->Release();
+            if (d3d.shapesRootSig) d3d.shapesRootSig->Release();
+            std::vector<uint8> vsByteCode = fileReadBytes(shaderPathVS);
+            std::vector<uint8> psByteCode = fileReadBytes(shaderPathPS);
+            D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {
+                .VS = {vsByteCode.data(), vsByteCode.size()},
+                .PS = {psByteCode.data(), psByteCode.size()},
+                .BlendState = {
+                    .RenderTarget = {
+                        {
+                            .BlendEnable = true,
+                            .SrcBlend = D3D12_BLEND_SRC_ALPHA,
+                            .DestBlend = D3D12_BLEND_INV_SRC_ALPHA,
+                            .BlendOp = D3D12_BLEND_OP_ADD,
+                            .SrcBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA,
+                            .DestBlendAlpha = D3D12_BLEND_ZERO,
+                            .BlendOpAlpha = D3D12_BLEND_OP_ADD,
+                            .RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL,
+                        },
+                    },
+                },
+                .SampleMask = 0xffffffff,
+                .RasterizerState = {.FillMode = D3D12_FILL_MODE_SOLID, .CullMode = D3D12_CULL_MODE_BACK},
+                .PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+                .NumRenderTargets = 1,
+                .RTVFormats = {d3d.swapChainFormat},
+                .SampleDesc = {.Count = 1},
+            };
+            assert(SUCCEEDED(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.shapes))));
+            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, psByteCode.data(), psByteCode.size(), IID_PPV_ARGS(&d3d.shapesRootSig))));
         }
     }
     {
@@ -1889,9 +1925,9 @@ void editorCameraFocus(float3 position, float distance) {
 }
 
 void loadSimpleAssets() {
-    shapeCube = modelInstanceInit("models/cube/cube.gltf");
-    shapeCylinder = modelInstanceInit("models/cylinder/cylinder.gltf");
-    shapeSphere = modelInstanceInit("models/sphere/sphere.gltf");
+    modelInstanceCube = modelInstanceInit("models/cube/cube.gltf");
+    modelInstanceCylinder = modelInstanceInit("models/cylinder/cylinder.gltf");
+    modelInstanceSphere = modelInstanceInit("models/sphere/sphere.gltf");
 }
 
 void operator>>(ryml::ConstNodeRef node, float2& v) { node[0] >> v.x, node[1] >> v.y; }
@@ -2741,7 +2777,7 @@ void render() {
     blasGeometriesInfos.resize(0);
 
     d3d.stagingBufferOffset = 0;
-    d3d.constantBufferOffset = 0;
+    d3d.constantsBufferOffset = 0;
 
     float3 cameraLookAt = player.camera.lookAt - player.camera.position;
     float cameraFovVertical = player.camera.fovVertical;
@@ -2759,7 +2795,7 @@ void render() {
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC renderTextureSRVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = 1}};
         D3D12_UNORDERED_ACCESS_VIEW_DESC renderTextureUAVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
-        D3D12_CONSTANT_BUFFER_VIEW_DESC renderInfoCBVDesc = {.BufferLocation = d3d.constantBuffer->GetResource()->GetGPUVirtualAddress(), .SizeInBytes = align((uint)sizeof(struct RenderInfo), D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT)};
+        D3D12_CONSTANT_BUFFER_VIEW_DESC renderInfoCBVDesc = {.BufferLocation = d3d.constantsBuffer->GetResource()->GetGPUVirtualAddress(), .SizeInBytes = align((uint)sizeof(struct RenderInfo), D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT)};
         D3D12_SHADER_RESOURCE_VIEW_DESC tlasViewDesc = {.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .RaytracingAccelerationStructure = {.Location = d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress()}};
         D3D12_SHADER_RESOURCE_VIEW_DESC tlasInstancesInfosDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.tlasInstancesInfosBuffer->GetSize() / sizeof(struct TLASInstanceInfo)), .StructureByteStride = sizeof(struct TLASInstanceInfo)}};
         D3D12_SHADER_RESOURCE_VIEW_DESC blasGeometriesInfosDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.blasGeometriesInfosBuffer->GetSize() / sizeof(struct BLASGeometryInfo)), .StructureByteStride = sizeof(struct BLASGeometryInfo)}};
@@ -2778,9 +2814,9 @@ void render() {
         D3DDescriptor collisionQueryResultsDescriptor = d3dAppendUAVDescriptor(&collisionQueryResultsDesc, d3d.collisionQueryResultsUAVBuffer->GetResource());
     }
     {
-        assert(d3d.constantBufferOffset == 0);
-        memcpy(d3d.constantBufferPtr + d3d.constantBufferOffset, &renderInfo, sizeof(renderInfo));
-        d3d.constantBufferOffset += sizeof(renderInfo);
+        assert(d3d.constantsBufferOffset == 0);
+        memcpy(d3d.constantsBufferPtr + d3d.constantsBufferOffset, &renderInfo, sizeof(renderInfo));
+        d3d.constantsBufferOffset += sizeof(renderInfo);
     }
     {
         ZoneScopedN("buildTLAS");
@@ -2802,7 +2838,7 @@ void render() {
                 addTLASInstance(gameObjects[objIndex].model, XMMatrixTranslationFromVector((-player.camera.position).toXMVector()), ObjectTypeGameObject, objIndex);
             }
             XMVECTOR q = quaternionBetween(float3(0, 1, 0), player.movement);
-            addTLASInstance(shapeCylinder, XMMatrixAffineTransformation(XMVectorSet(0.05f, player.movement.length(), 0.05f, 0), XMVectorSet(0, 0, 0, 0), q, (player.position - player.camera.position).toXMVector()), ObjectTypeNone, 0);
+            addTLASInstance(modelInstanceCylinder, XMMatrixAffineTransformation(XMVectorSet(0.05f, player.movement.length(), 0.05f, 0), XMVectorSet(0, 0, 0, 0), q, (player.position - player.camera.position).toXMVector()), ObjectTypeNone, 0);
         }
         {
             assert(vectorSizeof(tlasInstancesBuildInfos) < d3d.tlasInstancesBuildInfosBuffer->GetSize());
@@ -2852,9 +2888,9 @@ void render() {
 
         void* missIDs[1] = {d3d.collisionQueryMissID};
         void* hitGroupIDs[1] = {d3d.collisionQueryHitGroupID};
-        D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantBuffer->GetResource(), d3d.constantBufferPtr, &d3d.constantBufferOffset, d3d.collisionQueryRayGenID, missIDs, hitGroupIDs);
+        D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantsBuffer->GetResource(), d3d.constantsBufferPtr, &d3d.constantsBufferOffset, d3d.collisionQueryRayGenID, missIDs, hitGroupIDs);
         dispatchDesc.Width = 2, dispatchDesc.Height = 1, dispatchDesc.Depth = 1;
-        assert(d3d.constantBufferOffset < d3d.constantBuffer->GetSize());
+        assert(d3d.constantsBufferOffset < d3d.constantsBuffer->GetSize());
 
         d3d.graphicsCmdList->SetPipelineState1(d3d.collisionQuery);
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.collisionQueryRootSig);
@@ -2874,9 +2910,9 @@ void render() {
         ZoneScopedN("renderScene");
         void* missIDs[2] = {d3d.renderScenePrimaryRayMissID, d3d.renderSceneSecondaryRayMissID};
         void* hitGroupIDs[2] = {d3d.renderScenePrimaryRayHitGroupID, d3d.renderSceneSecondaryRayHitGroupID};
-        D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantBuffer->GetResource(), d3d.constantBufferPtr, &d3d.constantBufferOffset, d3d.renderSceneRayGenID, missIDs, hitGroupIDs);
+        D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantsBuffer->GetResource(), d3d.constantsBufferPtr, &d3d.constantsBufferOffset, d3d.renderSceneRayGenID, missIDs, hitGroupIDs);
         dispatchDesc.Width = settings.renderW, dispatchDesc.Height = settings.renderH, dispatchDesc.Depth = 1;
-        assert(d3d.constantBufferOffset < d3d.constantBuffer->GetSize());
+        assert(d3d.constantsBufferOffset < d3d.constantsBuffer->GetSize());
 
         D3D12_RESOURCE_BARRIER renderTextureTransition = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.renderTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}};
         d3d.graphicsCmdList->ResourceBarrier(1, &renderTextureTransition);
@@ -2886,18 +2922,7 @@ void render() {
         d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
     }
     {
-        ZoneScopedN("renderShapes");
-        D3D12_RESOURCE_BARRIER renderTextureWrite = {.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = d3d.renderTexture->GetResource()}};
-        d3d.graphicsCmdList->ResourceBarrier(1, &renderTextureWrite);
-        d3d.graphicsCmdList->SetPipelineState(d3d.shapes);
-        d3d.graphicsCmdList->SetComputeRootSignature(d3d.shapesRootSig);
-        //d3d.graphicsCmdList->SetComputeRootShaderResourceView(0, modelInstance->skins[skinIndex].matsBuffer->GetResource()->GetGPUVirtualAddress());
-        //d3d.graphicsCmdList->SetComputeRootShaderResourceView(1, meshNode->mesh->verticesBuffer->GetResource()->GetGPUVirtualAddress());
-        //d3d.graphicsCmdList->SetComputeRoot32BitConstant(2, (uint)meshNode->mesh->vertices.size(), 0);
-        d3d.graphicsCmdList->Dispatch(settings.renderW / 16 + 1, settings.renderH / 16 + 1, 1);
-    }
-    {
-        ZoneScopedN("imgui");
+        ZoneScopedN("ui");
         uint swapChainBackBufferIndex = d3d.swapChain->GetCurrentBackBufferIndex();
         D3D12_RESOURCE_BARRIER imageTransitions[] = {
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.swapChainImages[swapChainBackBufferIndex], .StateBefore = D3D12_RESOURCE_STATE_PRESENT, .StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET}},
@@ -2905,16 +2930,29 @@ void render() {
         };
         d3d.graphicsCmdList->ResourceBarrier(countof(imageTransitions), imageTransitions);
         d3d.graphicsCmdList->OMSetRenderTargets(1, &d3d.swapChainImageRTVDescriptors[swapChainBackBufferIndex], false, nullptr);
-        // float swapChainClearColor[4] = {0, 0, 0, 0};
-        // d3d.graphicsCmdList->ClearRenderTargetView(d3d.swapChainImageRTVDescriptors[swapChainBackBufferIndex], swapChainClearColor, 0, nullptr);
         D3D12_VIEWPORT viewport = {0, 0, (float)settings.renderW, (float)settings.renderH, 0, 1};
         RECT scissor = {0, 0, (long)settings.renderW, (long)settings.renderH};
         d3d.graphicsCmdList->RSSetViewports(1, &viewport);
         d3d.graphicsCmdList->RSSetScissorRects(1, &scissor);
+        d3d.graphicsCmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         {
             d3d.graphicsCmdList->SetPipelineState(d3d.postProcess);
-            d3d.graphicsCmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.postProcessRootSig);
+            d3d.graphicsCmdList->DrawInstanced(3, 1, 0, 0);
+        }
+        {
+            //shapeCircles.resize(0);
+            //shapeLines.resize(0);
+            //shapeCircles.push_back(ShapeCircle{.center = {0.5, 0.5}, .radius = 0.05});
+            //shapeLines.push_back(ShapeLine{.p0 = {0.5, 0.5}, .p1 = {0.5, 0.7}, .thickness = 0.01});
+            //memcpy(d3d.shapeCirclesBufferPtr, shapeCircles.data(), shapeCircles.size() * sizeof(ShapeCircle));
+            //memcpy(d3d.shapeLinesBufferPtr, shapeLines.data(), shapeLines.size() * sizeof(ShapeLine));
+            d3d.graphicsCmdList->SetPipelineState(d3d.shapes);
+            d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.shapesRootSig);
+            uint constants[4] = {settings.renderW, settings.renderH, (uint)shapeCircles.size(), (uint)shapeLines.size()};
+            d3d.graphicsCmdList->SetGraphicsRoot32BitConstants(0, countof(constants), constants, 0);
+            d3d.graphicsCmdList->SetGraphicsRootShaderResourceView(1, d3d.shapeCirclesBuffer->GetResource()->GetGPUVirtualAddress());
+            d3d.graphicsCmdList->SetGraphicsRootShaderResourceView(2, d3d.shapeLinesBuffer->GetResource()->GetGPUVirtualAddress());
             d3d.graphicsCmdList->DrawInstanced(3, 1, 0, 0);
         }
         {
@@ -2928,7 +2966,6 @@ void render() {
             assert(SUCCEEDED(d3d.imguiIndexBuffer->GetResource()->Map(0, nullptr, (void**)&d3d.imguiIndexBufferPtr)));
             d3d.graphicsCmdList->IASetVertexBuffers(0, 1, &vertBufferView);
             d3d.graphicsCmdList->IASetIndexBuffer(&indexBufferView);
-            d3d.graphicsCmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             uint vertBufferOffset = 0;
             uint indexBufferOffset = 0;
             const ImDrawData* drawData = ImGui::GetDrawData();

@@ -161,11 +161,11 @@ struct CollisionQueryResult {
 
 struct ShapeCircle {
 #ifdef __cplusplus
-    float2 center;;
+    float2 center;
     float radius;
     float padding;
 #else
-    float2 center;;
+    float2 center;
     float radius;
     float padding;
 #endif
@@ -173,13 +173,13 @@ struct ShapeCircle {
 
 struct ShapeLine {
 #ifdef __cplusplus
+    float2 p0;
     float2 p1;
-    float2 p2;
     float thickness;
     float3 padding;
 #else
+    float2 p0;
     float2 p1;
-    float2 p2;
     float thickness;
     float3 padding;
 #endif
