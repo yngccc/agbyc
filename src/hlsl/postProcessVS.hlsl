@@ -3,8 +3,10 @@
 
 #define rootSig \
 "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED), " \
+"RootConstants(num32BitConstants=4, b0), "\
 "StaticSampler(s0, filter = FILTER_MIN_MAG_MIP_LINEAR, addressU = TEXTURE_ADDRESS_CLAMP, addressV = TEXTURE_ADDRESS_CLAMP)"
 
+uint4 constants : register(b0);
 sampler renderTextureSampler : register(s0);
 
 struct VSOutput {
@@ -22,10 +24,10 @@ VSOutput vertexShader(uint vertexID : SV_VertexID) {
 
 [RootSignature(rootSig)]
 float4 pixelShader(VSOutput vsOutput) : SV_TARGET {
-    RENDER_INFO_DESCRIPTOR(renderInfo);
     RENDER_TEXTURE_SRV_DESCRIPTOR(renderTexture);
     float4 output = renderTexture.Sample(renderTextureSampler, vsOutput.texCoord);
-    if (renderInfo.hdr) {
+    bool hdr = constants.x;
+    if (hdr) {
         output.rgb *= HDR_SCALE_FACTOR;
         output.rgb = linearToPQ(output.rgb);
     }

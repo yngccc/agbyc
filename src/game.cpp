@@ -1759,7 +1759,6 @@ void imguiModelInstance(ModelInstance* modelInstance) {
 }
 
 void modelInstanceUpdateAnimation(ModelInstance* modelInstance, double time) {
-    ZoneScopedN("modelInstanceUpdateAnimation");
     if (!modelInstance->animation) {
         for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance->meshNodes.size(); meshNodeIndex++) {
             modelInstance->meshNodes[meshNodeIndex].transformMat = modelInstance->model->meshNodes[meshNodeIndex]->globalTransform;
@@ -1773,7 +1772,6 @@ void modelInstanceUpdateAnimation(ModelInstance* modelInstance, double time) {
         std::vector<XMMATRIX> nodeLocalTransformMats(modelInstance->model->nodes.size());
         std::vector<XMMATRIX> nodeGlobalTransformMats(modelInstance->model->nodes.size());
         {
-            ZoneScopedN("get nodeLocalTransforms");
             for (ModelAnimationChannel& channel : modelInstance->animation->channels) {
                 float4 frame0 = channel.sampler->keyFrames[0].xyzw;
                 float4 frame1 = channel.sampler->keyFrames[1].xyzw;
@@ -1814,7 +1812,6 @@ void modelInstanceUpdateAnimation(ModelInstance* modelInstance, double time) {
             }
         }
         {
-            ZoneScopedN("get nodeGlobalTransformMats");
             for (ModelNode* rootNode : modelInstance->model->rootNodes) {
                 modelTraverseNodesAndGetGlobalTransforms(modelInstance->model, rootNode, XMMatrixIdentity(), nodeLocalTransformMats, nodeGlobalTransformMats);
             }
@@ -2683,7 +2680,6 @@ void gameUpdate() {
 }
 
 void update() {
-    ZoneScopedN("update");
     ImGui::GetIO().DeltaTime = (float)frameTime;
     ImGui::GetIO().DisplaySize = ImVec2((float)settings.renderW, (float)settings.renderH);
     ImGui::NewFrame();
@@ -2700,14 +2696,12 @@ void update() {
 }
 
 void addTLASInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransform, ObjectType objectType, uint objectIndex) {
-    ZoneScopedN("addTLASInstance");
-    bool selected = false;
+    TLASInstanceInfo tlasInstanceInfo = {.objectType = objectType, .objectIndex = objectIndex, .blasGeometriesOffset = (uint)blasGeometriesInfos.size()};
     if (editor && editor->active) {
-        if (objectType != ObjectTypeNone) {
-            selected = editor->selectedObjectType == objectType && editor->selectedObjectIndex == objectIndex;
+        if (objectType != ObjectTypeNone && editor->selectedObjectType == objectType && editor->selectedObjectIndex == objectIndex) {
+            tlasInstanceInfo.flags |= TLASInstanceFlagSelected;
         }
     }
-    TLASInstanceInfo tlasInstanceInfo = {.objectType = objectType, .objectIndex = objectIndex, .selected = selected, .skinJointsDescriptor = UINT32_MAX, .blasGeometriesOffset = (uint)blasGeometriesInfos.size()};
     for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance.meshNodes.size(); meshNodeIndex++) {
         ModelNode* meshNode = modelInstance.model->meshNodes[meshNodeIndex];
         ModelInstanceMeshNode& instanceMeshNode = modelInstance.meshNodes[meshNodeIndex];
@@ -2717,9 +2711,9 @@ void addTLASInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
         transform = XMMatrixMultiply(transform, modelInstance.transform.toMat());
         transform = XMMatrixMultiply(transform, objectTransform);
         transform = XMMatrixTranspose(transform);
-        D3D12_RAYTRACING_INSTANCE_DESC instanceDesc = {.InstanceID = d3d.cbvSrvUavDescriptorCount, .InstanceMask = objectType, .AccelerationStructure = instanceMeshNode.blas->GetResource()->GetGPUVirtualAddress()};
-        memcpy(instanceDesc.Transform, &transform, sizeof(instanceDesc.Transform));
-        tlasInstancesBuildInfos.push_back(instanceDesc);
+        D3D12_RAYTRACING_INSTANCE_DESC tlasInstanceBuildInfo = {.InstanceID = d3d.cbvSrvUavDescriptorCount, .InstanceMask = objectType, .AccelerationStructure = instanceMeshNode.blas->GetResource()->GetGPUVirtualAddress()};
+        memcpy(tlasInstanceBuildInfo.Transform, &transform, sizeof(tlasInstanceBuildInfo.Transform));
+        tlasInstancesBuildInfos.push_back(tlasInstanceBuildInfo);
         tlasInstancesInfos.push_back(tlasInstanceInfo);
         for (uint primitiveIndex = 0; primitiveIndex < meshNode->mesh->primitives.size(); primitiveIndex++) {
             ModelPrimitive& primitive = meshNode->mesh->primitives[primitiveIndex];
@@ -2763,7 +2757,6 @@ D3D12_DISPATCH_RAYS_DESC fillRayTracingShaderTable(ID3D12Resource* buffer, uint8
 }
 
 void render() {
-    ZoneScopedN("render");
     d3dWaitRenderDone();
 
     assert(SUCCEEDED(d3d.graphicsCmdAllocator->Reset()));
@@ -2785,13 +2778,9 @@ void render() {
         cameraLookAt = editor->camera.lookAt - editor->camera.position;
         cameraFovVertical = editor->camera.fovVertical;
     }
-    RenderInfo renderInfo = {
-        .cameraViewMat = XMMatrixTranspose(XMMatrixInverse(nullptr, XMMatrixLookAtLH(XMVectorSet(0, 0, 0, 0), cameraLookAt.toXMVector(), XMVectorSet(0, 1, 0, 0)))),
-        .cameraProjMat = XMMatrixPerspectiveFovLH(radian(cameraFovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f),
-        .resolution = {settings.renderW, settings.renderH},
-        .hdr = settings.hdr,
-        .frameTime = (float)frameTime,
-    };
+    XMMATRIX cameraLookAtMat = XMMatrixLookAtLH(XMVectorSet(0, 0, 0, 0), cameraLookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
+    XMMATRIX cameraLookAtMatInverseTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, cameraLookAtMat));
+    XMMATRIX cameraProjectMat = XMMatrixPerspectiveFovLH(radian(cameraFovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f);
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC renderTextureSRVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = 1}};
         D3D12_UNORDERED_ACCESS_VIEW_DESC renderTextureUAVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
@@ -2814,12 +2803,16 @@ void render() {
         D3DDescriptor collisionQueryResultsDescriptor = d3dAppendUAVDescriptor(&collisionQueryResultsDesc, d3d.collisionQueryResultsUAVBuffer->GetResource());
     }
     {
+        RenderInfo renderInfo = {
+            .cameraViewMat = cameraLookAtMat,
+            .cameraViewMatInverseTranspose = cameraLookAtMatInverseTranspose,
+            .cameraProjMat = cameraProjectMat,
+        };
         assert(d3d.constantsBufferOffset == 0);
         memcpy(d3d.constantsBufferPtr + d3d.constantsBufferOffset, &renderInfo, sizeof(renderInfo));
         d3d.constantsBufferOffset += sizeof(renderInfo);
     }
     {
-        ZoneScopedN("buildTLAS");
         if (editor && editor->active) {
             modelInstanceBuildSkinnedMeshesBLASs(&editor->player.model);
             addTLASInstance(editor->player.model, XMMatrixTranslationFromVector((editor->player.spawnPosition - editor->camera.position).toXMVector()), ObjectTypePlayer, 0);
@@ -2861,14 +2854,13 @@ void render() {
         }
     }
     {
-        ZoneScopedN("collisionQueries");
         if (mouseSelectX == UINT_MAX) {
             d3d.collisionQueriesBufferPtr[0] = {.rayDesc = {.origin = {0, 0, 0}, .min = 0, .dir = {0, 0, 0}, .max = 0}};
         } else {
             XMFLOAT4X4 cameraViewMat;
             XMFLOAT4X4 cameraProjMat;
-            XMStoreFloat4x4(&cameraViewMat, XMMatrixTranspose(renderInfo.cameraViewMat));
-            XMStoreFloat4x4(&cameraProjMat, XMMatrixTranspose(renderInfo.cameraProjMat));
+            XMStoreFloat4x4(&cameraViewMat, XMMatrixTranspose(cameraLookAtMatInverseTranspose));
+            XMStoreFloat4x4(&cameraProjMat, XMMatrixTranspose(cameraProjectMat));
             float2 pixelCoord = ((float2((float)mouseSelectX, (float)mouseSelectY) + 0.5f) / float2((float)settings.renderW, (float)settings.renderH)) * 2.0f - 1.0f;
             RayDesc rayDesc = {.origin = {cameraViewMat.m[3][0], cameraViewMat.m[3][1], cameraViewMat.m[3][2]}, .min = 0.0f, .max = FLT_MAX};
             float aspect = cameraProjMat.m[1][1] / cameraProjMat.m[0][0];
@@ -2907,7 +2899,6 @@ void render() {
         d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap);
     }
     {
-        ZoneScopedN("renderScene");
         void* missIDs[2] = {d3d.renderScenePrimaryRayMissID, d3d.renderSceneSecondaryRayMissID};
         void* hitGroupIDs[2] = {d3d.renderScenePrimaryRayHitGroupID, d3d.renderSceneSecondaryRayHitGroupID};
         D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantsBuffer->GetResource(), d3d.constantsBufferPtr, &d3d.constantsBufferOffset, d3d.renderSceneRayGenID, missIDs, hitGroupIDs);
@@ -2922,7 +2913,6 @@ void render() {
         d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
     }
     {
-        ZoneScopedN("ui");
         uint swapChainBackBufferIndex = d3d.swapChain->GetCurrentBackBufferIndex();
         D3D12_RESOURCE_BARRIER imageTransitions[] = {
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.swapChainImages[swapChainBackBufferIndex], .StateBefore = D3D12_RESOURCE_STATE_PRESENT, .StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET}},
@@ -2938,6 +2928,7 @@ void render() {
         {
             d3d.graphicsCmdList->SetPipelineState(d3d.postProcess);
             d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.postProcessRootSig);
+            d3d.graphicsCmdList->SetGraphicsRoot32BitConstant(0, settings.hdr, 0);
             d3d.graphicsCmdList->DrawInstanced(3, 1, 0, 0);
         }
         {
@@ -2960,6 +2951,8 @@ void render() {
             float blendFactor[] = {0, 0, 0, 0};
             d3d.graphicsCmdList->OMSetBlendFactor(blendFactor);
             d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.imguiRootSig);
+            uint constants[3] = {settings.renderW, settings.renderH, settings.hdr};
+            d3d.graphicsCmdList->SetGraphicsRoot32BitConstants(0, countof(constants), constants, 0);
             D3D12_VERTEX_BUFFER_VIEW vertBufferView = {d3d.imguiVertexBuffer->GetResource()->GetGPUVirtualAddress(), (uint)d3d.imguiVertexBuffer->GetSize(), sizeof(ImDrawVert)};
             D3D12_INDEX_BUFFER_VIEW indexBufferView = {d3d.imguiIndexBuffer->GetResource()->GetGPUVirtualAddress(), (uint)d3d.imguiIndexBuffer->GetSize(), DXGI_FORMAT_R16_UINT};
             assert(SUCCEEDED(d3d.imguiVertexBuffer->GetResource()->Map(0, nullptr, (void**)&d3d.imguiVertexBufferPtr)));

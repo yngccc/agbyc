@@ -82,16 +82,12 @@ struct Light {
 struct RenderInfo {
 #ifdef __cplusplus
     XMMATRIX cameraViewMat;
+    XMMATRIX cameraViewMatInverseTranspose;
     XMMATRIX cameraProjMat;
-    uint resolution[2];
-    uint hdr;
-    float frameTime;
 #else
     float4x4 cameraViewMat;
+    float4x4 cameraViewMatInverseTranspose;
     float4x4 cameraProjMat;
-    uint2 resolution;
-    uint hdr;
-    float frameTime;
 #endif
 };
 
@@ -102,21 +98,22 @@ enum ObjectType : uint {
     ObjectTypeGameObject = 0x01 << 3,
 };
 
+enum TLASInstanceFlag : uint {
+    TLASInstanceFlagSelected = 0x01,
+    TLASInstanceFlagReferencePlane = 0x01 << 1,
+};
+
 struct TLASInstanceInfo {
 #ifdef __cplusplus
     ObjectType objectType;
     uint objectIndex;
-    uint selected;
-    uint skinJointsDescriptor;
+    uint flags;
     uint blasGeometriesOffset;
-    uint padding[3];
 #else
     ObjectType objectType;
     uint objectIndex;
-    uint selected;
-    uint skinJointsDescriptor;
+    uint flags;
     uint blasGeometriesOffset;
-    uint padding[3];
 #endif
 };
 

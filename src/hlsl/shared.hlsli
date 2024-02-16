@@ -108,5 +108,43 @@ RayDesc generateShadowRay(in float3 a, in float3 b, in float3 c,
     return ray;
 }
 
+void barycentricWorldDerivatives(float3 A1, float3 A2, out float3 du_dx, out float3 dv_dx) {
+    float3 Nt = cross(A1, A2);
+    float ntDotnt = dot(Nt, Nt);
+    du_dx = cross(A2, Nt) / ntDotnt;
+    dv_dx = cross(Nt, A1) / ntDotnt;
+}
 
+float3x3 worldScreenDerivatives(float4x4 worldToTargetMat, float4x4 targetToWorldMat, float4 x) {
+    float3x3 dx_dxt = (float3x3)targetToWorldMat;
+    dx_dxt[0] -= x.x * targetToWorldMat[3].xyz;
+    dx_dxt[1] -= x.y * targetToWorldMat[3].xyz;
+    dx_dxt[2] -= x.z * targetToWorldMat[3].xyz;
+    return dx_dxt;
+}
 
+float2 depthGradient(float4 x, float3 n, float4x4 targetToWorldMat) {
+    float4 n4 = float4(n, 0);
+    n4.w = -dot(n4.xyz, x.xyz);
+    n4 = mul(n4, targetToWorldMat);
+    n4.z = max(abs(n4.r), 0.0001) * sign(n4.z);
+    return n4.xy / -n4.z;
+}
+
+float2x2 barycentricDerivatives(float4 x, float3 n, float3 x0, float3 x1, float3 x2, float4x4 worldToTargetMat, float4x4 targetToWorldMat) {
+    float3 du_dx, dv_dx;
+    barycentricWorldDerivatives(x1 - x0, x2 - x0, du_dx, dv_dx);
+    float3x3 dx_dxt = worldScreenDerivatives(worldToTargetMat, targetToWorldMat, x);
+    float3 du_dxt = du_dx.x * dx_dxt[0] + du_dx.y * dx_dxt[1] + du_dx.z * dx_dxt[2];
+    float3 dv_dxt = dv_dx.x * dx_dxt[0] + dv_dx.y * dx_dxt[1] + dv_dx.z * dx_dxt[2];
+    float2 ddepth_dXY = depthGradient(x, n, targetToWorldMat);
+    float wMx = dot(worldToTargetMat[3], x);
+    float2 du_dXY = (du_dxt.xy + du_dxt.z * ddepth_dXY) * wMx;
+    float2 dv_dXY = (dv_dxt.xy + dv_dxt.z * ddepth_dXY) * wMx;
+    return float2x2(du_dXY, dv_dXY);
+}
+
+float2x2 texCoordDerivatives(float2x2 duv_dx1x2, float2 st0, float2 st1, float2 st2) {
+    float2x2 dtc_duv = float2x2(st1.x - st0.x, st2.x - st0.x, st1.y - st0.y, st2.y - st0.y);
+    return mul(dtc_duv, duv_dx1x2);    
+}

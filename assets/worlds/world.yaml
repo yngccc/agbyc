@@ -1,6 +1,6 @@
 editorCamera:
-  position: [-95205,22276,43513]
-  pitchYaw: [0.043303523,1.7841878]
+  position: [19405,12098,-49026]
+  pitchYaw: [0.06518994,-1.1513704]
   moveSpeed: 15.687
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
@@ -19,11 +19,11 @@ player:
   cameraLookAtOffset: [0,1,0]
   cameraDistance: 3
 gameObjects:
-  - name: floor
-    file: models/cube/cube.gltf
-    scale: [100,1,100]
+  - name: referencePlane
+    file: models/plane/gltf/plane.gltf
+    scale: [1,1,1]
     rotate: [0,0,0,1]
-    translate: [0,-1.01,0]
+    translate: [0,0,0]
   - name: bot
     file: models\xbot\xbot.gltf
     scale: [7.4099994,7.4099994,7.4099994]
