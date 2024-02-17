@@ -1,13 +1,13 @@
 editorCamera:
-  position: [19405,12098,-49026]
-  pitchYaw: [0.06518994,-1.1513704]
-  moveSpeed: 15.687
+  position: [200260,168378,-9119]
+  pitchYaw: [0.39209145,-0.97914684]
+  moveSpeed: 25.478
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
 player:
   file: models\robot\gltf\robot.gltf
   scale: [1,1,1]
-  rotate: [-0,0,-0,1]
+  rotate: [0,0,0,1]
   translate: [0,0,0]
   spawnPosition: [0,0,0]
   walkSpeed: 1
@@ -26,7 +26,7 @@ gameObjects:
     translate: [0,0,0]
   - name: bot
     file: models\xbot\xbot.gltf
-    scale: [7.4099994,7.4099994,7.4099994]
+    scale: [9.88,9.88,9.88]
     rotate: [-0,0,-0,1]
     translate: [1.1099292,-0.030011415,-3.537915]
   - name: cesiumMan
@@ -47,7 +47,7 @@ gameObjects:
   - name: fish
     file: models\fish\BarramundiFish.gltf
     scale: [3.4299998,3.4299998,3.4299998]
-    rotate: [-0,0,-0,1]
+    rotate: [0,0,0,1]
     translate: [1.2489251,1.9492137,-0.43860224]
   - name: cylinder
     file: models/cylinder/cylinder.gltf

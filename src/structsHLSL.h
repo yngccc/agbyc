@@ -84,10 +84,14 @@ struct RenderInfo {
     XMMATRIX cameraViewMat;
     XMMATRIX cameraViewMatInverseTranspose;
     XMMATRIX cameraProjMat;
+    XMMATRIX cameraProjViewMat;
+    XMMATRIX cameraProjViewInverseMat;
 #else
     float4x4 cameraViewMat;
     float4x4 cameraViewMatInverseTranspose;
     float4x4 cameraProjMat;
+    float4x4 cameraProjViewMat;
+    float4x4 cameraProjViewInverseMat;
 #endif
 };
 

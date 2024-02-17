@@ -2781,6 +2781,8 @@ void render() {
     XMMATRIX cameraLookAtMat = XMMatrixLookAtLH(XMVectorSet(0, 0, 0, 0), cameraLookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
     XMMATRIX cameraLookAtMatInverseTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, cameraLookAtMat));
     XMMATRIX cameraProjectMat = XMMatrixPerspectiveFovLH(radian(cameraFovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f);
+    XMMATRIX cameraProjectViewMat = XMMatrixMultiply(cameraProjectMat, cameraLookAtMat);
+    XMMATRIX cameraProjectViewInverseMat = XMMatrixInverse(nullptr, cameraProjectViewMat);
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC renderTextureSRVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = 1}};
         D3D12_UNORDERED_ACCESS_VIEW_DESC renderTextureUAVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
@@ -2807,6 +2809,8 @@ void render() {
             .cameraViewMat = cameraLookAtMat,
             .cameraViewMatInverseTranspose = cameraLookAtMatInverseTranspose,
             .cameraProjMat = cameraProjectMat,
+            .cameraProjViewMat = cameraProjectViewMat,
+            .cameraProjViewInverseMat = cameraProjectViewInverseMat,
         };
         assert(d3d.constantsBufferOffset == 0);
         memcpy(d3d.constantsBufferPtr + d3d.constantsBufferOffset, &renderInfo, sizeof(renderInfo));

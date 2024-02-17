@@ -3,12 +3,10 @@
 
 GlobalRootSignature globalRootSig = {
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED),"
-	"StaticSampler(s0, filter = FILTER_MIN_MAG_MIP_LINEAR, addressU = TEXTURE_ADDRESS_WRAP, addressV = TEXTURE_ADDRESS_WRAP),"
-	"StaticSampler(s1, filter = FILTER_MIN_MAG_MIP_LINEAR, addressU = TEXTURE_ADDRESS_MIRROR, addressV = TEXTURE_ADDRESS_MIRROR)"
+	"StaticSampler(s0, filter = FILTER_ANISOTROPIC, addressU = TEXTURE_ADDRESS_MIRROR, addressV = TEXTURE_ADDRESS_MIRROR, maxAnisotropy = 16)"
 };
 
 sampler sampler0 : register(s0);
-sampler sampler1 : register(s1);
 RaytracingPipelineConfig pipelineConfig = {3};
 RaytracingShaderConfig shaderConfig = {52, 8};
 TriangleHitGroup primaryRayHitGroup = {"", "primaryRayClosestHit"};
@@ -62,54 +60,61 @@ void primaryRayClosestHit(inout PrimaryRayPayload payload, in BuiltInTriangleInt
         StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex)];
         StructuredBuffer<uint> indices = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex + 1)];
         Texture2D<float3> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex + 2)];
-        uint triangleIndex = PrimitiveIndex() * 3;
-        Vertex vertex0 = vertices[indices[NonUniformResourceIndex(triangleIndex)]];
-        Vertex vertex1 = vertices[indices[NonUniformResourceIndex(triangleIndex + 1)]];
-        Vertex vertex2 = vertices[indices[NonUniformResourceIndex(triangleIndex + 2)]];
 
+        uint triangleIndex = PrimitiveIndex() * 3;
+        Vertex v0 = vertices[indices[NonUniformResourceIndex(triangleIndex)]];
+        Vertex v1 = vertices[indices[NonUniformResourceIndex(triangleIndex + 1)]];
+        Vertex v2 = vertices[indices[NonUniformResourceIndex(triangleIndex + 2)]];
         float3x4 transform = ObjectToWorld3x4();
         float3x3 normalTransform = float3x3(transform[0].xyz, transform[1].xyz, transform[2].xyz);
-        float3 position = barycentricsLerp(trigAttribs.barycentrics, vertex0.position, vertex1.position, vertex2.position);
-        position = mul(transform, float4(position, 1));
-        float3 normal = barycentricsLerp(trigAttribs.barycentrics, vertex0.normal, vertex1.normal, vertex2.normal);
-        normal = normalize(mul(normalTransform, normal));
-        float2 uv = barycentricsLerp(trigAttribs.barycentrics, vertex0.uv, vertex1.uv, vertex2.uv);
-        float3 diffuse = baseColorTexture.SampleLevel(sampler1, uv, 0) * blasGeometryInfo.baseColorFactor.xyz;
-
+        float3 p0 = mul(transform, float4(v0.position, 1)).xyz;
+        float3 p1 = mul(transform, float4(v1.position, 1)).xyz;
+        float3 p2 = mul(transform, float4(v2.position, 1)).xyz;
+        float3 n0 = normalize(mul(normalTransform, v0.normal));
+        float3 n1 = normalize(mul(normalTransform, v1.normal));
+        float3 n2 = normalize(mul(normalTransform, v2.normal));
+        float3 position = barycentricsLerp(trigAttribs.barycentrics, p0, p1, p2);
+        float3 normal = normalize(barycentricsLerp(trigAttribs.barycentrics, n0, n1, n2));
+        float2 uv = barycentricsLerp(trigAttribs.barycentrics, v0.uv, v1.uv, v2.uv);
+        
+        uint baseColorTextureWidth, baseColorTextureHeight;
+        baseColorTexture.GetDimensions(baseColorTextureWidth, baseColorTextureHeight);
+        //float t_a = baseColorTextureWidth * baseColorTextureHeight * abs(((v1.uv.x - v0.uv.x) * (v2.uv.y - v0.uv.y)) - ((v2.uv.x - v0.uv.x) * (v1.uv.y - v0.uv.y)));
+        //float p_a = length(cross(p1 - p0, p2 - p0));
+        //float delta = 0.5 * log2(t_a / p_a);
+        float fovy = RADIAN(50);
+        float alpha = atan(2.0 * tan(fovy * 0.5) / (float)baseColorTextureHeight);
+        //float w0 = alpha * RayTCurrent();
+        //float lambda = delta + log2(abs(w0)) - log2(abs(dot(normal, WorldRayDirection())));
+        float radius = RayTCurrent() * tan(alpha);
+        float2 texGradient1, texGradient2;
+        computeAnisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGradient1, texGradient2);
+        
+        float3 diffuse = baseColorTexture.SampleGrad(sampler0, uv, texGradient1, texGradient2) * blasGeometryInfo.baseColorFactor.xyz;
         float3 lightDir = normalize(float3(1, 1, 1));
         float ndotl = dot(normal, lightDir);
         payload.color = diffuse * ndotl;
         
-        BVH_DESCRIPTOR(bvh);
-        SecondaryRayPayload rayPayload;
-        RayDesc shadowRay;
-        shadowRay.Origin = position + normal * 0.005;
-        shadowRay.TMin = 0.0f;
-        shadowRay.TMax = 1000.0f;
-        shadowRay.Direction = lightDir;
-        TraceRay(bvh, RAY_FLAG_NONE, 0xff, 1, 0, 1, shadowRay, rayPayload);
-        if (rayPayload.hit) {
-            payload.color *= 0.1;
-        }
+        //BVH_DESCRIPTOR(bvh);
+        //SecondaryRayPayload rayPayload;
+        //RayDesc shadowRay;
+        //shadowRay.Origin = position + normal * 0.005;
+        //shadowRay.TMin = 0.0f;
+        //shadowRay.TMax = 1000.0f;
+        //shadowRay.Direction = lightDir;
+        //TraceRay(bvh, RAY_FLAG_NONE, 0xff, 1, 0, 1, shadowRay, rayPayload);
+        //if (rayPayload.hit) {
+        //    payload.color *= 0.1;
+        //}
     }
 }
 
 [shader("miss")]
-
-    void secondaryRayMiss
-
-    (inout
-    SecondaryRayPayload payload) {
+void secondaryRayMiss(inout SecondaryRayPayload payload) {
     payload.hit = false;
 }
 
 [shader("closesthit")]
-
-    void secondaryRayClosestHit
-
-    (inout
-    SecondaryRayPayload payload, in BuiltInTriangleIntersectionAttributes
-
-    trigAttribs) {
+void secondaryRayClosestHit(inout SecondaryRayPayload payload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
     payload.hit = true;
 }

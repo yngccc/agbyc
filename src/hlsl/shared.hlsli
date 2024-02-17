@@ -1,6 +1,8 @@
 #define PI 3.14159265358979323846
 #define FLT_MAX 3.402823466e+38F
 #define UINT_MAX 0xffffffff
+#define RADIAN(d) (d * (PI / 180.0))
+#define DEGREE(r) (r * (180.0 / PI))
 
 #define HDR_SCALE_FACTOR (80.0f / 10000.0f)
 
@@ -108,43 +110,31 @@ RayDesc generateShadowRay(in float3 a, in float3 b, in float3 c,
     return ray;
 }
 
-void barycentricWorldDerivatives(float3 A1, float3 A2, out float3 du_dx, out float3 dv_dx) {
-    float3 Nt = cross(A1, A2);
-    float ntDotnt = dot(Nt, Nt);
-    du_dx = cross(A2, Nt) / ntDotnt;
-    dv_dx = cross(Nt, A1) / ntDotnt;
-}
-
-float3x3 worldScreenDerivatives(float4x4 worldToTargetMat, float4x4 targetToWorldMat, float4 x) {
-    float3x3 dx_dxt = (float3x3)targetToWorldMat;
-    dx_dxt[0] -= x.x * targetToWorldMat[3].xyz;
-    dx_dxt[1] -= x.y * targetToWorldMat[3].xyz;
-    dx_dxt[2] -= x.z * targetToWorldMat[3].xyz;
-    return dx_dxt;
-}
-
-float2 depthGradient(float4 x, float3 n, float4x4 targetToWorldMat) {
-    float4 n4 = float4(n, 0);
-    n4.w = -dot(n4.xyz, x.xyz);
-    n4 = mul(n4, targetToWorldMat);
-    n4.z = max(abs(n4.r), 0.0001) * sign(n4.z);
-    return n4.xy / -n4.z;
-}
-
-float2x2 barycentricDerivatives(float4 x, float3 n, float3 x0, float3 x1, float3 x2, float4x4 worldToTargetMat, float4x4 targetToWorldMat) {
-    float3 du_dx, dv_dx;
-    barycentricWorldDerivatives(x1 - x0, x2 - x0, du_dx, dv_dx);
-    float3x3 dx_dxt = worldScreenDerivatives(worldToTargetMat, targetToWorldMat, x);
-    float3 du_dxt = du_dx.x * dx_dxt[0] + du_dx.y * dx_dxt[1] + du_dx.z * dx_dxt[2];
-    float3 dv_dxt = dv_dx.x * dx_dxt[0] + dv_dx.y * dx_dxt[1] + dv_dx.z * dx_dxt[2];
-    float2 ddepth_dXY = depthGradient(x, n, targetToWorldMat);
-    float wMx = dot(worldToTargetMat[3], x);
-    float2 du_dXY = (du_dxt.xy + du_dxt.z * ddepth_dXY) * wMx;
-    float2 dv_dXY = (dv_dxt.xy + dv_dxt.z * ddepth_dXY) * wMx;
-    return float2x2(du_dXY, dv_dXY);
-}
-
-float2x2 texCoordDerivatives(float2x2 duv_dx1x2, float2 st0, float2 st1, float2 st2) {
-    float2x2 dtc_duv = float2x2(st1.x - st0.x, st2.x - st0.x, st1.y - st0.y, st2.y - st0.y);
-    return mul(dtc_duv, duv_dx1x2);    
+void computeAnisotropicEllipseAxes(in float3 p, in float3 f, in float3 d, in float rayConeRadiusAtIntersection,
+                                   in float3 position0, in float3 position1, in float3 position2, 
+                                   in float2 txcoord0, in float2 txcoord1, in float2 txcoord2, 
+                                   in float2 interpolatedTexCoordsAtIntersection,
+                                   out float2 texGradient1, out float2 texGradient2) {
+    // compute ellipse axes
+    float3 a1 = d - dot(f, d) * f;
+    float3 p1 = a1 - dot(d, a1) * d;
+    a1 *= rayConeRadiusAtIntersection / max(0.0001, length(p1));
+    
+    float3 a2 = cross(f, a1);
+    float3 p2 = a2 - dot(d, a2) * d;
+    a2 *= rayConeRadiusAtIntersection / max(0.0001, length(p2));
+    
+    // compute texture coordinate gradients
+    float3 eP, delta = p - position0;
+    float3 e1 = position1 - position0;
+    float3 e2 = position2 - position0;
+    float oneOverAreaTriangle = 1.0 / dot(f, cross(e1, e2));
+    eP = delta + a1;
+    float u1 = dot(f, cross(eP, e2)) * oneOverAreaTriangle;
+    float v1 = dot(f, cross(e1, eP)) * oneOverAreaTriangle;
+    texGradient1 = (1.0 - u1 - v1) * txcoord0 + u1 * txcoord1 + v1 * txcoord2 - interpolatedTexCoordsAtIntersection;
+    eP = delta + a2;
+    float u2 = dot(f, cross(eP, e2)) * oneOverAreaTriangle;
+    float v2 = dot(f, cross(e1, eP)) * oneOverAreaTriangle;
+    texGradient2 = (1.0 - u2 - v2) * txcoord0 + u2 * txcoord1 + v2 * txcoord2 - interpolatedTexCoordsAtIntersection;
 }
