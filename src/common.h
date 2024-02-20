@@ -19,11 +19,11 @@ static const float euler = 2.71828182845904523536f;
 static const float pi = 3.14159265358979323846f;
 static const float sqrt2 = 1.41421356237309504880f;
 
-#define kilobytes(n) (1024 * (n))
-#define megabytes(n) (1024 * 1024 * (n))
-#define gigabytes(n) (1024 * 1024 * 1024 * (n))
-#define radian(d) (d * (pi / 180.0f))
-#define degree(r) (r * (180.0f / pi))
+#define KILOBYTES(n) (1024 * (n))
+#define MEGABYTES(n) (1024 * 1024 * (n))
+#define GIGABYTES(n) (1024 * 1024 * 1024 * (n))
+#define RADIAN(d) (d * (pi / 180.0f))
+#define DEGREE(r) (r * (180.0f / pi))
 
 template <typename T, uint N>
 constexpr uint countof(const T (&)[N]) { return N; }

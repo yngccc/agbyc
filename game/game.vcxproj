@@ -220,6 +220,7 @@
     <ClCompile Include="..\include\rapidyaml\rapidyaml-0.5.0.cpp" />
     <ClCompile Include="..\include\stb\stb_ds.cpp" />
     <ClCompile Include="..\include\stb\stb_image.cpp" />
+    <ClCompile Include="..\include\stb\stb_image_write.cpp" />
     <ClCompile Include="..\include\tracy\TracyClient.cpp" />
     <ClCompile Include="..\src\game.cpp" />
   </ItemGroup>

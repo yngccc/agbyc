@@ -1,15 +1,3 @@
-#include <algorithm>
-#include <array>
-#include <filesystem>
-#include <format>
-#include <fstream>
-#include <list>
-#include <span>
-#include <stack>
-#include <streambuf>
-#include <string>
-#include <vector>
-
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <atlbase.h>
@@ -31,11 +19,24 @@
 
 #include <directxtex.h>
 
+#include <algorithm>
+#include <array>
+#include <filesystem>
+#include <format>
+#include <fstream>
+#include <list>
+#include <span>
+#include <stack>
+#include <streambuf>
+#include <string>
+#include <vector>
+
 #include <rapidyaml/rapidyaml-0.5.0.hpp>
 
 #include <cgltf/cgltf.h>
 
 #include <stb/stb_image.h>
+#include <stb/stb_image_write.h>
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -997,20 +998,20 @@ void d3dInit() {
             D3D12_RESOURCE_STATES initState;
             const wchar_t* name;
         } descs[] = {
-            {&d3d.stagingBuffer, (void**)&d3d.stagingBufferPtr, megabytes(512), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_SOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"stagingBuffer"},
-            {&d3d.constantsBuffer, (void**)&d3d.constantsBufferPtr, megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer"},
-            {&d3d.tlasInstancesBuildInfosBuffer, (void**)&d3d.tlasInstancesBuildInfosBufferPtr, megabytes(32), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesBuildInfosBuffer"},
-            {&d3d.tlasInstancesInfosBuffer, (void**)&d3d.tlasInstancesInfosBufferPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesInfosBuffer"},
-            {&d3d.blasGeometriesInfosBuffer, (void**)&d3d.blasGeometriesInfosBufferPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"blasGeometriesInfosBuffer"},
-            {&d3d.tlasBuffer, nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"tlasBuffer"},
-            {&d3d.tlasScratchBuffer, nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"tlasScratchBuffer"},
-            {&d3d.shapeCirclesBuffer, (void**)&d3d.shapeCirclesBufferPtr, megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, L"shapeCirclesBuffer"},
-            {&d3d.shapeLinesBuffer, (void**)&d3d.shapeLinesBufferPtr, megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, L"shapeLinesBuffer"},
-            {&d3d.imguiVertexBuffer, (void**)&d3d.imguiVertexBufferPtr, megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiVertexBuffer"},
-            {&d3d.imguiIndexBuffer, (void**)&d3d.imguiIndexBufferPtr, megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiIndexBuffer"},
-            {&d3d.collisionQueriesBuffer, (void**)&d3d.collisionQueriesBufferPtr, megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, L"collisionQueriesBuffer"},
-            {&d3d.collisionQueryResultsUAVBuffer, nullptr, megabytes(1), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"collisionQueryResultsUAVBuffer"},
-            {&d3d.collisionQueryResultsBuffer, (void**)&d3d.collisionQueryResultsBufferPtr, megabytes(1), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"collisionQueryResultsBuffer"},
+            {&d3d.stagingBuffer, (void**)&d3d.stagingBufferPtr, MEGABYTES(512), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_SOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"stagingBuffer"},
+            {&d3d.constantsBuffer, (void**)&d3d.constantsBufferPtr, MEGABYTES(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer"},
+            {&d3d.tlasInstancesBuildInfosBuffer, (void**)&d3d.tlasInstancesBuildInfosBufferPtr, MEGABYTES(32), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesBuildInfosBuffer"},
+            {&d3d.tlasInstancesInfosBuffer, (void**)&d3d.tlasInstancesInfosBufferPtr, MEGABYTES(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesInfosBuffer"},
+            {&d3d.blasGeometriesInfosBuffer, (void**)&d3d.blasGeometriesInfosBufferPtr, MEGABYTES(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"blasGeometriesInfosBuffer"},
+            {&d3d.tlasBuffer, nullptr, MEGABYTES(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"tlasBuffer"},
+            {&d3d.tlasScratchBuffer, nullptr, MEGABYTES(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"tlasScratchBuffer"},
+            {&d3d.shapeCirclesBuffer, (void**)&d3d.shapeCirclesBufferPtr, MEGABYTES(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, L"shapeCirclesBuffer"},
+            {&d3d.shapeLinesBuffer, (void**)&d3d.shapeLinesBufferPtr, MEGABYTES(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, L"shapeLinesBuffer"},
+            {&d3d.imguiVertexBuffer, (void**)&d3d.imguiVertexBufferPtr, MEGABYTES(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiVertexBuffer"},
+            {&d3d.imguiIndexBuffer, (void**)&d3d.imguiIndexBufferPtr, MEGABYTES(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiIndexBuffer"},
+            {&d3d.collisionQueriesBuffer, (void**)&d3d.collisionQueriesBufferPtr, MEGABYTES(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, L"collisionQueriesBuffer"},
+            {&d3d.collisionQueryResultsUAVBuffer, nullptr, MEGABYTES(1), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"collisionQueryResultsUAVBuffer"},
+            {&d3d.collisionQueryResultsBuffer, (void**)&d3d.collisionQueryResultsBufferPtr, MEGABYTES(1), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"collisionQueryResultsBuffer"},
         };
         for (BufferDesc& desc : descs) {
             D3D12_RESOURCE_DESC bufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = desc.size, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = desc.flags};
@@ -2537,7 +2538,7 @@ void editorUpdate() {
     }
 
     const XMMATRIX lookAtMat = XMMatrixLookAtLH(editor->camera.position.toXMVector(), editor->camera.lookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
-    const XMMATRIX perspectiveMat = XMMatrixPerspectiveFovLH(radian(editor->camera.fovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f);
+    const XMMATRIX perspectiveMat = XMMatrixPerspectiveFovLH(RADIAN(editor->camera.fovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f);
     auto transformGizmo = [&](Transform* transform) {
         static ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
         static ImGuizmo::MODE gizmoMode = ImGuizmo::WORLD;
@@ -2780,7 +2781,7 @@ void render() {
     }
     XMMATRIX cameraLookAtMat = XMMatrixLookAtLH(XMVectorSet(0, 0, 0, 0), cameraLookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
     XMMATRIX cameraLookAtMatInverseTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, cameraLookAtMat));
-    XMMATRIX cameraProjectMat = XMMatrixPerspectiveFovLH(radian(cameraFovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f);
+    XMMATRIX cameraProjectMat = XMMatrixPerspectiveFovLH(RADIAN(cameraFovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f);
     XMMATRIX cameraProjectViewMat = XMMatrixMultiply(cameraProjectMat, cameraLookAtMat);
     XMMATRIX cameraProjectViewInverseMat = XMMatrixInverse(nullptr, cameraProjectViewMat);
     {

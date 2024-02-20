@@ -1,7 +1,7 @@
 editorCamera:
-  position: [200260,168378,-9119]
-  pitchYaw: [0.39209145,-0.97914684]
-  moveSpeed: 25.478
+  position: [53816,122758,113184]
+  pitchYaw: [0.31403887,-1.0466994]
+  moveSpeed: 30.312
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
 player:
@@ -38,7 +38,7 @@ gameObjects:
     file: models/cube/cube.gltf
     scale: [1,1,1]
     rotate: [-0,0,-0,1]
-    translate: [2.9033751,0,0]
+    translate: [2.4965796,0,0]
   - name: animatedCube
     file: models\animatedCube\AnimatedCube.gltf
     scale: [1,1,1]

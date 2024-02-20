@@ -3,14 +3,14 @@
 
 GlobalRootSignature globalRootSig = {
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED),"
-	"StaticSampler(s0, filter = FILTER_ANISOTROPIC, addressU = TEXTURE_ADDRESS_MIRROR, addressV = TEXTURE_ADDRESS_MIRROR, maxAnisotropy = 16)"
+	"StaticSampler(s0, filter = FILTER_ANISOTROPIC, addressU = TEXTURE_ADDRESS_MIRROR, addressV = TEXTURE_ADDRESS_MIRROR, mipLODBias = 0, maxAnisotropy = 16)"
 };
 
 sampler sampler0 : register(s0);
-RaytracingPipelineConfig pipelineConfig = {3};
-RaytracingShaderConfig shaderConfig = {52, 8};
-TriangleHitGroup primaryRayHitGroup = {"", "primaryRayClosestHit"};
-TriangleHitGroup secondaryRayHitGroup = {"", "secondaryRayClosestHit"};
+RaytracingPipelineConfig pipelineConfig = {3 /*MaxTraceRecursionDepth*/};
+RaytracingShaderConfig shaderConfig = {16 /*UINT MaxPayloadSizeInBytes*/, 8 /*UINT MaxAttributeSizeInBytes*/};
+TriangleHitGroup primaryRayHitGroup = {"" /*AnyHitShader*/, "primaryRayClosestHit" /*ClosestHitShader*/};
+TriangleHitGroup secondaryRayHitGroup = {"" /*AnyHitShader*/, "secondaryRayClosestHit" /*ClosestHitShader*/};
 
 struct PrimaryRayPayload {
     float3 color;
@@ -31,7 +31,7 @@ void rayGen() {
     BVH_DESCRIPTOR(bvh);
     TLAS_INSTANCES_INFOS_DESCRIPTOR(instanceInfos);
 
-    RayDesc primaryRay = generatePinholeCameraRay(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjMat);
+    RayDesc primaryRay = pinholeCameraRay(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjMat);
     PrimaryRayPayload primaryRayPayload;
     TraceRay(bvh, RAY_FLAG_NONE, 0xff, 0, 0, 0, primaryRay, primaryRayPayload);
     renderTexture[pixelIndex] = float4(primaryRayPayload.color.xyz, 1);
@@ -79,21 +79,16 @@ void primaryRayClosestHit(inout PrimaryRayPayload payload, in BuiltInTriangleInt
         
         uint baseColorTextureWidth, baseColorTextureHeight;
         baseColorTexture.GetDimensions(baseColorTextureWidth, baseColorTextureHeight);
-        //float t_a = baseColorTextureWidth * baseColorTextureHeight * abs(((v1.uv.x - v0.uv.x) * (v2.uv.y - v0.uv.y)) - ((v2.uv.x - v0.uv.x) * (v1.uv.y - v0.uv.y)));
-        //float p_a = length(cross(p1 - p0, p2 - p0));
-        //float delta = 0.5 * log2(t_a / p_a);
         float fovy = RADIAN(50);
         float alpha = atan(2.0 * tan(fovy * 0.5) / (float)baseColorTextureHeight);
-        //float w0 = alpha * RayTCurrent();
-        //float lambda = delta + log2(abs(w0)) - log2(abs(dot(normal, WorldRayDirection())));
         float radius = RayTCurrent() * tan(alpha);
         float2 texGradient1, texGradient2;
-        computeAnisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGradient1, texGradient2);
+        anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGradient1, texGradient2);
         
-        float3 diffuse = baseColorTexture.SampleGrad(sampler0, uv, texGradient1, texGradient2) * blasGeometryInfo.baseColorFactor.xyz;
+        float3 baseColor = baseColorTexture.SampleGrad(sampler0, uv, texGradient1, texGradient2) * blasGeometryInfo.baseColorFactor.xyz;
         float3 lightDir = normalize(float3(1, 1, 1));
         float ndotl = dot(normal, lightDir);
-        payload.color = diffuse * ndotl;
+        payload.color = baseColor * ndotl;
         
         //BVH_DESCRIPTOR(bvh);
         //SecondaryRayPayload rayPayload;

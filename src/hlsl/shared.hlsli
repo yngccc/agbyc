@@ -76,7 +76,7 @@ bool barycentricsOnEdge(in float2 barycentrics, in float edgeThickness) {
     return (barycentrics.x < edgeThickness) || (barycentrics.y < edgeThickness) || ((1.0 - barycentrics.x - barycentrics.y) < edgeThickness);
 }
 
-RayDesc generatePinholeCameraRay(in float2 pixelCoord, in float4x4 cameraViewMat, in float4x4 cameraProjMat) {
+RayDesc pinholeCameraRay(in float2 pixelCoord, in float4x4 cameraViewMat, in float4x4 cameraProjMat) {
     RayDesc ray;
     ray.Origin = cameraViewMat[3].xyz;
     ray.TMin = 0.0f;
@@ -87,10 +87,10 @@ RayDesc generatePinholeCameraRay(in float2 pixelCoord, in float4x4 cameraViewMat
     return ray;
 }
 
-RayDesc generateShadowRay(in float3 a, in float3 b, in float3 c,
-                          in float3 na, in float3 nb, in float3 nc,
-                          in float u, in float v, in float w,
-                          in float3 p, in float3 dir, in float length) {
+RayDesc shadowRay(in float3 a, in float3 b, in float3 c,
+                  in float3 na, in float3 nb, in float3 nc,
+                  in float u, in float v, in float w,
+                  in float3 p, in float3 dir, in float length) {
     float3 tmpu = p - a;
     float3 tmpv = p - b;
     float3 tmpw = p - c;
@@ -110,11 +110,11 @@ RayDesc generateShadowRay(in float3 a, in float3 b, in float3 c,
     return ray;
 }
 
-void computeAnisotropicEllipseAxes(in float3 p, in float3 f, in float3 d, in float rayConeRadiusAtIntersection,
-                                   in float3 position0, in float3 position1, in float3 position2, 
-                                   in float2 txcoord0, in float2 txcoord1, in float2 txcoord2, 
-                                   in float2 interpolatedTexCoordsAtIntersection,
-                                   out float2 texGradient1, out float2 texGradient2) {
+void anisotropicEllipseAxes(in float3 p, in float3 f, in float3 d, in float rayConeRadiusAtIntersection,
+                            in float3 position0, in float3 position1, in float3 position2,
+                            in float2 txcoord0, in float2 txcoord1, in float2 txcoord2,
+                            in float2 interpolatedTexCoordsAtIntersection,
+                            out float2 texGradient1, out float2 texGradient2) {
     // compute ellipse axes
     float3 a1 = d - dot(f, d) * f;
     float3 p1 = a1 - dot(d, a1) * d;
