@@ -34,7 +34,7 @@ void rayGen() {
     RayDesc primaryRay = pinholeCameraRay(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjMat);
     PrimaryRayPayload primaryRayPayload;
     TraceRay(bvh, RAY_FLAG_NONE, 0xff, 0, 0, 0, primaryRay, primaryRayPayload);
-    renderTexture[pixelIndex] = float4(primaryRayPayload.color.xyz, 1);
+    renderTexture[pixelIndex] = float4(primaryRayPayload.color.rgb, 1);
 }
 
 [shader("miss")]
@@ -44,7 +44,7 @@ void primaryRayMiss(inout PrimaryRayPayload payload) {
     float theta = atan2(viewDir.z, viewDir.x);
     float phi = acos(viewDir.y);
     float3 skyboxColor = skyboxTexture.SampleLevel(sampler0, float2((theta + PI) / (2.0 * PI), phi / PI), 0);
-    payload.color = skyboxColor * 0.1f;
+    payload.color = skyboxColor * 0.2f;
 }
 
 [shader("closesthit")]

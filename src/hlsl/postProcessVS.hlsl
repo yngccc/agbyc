@@ -23,16 +23,15 @@ VSOutput vertexShader(uint vertexID : SV_VertexID) {
 }
 
 [RootSignature(rootSig)]
-float4 pixelShader(VSOutput vsOutput) : SV_TARGET {
+float4 pixelShader(VSOutput vsOutput) : SV_TARGET{
     RENDER_TEXTURE_SRV_DESCRIPTOR(renderTexture);
     float4 output = renderTexture.Sample(renderTextureSampler, vsOutput.texCoord);
     bool hdr = constants.x;
     if (hdr) {
         output.rgb *= HDR_SCALE_FACTOR;
         output.rgb = linearToPQ(output.rgb);
-    }
-    else {
-        output.rgb = linearToSrgb(output.rgb);
+    } else{
+        output.rgb = linearToSRGB(output.rgb);
     }
     return output;
 }

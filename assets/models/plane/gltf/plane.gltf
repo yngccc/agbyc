@@ -21,7 +21,7 @@
 	"materials":[
 		{
 			"doubleSided":true,
-			"name":"Material.003",
+			"name":"Material",
 			"pbrMetallicRoughness":{
 				"baseColorTexture":{
 					"index":0
@@ -33,7 +33,7 @@
 	],
 	"meshes":[
 		{
-			"name":"Plane.003",
+			"name":"Plane",
 			"primitives":[
 				{
 					"attributes":{
@@ -66,14 +66,14 @@
 			"componentType":5126,
 			"count":2601,
 			"max":[
-				250,
+				100,
 				0,
-				250
+				100
 			],
 			"min":[
-				-250,
+				-100,
 				0,
-				-250
+				-100
 			],
 			"type":"VEC3"
 		},

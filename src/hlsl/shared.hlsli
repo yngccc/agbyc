@@ -29,7 +29,7 @@ float3 srgbToLinear(float3 srgb) {
     return float3(srgbToLinear(srgb.x), srgbToLinear(srgb.y), srgbToLinear(srgb.z));
 }
 
-float linearToSrgb(float e) {
+float linearToSRGB(float e) {
     if (e <= 0.0031308) {
         return e * 12.92;
     } else{
@@ -37,8 +37,8 @@ float linearToSrgb(float e) {
     }
 }
 
-float3 linearToSrgb(float3 rgb) {
-    return float3(linearToSrgb(rgb.x), linearToSrgb(rgb.y), linearToSrgb(rgb.z));
+float3 linearToSRGB(float3 rgb) {
+    return float3(linearToSRGB(rgb.x), linearToSRGB(rgb.y), linearToSRGB(rgb.z));
 }
 
 float linearToPQ(float e) {

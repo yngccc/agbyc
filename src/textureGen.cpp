@@ -19,7 +19,7 @@ struct Pixel {
 static const int n = 1024;
 static Pixel image[n * n];
 static Pixel backgroundColor = Pixel{220, 220, 220, 255};
-static Pixel lineColor = Pixel{90, 90, 90, 255};
+static Pixel lineColor = Pixel{70, 70, 70, 255};
 static Pixel lineColor2 = Pixel{180, 180, 180, 255};
 static int lineThickness = 8;
 static int lineThicknessHalf = 4;

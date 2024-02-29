@@ -1,6 +1,6 @@
 editorCamera:
-  position: [53816,122758,113184]
-  pitchYaw: [0.31403887,-1.0466994]
+  position: [60136,32876,102468]
+  pitchYaw: [0.27904615,-2.7153664]
   moveSpeed: 30.312
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
@@ -24,11 +24,6 @@ gameObjects:
     scale: [1,1,1]
     rotate: [0,0,0,1]
     translate: [0,0,0]
-  - name: bot
-    file: models\xbot\xbot.gltf
-    scale: [9.88,9.88,9.88]
-    rotate: [-0,0,-0,1]
-    translate: [1.1099292,-0.030011415,-3.537915]
   - name: cesiumMan
     file: models\cesiumMan\cesiumMan.gltf
     scale: [2.76,2.76,2.76]
@@ -38,7 +33,7 @@ gameObjects:
     file: models/cube/cube.gltf
     scale: [1,1,1]
     rotate: [-0,0,-0,1]
-    translate: [2.4965796,0,0]
+    translate: [2.9925933,0,0]
   - name: animatedCube
     file: models\animatedCube\AnimatedCube.gltf
     scale: [1,1,1]
@@ -47,28 +42,18 @@ gameObjects:
   - name: fish
     file: models\fish\BarramundiFish.gltf
     scale: [3.4299998,3.4299998,3.4299998]
-    rotate: [0,0,0,1]
-    translate: [1.2489251,1.9492137,-0.43860224]
-  - name: cylinder
-    file: models/cylinder/cylinder.gltf
-    scale: [1,1,1]
     rotate: [-0,0,-0,1]
-    translate: [0,-0.015607089,2.0579576]
+    translate: [2.6886568,1.9492137,-0.43860224]
   - name: sphere
     file: models/sphere/sphere.gltf
     scale: [1,1,1]
     rotate: [-0,0,-0,1]
-    translate: [0,2.9648516,0]
+    translate: [0,3.7848938,0]
   - name: girlDriver
     file: models\girlDriver\gltf\girlDriver.gltf
     scale: [0.7098838,0.709886,0.7098838]
     rotate: [0,0.9840335,0,-0.17798312]
-    translate: [-0.9434476,0.6879333,3.6363218]
-  - name: bot
-    file: models\playerFirstPerson\gltf\playerFirstPerson.gltf
-    scale: [0.9999907,1,0.9999907]
-    rotate: [-0,-0.0997922,-0,0.9950083]
-    translate: [0,-0.056521297,7.094115]
+    translate: [-0.9434476,0.6879333,4.6135435]
   - name: robot
     file: models\robot\gltf\robot.gltf
     scale: [0.9999985,1,0.9999985]
