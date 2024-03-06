@@ -19,8 +19,8 @@ void computeShader(uint3 groupID : SV_GroupID, uint3 groupThreadID : SV_GroupThr
             skinMatsBuffer[vertex.joints[1]] * vertex.jointWeights[1] + 
             skinMatsBuffer[vertex.joints[2]] * vertex.jointWeights[2] + 
             skinMatsBuffer[vertex.joints[3]] * vertex.jointWeights[3];
-        vertex.position = mul(float4(vertex.position, 1), jointMat).xyz;
-        vertex.normal = normalize(mul(vertex.normal, float3x3(jointMat[0].xyz, jointMat[1].xyz, jointMat[2].xyz)));
+        vertex.position = mul(jointMat, float4(vertex.position, 1)).xyz;
+        vertex.normal = normalize(mul(float3x3(jointMat[0].xyz, jointMat[1].xyz, jointMat[2].xyz), vertex.normal));
         verticesBufferDst[vertexIndex] = vertex;
     }
 }

@@ -85,13 +85,13 @@ struct RenderInfo {
     XMMATRIX cameraViewMatInverseTranspose;
     XMMATRIX cameraProjMat;
     XMMATRIX cameraProjViewMat;
-    XMMATRIX cameraProjViewInverseMat;
+    //XMMATRIX cameraProjViewInverseMat;
 #else
     float4x4 cameraViewMat;
     float4x4 cameraViewMatInverseTranspose;
     float4x4 cameraProjMat;
     float4x4 cameraProjViewMat;
-    float4x4 cameraProjViewInverseMat;
+    //float4x4 cameraProjViewInverseMat;
 #endif
 };
 
@@ -162,26 +162,24 @@ struct CollisionQueryResult {
 
 struct ShapeCircle {
 #ifdef __cplusplus
-    float2 center;
+    float3 center;
     float radius;
-    float padding;
 #else
-    float2 center;
+    float3 center;
     float radius;
-    float padding;
 #endif
 };
 
 struct ShapeLine {
 #ifdef __cplusplus
-    float2 p0;
-    float2 p1;
+    float3 p0;
     float thickness;
-    float3 padding;
+    float3 p1;
+    float padding;
 #else
-    float2 p0;
-    float2 p1;
+    float3 p0;
     float thickness;
-    float3 padding;
+    float3 p1;
+    float padding;
 #endif
 };

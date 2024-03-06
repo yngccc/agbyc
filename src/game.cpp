@@ -19,6 +19,7 @@
 #include <xinput.h>
 
 #include <directxtex.h>
+#include <pix3.h>
 
 #include <algorithm>
 #include <array>
@@ -82,13 +83,15 @@ struct Controller {
     bool a, b, x, y;
     bool up, down, left, right;
     bool lb, rb;
-    float lt, rt;
     bool ls, rs;
+    float lt, rt;
     float lsX, lsY, rsX, rsY;
 
-    float deadZone = 0.25f;
-
-    HANDLE dualSenseHID;
+    float backDownDuration, startDownDuration;
+    float aDownDuration, bDownDuration, xDownDuration, yDownDuration;
+    float upDownDuration, downDownDuration, leftDownDuration, rightDownDuration;
+    float lbDownDuration, rbDownDuration;
+    float lsDownDuration, rsDownDuration;
 };
 
 struct D3DDescriptor {
@@ -340,6 +343,7 @@ struct ModelInstance {
     ModelAnimation* animation;
     double animationTime;
     std::vector<Transform> localTransforms;
+    std::vector<XMMATRIX> globalTransformMats;
     std::vector<ModelInstanceSkin> skins;
 };
 
@@ -442,6 +446,8 @@ static Settings settings = {};
 static Window window = {};
 static D3D d3d = {};
 static Controller controller = {};
+static float controllerDeadZone = 0.25f;
+static HANDLE controllerDualSenseHID;
 
 static std::filesystem::path worldFilePath;
 static std::list<Model> models;
@@ -485,7 +491,7 @@ static std::filesystem::path assetsDir = [] {
 
 static std::filesystem::path saveDir = [] {
     wchar_t* documentFolderPathStr;
-    HRESULT result = SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_DEFAULT, nullptr, &documentFolderPathStr);
+    HRESULT result = SHGetKnownFolderPath(FOLDERID_SavedGames, KF_FLAG_DEFAULT, nullptr, &documentFolderPathStr);
     assert(result == S_OK);
     std::filesystem::path documentFolderPath(documentFolderPathStr);
     CoTaskMemFree(documentFolderPathStr);
@@ -553,9 +559,9 @@ void showConsole() {
     }
 }
 
-void settingsLoad(const std::filesystem::path& settingsPath) {
+void settingsInit(const std::filesystem::path& settingsPath) {
     if (fileExists(settingsPath)) {
-        std::string yamlStr = fileReadStr(exeDir / "settings.yaml");
+        std::string yamlStr = fileReadStr(settingsPath);
         ryml::Tree yamlTree = ryml::parse_in_arena(ryml::to_csubstr(yamlStr));
         ryml::ConstNodeRef yamlRoot = yamlTree.rootref();
         yamlRoot["hdr"] >> settings.hdr;
@@ -654,28 +660,18 @@ void imguiInit() {
     assert(io.Fonts->AddFontDefault());
 }
 
-void controllerReset() {
-    controller.back = controller.start = false;
-    controller.a = controller.b = controller.x = controller.y = false;
-    controller.up = controller.down = controller.left = controller.right = false;
-    controller.lb = controller.rb = false;
-    controller.lt = controller.rt = 0;
-    controller.ls = controller.rs = false;
-    controller.lsX = controller.lsY = controller.rsX = controller.rsY = 0;
-}
-
-void controllerApplyDeadZone() {
-    float lDistance = sqrtf(controller.lsX * controller.lsX + controller.lsY * controller.lsY);
+void controllerApplyDeadZone(Controller* c) {
+    float lDistance = sqrtf(c->lsX * c->lsX + c->lsY * c->lsY);
     if (lDistance > 0) {
-        float lDistanceNew = std::max(0.0f, lDistance - controller.deadZone) / (1.0f - controller.deadZone);
-        controller.lsX = controller.lsX / lDistance * lDistanceNew;
-        controller.lsY = controller.lsY / lDistance * lDistanceNew;
+        float lDistanceNew = std::max(0.0f, lDistance - controllerDeadZone) / (1.0f - controllerDeadZone);
+        c->lsX = c->lsX / lDistance * lDistanceNew;
+        c->lsY = c->lsY / lDistance * lDistanceNew;
     }
-    float rDistance = sqrtf(controller.rsX * controller.rsX + controller.rsY * controller.rsY);
+    float rDistance = sqrtf(c->rsX * c->rsX + c->rsY * c->rsY);
     if (rDistance > 0) {
-        float rDistanceNew = std::max(0.0f, rDistance - controller.deadZone) / (1.0f - controller.deadZone);
-        controller.rsX = controller.rsX / rDistance * rDistanceNew;
-        controller.rsY = controller.rsY / rDistance * rDistanceNew;
+        float rDistanceNew = std::max(0.0f, rDistance - controllerDeadZone) / (1.0f - controllerDeadZone);
+        c->rsX = c->rsX / rDistance * rDistanceNew;
+        c->rsY = c->rsY / rDistance * rDistanceNew;
     }
 }
 
@@ -703,64 +699,79 @@ std::string controllerToString() {
     return s;
 }
 
-void controllerGetStateDualSense(uint8* packet, uint packetSize) {
-    controllerReset();
-    uint n = (packetSize == 64) ? 0 : 1;
-    controller.lsX = (packet[n + 1] / 255.0f) * 2.0f - 1.0f;
-    controller.lsY = -((packet[n + 2] / 255.0f) * 2.0f - 1.0f);
-    controller.rsX = (packet[n + 3] / 255.0f) * 2.0f - 1.0f;
-    controller.rsY = -((packet[n + 4] / 255.0f) * 2.0f - 1.0f);
-    controller.lt = packet[n + 5] / 255.0f;
-    controller.rt = packet[n + 6] / 255.0f;
-    switch (packet[n + 8] & 0x0f) {
-    case 0x0: controller.up = true; break;
-    case 0x1: controller.up = controller.right = true; break;
-    case 0x2: controller.right = true; break;
-    case 0x3: controller.down = controller.right = true; break;
-    case 0x4: controller.down = true; break;
-    case 0x5: controller.down = controller.left = true; break;
-    case 0x6: controller.left = true; break;
-    case 0x7: controller.up = controller.left = true; break;
-    }
-    controller.x = packet[n + 8] & 0x10;
-    controller.a = packet[n + 8] & 0x20;
-    controller.b = packet[n + 8] & 0x40;
-    controller.y = packet[n + 8] & 0x80;
-    controller.lb = packet[n + 9] & 0x01;
-    controller.rb = packet[n + 9] & 0x02;
-    controller.back = packet[n + 9] & 0x10;
-    controller.start = packet[n + 9] & 0x20;
-    controller.ls = packet[n + 9] & 0x40;
-    controller.rs = packet[n + 9] & 0x80;
-    controllerApplyDeadZone();
-}
+// void controllerGetStateDualSense(uint8* packet, uint packetSize) {
+//     controller = {};
+//     uint n = (packetSize == 64) ? 0 : 1;
+//     controller.lsX = (packet[n + 1] / 255.0f) * 2.0f - 1.0f;
+//     controller.lsY = -((packet[n + 2] / 255.0f) * 2.0f - 1.0f);
+//     controller.rsX = (packet[n + 3] / 255.0f) * 2.0f - 1.0f;
+//     controller.rsY = -((packet[n + 4] / 255.0f) * 2.0f - 1.0f);
+//     controller.lt = packet[n + 5] / 255.0f;
+//     controller.rt = packet[n + 6] / 255.0f;
+//     switch (packet[n + 8] & 0x0f) {
+//     case 0x0: controller.up = true; break;
+//     case 0x1: controller.up = controller.right = true; break;
+//     case 0x2: controller.right = true; break;
+//     case 0x3: controller.down = controller.right = true; break;
+//     case 0x4: controller.down = true; break;
+//     case 0x5: controller.down = controller.left = true; break;
+//     case 0x6: controller.left = true; break;
+//     case 0x7: controller.up = controller.left = true; break;
+//     }
+//     controller.x = packet[n + 8] & 0x10;
+//     controller.a = packet[n + 8] & 0x20;
+//     controller.b = packet[n + 8] & 0x40;
+//     controller.y = packet[n + 8] & 0x80;
+//     controller.lb = packet[n + 9] & 0x01;
+//     controller.rb = packet[n + 9] & 0x02;
+//     controller.back = packet[n + 9] & 0x10;
+//     controller.start = packet[n + 9] & 0x20;
+//     controller.ls = packet[n + 9] & 0x40;
+//     controller.rs = packet[n + 9] & 0x80;
+//     controllerApplyDeadZone();
+// }
 
 void controllerGetStateXInput() {
-    controllerReset();
+    Controller c = {};
     XINPUT_STATE state;
     if (XInputGetState(0, &state) == ERROR_SUCCESS) {
-        controller.back = state.Gamepad.wButtons & XINPUT_GAMEPAD_BACK;
-        controller.start = state.Gamepad.wButtons & XINPUT_GAMEPAD_START;
-        controller.a = state.Gamepad.wButtons & XINPUT_GAMEPAD_A;
-        controller.b = state.Gamepad.wButtons & XINPUT_GAMEPAD_B;
-        controller.x = state.Gamepad.wButtons & XINPUT_GAMEPAD_X;
-        controller.y = state.Gamepad.wButtons & XINPUT_GAMEPAD_Y;
-        controller.up = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP;
-        controller.down = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN;
-        controller.left = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT;
-        controller.right = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT;
-        controller.lb = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER;
-        controller.rb = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER;
-        controller.lt = state.Gamepad.bLeftTrigger / 255.0f;
-        controller.rt = state.Gamepad.bRightTrigger / 255.0f;
-        controller.ls = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB;
-        controller.rs = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB;
-        controller.lsX = state.Gamepad.sThumbLX / 32767.0f;
-        controller.lsY = state.Gamepad.sThumbLY / 32767.0f;
-        controller.rsX = state.Gamepad.sThumbRX / 32767.0f;
-        controller.rsY = state.Gamepad.sThumbRY / 32767.0f;
-        controllerApplyDeadZone();
+        c.back = state.Gamepad.wButtons & XINPUT_GAMEPAD_BACK;
+        c.start = state.Gamepad.wButtons & XINPUT_GAMEPAD_START;
+        c.a = state.Gamepad.wButtons & XINPUT_GAMEPAD_A;
+        c.b = state.Gamepad.wButtons & XINPUT_GAMEPAD_B;
+        c.x = state.Gamepad.wButtons & XINPUT_GAMEPAD_X;
+        c.y = state.Gamepad.wButtons & XINPUT_GAMEPAD_Y;
+        c.up = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP;
+        c.down = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN;
+        c.left = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT;
+        c.right = state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT;
+        c.lb = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER;
+        c.rb = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER;
+        c.lt = state.Gamepad.bLeftTrigger / 255.0f;
+        c.rt = state.Gamepad.bRightTrigger / 255.0f;
+        c.ls = state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB;
+        c.rs = state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB;
+        c.lsX = state.Gamepad.sThumbLX / 32767.0f;
+        c.lsY = state.Gamepad.sThumbLY / 32767.0f;
+        c.rsX = state.Gamepad.sThumbRX / 32767.0f;
+        c.rsY = state.Gamepad.sThumbRY / 32767.0f;
+        controllerApplyDeadZone(&c);
+        if (controller.back && c.back) c.backDownDuration = controller.backDownDuration + (float)frameTime;
+        if (controller.start && c.start) c.startDownDuration = controller.startDownDuration + (float)frameTime;
+        if (controller.a && c.a) c.aDownDuration = controller.aDownDuration + (float)frameTime;
+        if (controller.b && c.b) c.bDownDuration = controller.bDownDuration + (float)frameTime;
+        if (controller.x && c.x) c.xDownDuration = controller.xDownDuration + (float)frameTime;
+        if (controller.y && c.y) c.yDownDuration = controller.yDownDuration + (float)frameTime;
+        if (controller.up && c.up) c.upDownDuration = controller.upDownDuration + (float)frameTime;
+        if (controller.down && c.down) c.downDownDuration = controller.downDownDuration + (float)frameTime;
+        if (controller.left && c.left) c.leftDownDuration = controller.leftDownDuration + (float)frameTime;
+        if (controller.right && c.right) c.rightDownDuration = controller.rightDownDuration + (float)frameTime;
+        if (controller.lb && c.lb) c.lbDownDuration = controller.lbDownDuration + (float)frameTime;
+        if (controller.rb && c.rb) c.rbDownDuration = controller.rbDownDuration + (float)frameTime;
+        if (controller.ls && c.ls) c.lsDownDuration = controller.lsDownDuration + (float)frameTime;
+        if (controller.rs && c.rs) c.rsDownDuration = controller.rsDownDuration + (float)frameTime;
     }
+    controller = c;
 }
 
 void d3dMessageCallback(D3D12_MESSAGE_CATEGORY category, D3D12_MESSAGE_SEVERITY severity, D3D12_MESSAGE_ID id, LPCSTR description, void* context) {
@@ -1389,12 +1400,22 @@ void modelTraverseNodesImGui(ModelNode* node) {
     }
 }
 
-void modelTraverseNodesAndGetGlobalTransforms(Model* model, ModelNode* node, const XMMATRIX& parentMat, const std::vector<XMMATRIX>& nodeLocalTransformMats, std::vector<XMMATRIX>& nodeGlobalTransformMats) {
+void modelTraverseNodesAndGetGlobalTransforms(Model* model, ModelNode* node, const XMMATRIX& parentMat, const std::vector<Transform>& nodeLocalTransforms, std::vector<XMMATRIX>& nodeGlobalTransformMats) {
     int64 nodeIndex = node - &model->nodes[0];
-    XMMATRIX mat = XMMatrixMultiply(nodeLocalTransformMats[nodeIndex], parentMat);
+    XMMATRIX mat = XMMatrixMultiply(nodeLocalTransforms[nodeIndex].toMat(), parentMat);
     nodeGlobalTransformMats[nodeIndex] = mat;
     for (ModelNode* childNode : node->children) {
-        modelTraverseNodesAndGetGlobalTransforms(model, childNode, mat, nodeLocalTransformMats, nodeGlobalTransformMats);
+        modelTraverseNodesAndGetGlobalTransforms(model, childNode, mat, nodeLocalTransforms, nodeGlobalTransformMats);
+    }
+}
+
+void modelTraverseNodesAndGetPositionAsCircles(Model* model, ModelNode* node, std::vector<XMMATRIX>& nodeGlobalTransformMats, std::vector<ShapeCircle>& circles) {
+    int nodeIndex = node - &model->nodes[0];
+    XMMATRIX& mat = nodeGlobalTransformMats[nodeIndex];
+    XMVECTOR center = XMVector3Transform(XMVectorSet(0, 0, 0, 1), mat);
+    circles.push_back(ShapeCircle{.center = float3(center), .radius = 0.01});
+    for (ModelNode* childNode : node->children) {
+        modelTraverseNodesAndGetPositionAsCircles(model, childNode, nodeGlobalTransformMats, circles);
     }
 }
 
@@ -1606,13 +1627,13 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
                 ModelNode* node = &model->nodes[jointNode - gltfData->nodes];
                 float* matsData = (float*)((uint8*)(gltfSkin.inverse_bind_matrices->buffer_view->buffer->data) + gltfSkin.inverse_bind_matrices->offset + gltfSkin.inverse_bind_matrices->buffer_view->offset);
                 matsData += jointIndex * 16;
-                skin.joints.emplace_back(node, XMMATRIX(matsData));
+                skin.joints.push_back(ModelJoint{.node = node, .inverseBindMat = XMMATRIX(matsData)});
             }
         }
-        for (uint minParentCount = UINT_MAX, skinIndex = 0; skinIndex < model->skins.size(); skinIndex++) {
-            ModelSkin& skin = model->skins[skinIndex];
-            for (uint jointIndex = 0; jointIndex < skin.joints.size(); jointIndex++) {
-                ModelNode* jointNode = skin.joints[jointIndex].node;
+        uint minParentCount = UINT_MAX;
+        for (ModelSkin& skin : model->skins) {
+            for (ModelJoint& joint : skin.joints) {
+                ModelNode* jointNode = joint.node;
                 ModelNode* parentNode = jointNode->parent;
                 uint parentCount = 0;
                 while (parentNode) {
@@ -1756,6 +1777,7 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
     if (model->animations.size() > 0) {
         modelInstance.animation = &model->animations[0];
         modelInstance.localTransforms.resize(model->nodes.size());
+        modelInstance.globalTransformMats.resize(model->nodes.size());
         modelInstance.skins.resize(model->skins.size());
         for (uint skinIndex = 0; skinIndex < model->skins.size(); skinIndex++) {
             modelInstance.skins[skinIndex].mats.resize(model->skins[skinIndex].joints.size());
@@ -1832,8 +1854,6 @@ void modelInstanceUpdateAnimation(ModelInstance* modelInstance, double time) {
             modelInstance->animationTime -= modelInstance->animation->timeLength;
         }
         for (Transform& transform : modelInstance->localTransforms) transform = Transform{};
-        std::vector<XMMATRIX> nodeLocalTransformMats(modelInstance->model->nodes.size());
-        std::vector<XMMATRIX> nodeGlobalTransformMats(modelInstance->model->nodes.size());
         {
             for (ModelAnimationChannel& channel : modelInstance->animation->channels) {
                 float4 frame0 = channel.sampler->keyFrames[0].xyzw;
@@ -1870,23 +1890,20 @@ void modelInstanceUpdateAnimation(ModelInstance* modelInstance, double time) {
                     }
                 }
             }
-            for (uint nodeIndex = 0; nodeIndex < modelInstance->model->nodes.size(); nodeIndex++) {
-                nodeLocalTransformMats[nodeIndex] = modelInstance->localTransforms[nodeIndex].toMat();
-            }
         }
         for (ModelNode* rootNode : modelInstance->model->rootNodes) {
-            modelTraverseNodesAndGetGlobalTransforms(modelInstance->model, rootNode, XMMatrixIdentity(), nodeLocalTransformMats, nodeGlobalTransformMats);
+            modelTraverseNodesAndGetGlobalTransforms(modelInstance->model, rootNode, XMMatrixIdentity(), modelInstance->localTransforms, modelInstance->globalTransformMats);
         }
         for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance->meshNodes.size(); meshNodeIndex++) {
             int64 nodeIndex = modelInstance->model->meshNodes[meshNodeIndex] - &modelInstance->model->nodes[0];
-            modelInstance->meshNodes[meshNodeIndex].transformMat = XMMatrixMultiply(modelInstance->model->meshNodes[meshNodeIndex]->globalTransform, nodeGlobalTransformMats[nodeIndex]);
+            modelInstance->meshNodes[meshNodeIndex].transformMat = XMMatrixMultiply(modelInstance->model->meshNodes[meshNodeIndex]->globalTransform, modelInstance->globalTransformMats[nodeIndex]);
         }
         for (uint skinIndex = 0; skinIndex < modelInstance->model->skins.size(); skinIndex++) {
             ModelSkin& skin = modelInstance->model->skins[skinIndex];
             ModelInstanceSkin& instanceSkin = modelInstance->skins[skinIndex];
             for (uint jointIndex = 0; jointIndex < skin.joints.size(); jointIndex++) {
                 int64 nodeIndex = skin.joints[jointIndex].node - &modelInstance->model->nodes[0];
-                instanceSkin.mats[jointIndex] = XMMatrixTranspose(XMMatrixMultiply(skin.joints[jointIndex].inverseBindMat, nodeGlobalTransformMats[nodeIndex]));
+                instanceSkin.mats[jointIndex] = XMMatrixMultiply(skin.joints[jointIndex].inverseBindMat, modelInstance->globalTransformMats[nodeIndex]);
             }
             memcpy(instanceSkin.matsBufferPtr, instanceSkin.mats.data(), vectorSizeof(instanceSkin.mats));
         }
@@ -2239,7 +2256,7 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
             RID_DEVICE_INFO info;
             uint infoSize = sizeof(info);
             GetRawInputDeviceInfoA((HANDLE)lParam, RIDI_DEVICEINFO, &info, &infoSize);
-            if (info.dwType == RIM_TYPEHID && info.hid.dwVendorId == 0x054c && info.hid.dwProductId == 0x0ce6) controller.dualSenseHID = (HANDLE)lParam;
+            if (info.dwType == RIM_TYPEHID && info.hid.dwVendorId == 0x054c && info.hid.dwProductId == 0x0ce6) controllerDualSenseHID = (HANDLE)lParam;
         }
     } break;
     case WM_INPUT: {
@@ -2250,7 +2267,7 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
             if (rawInput->header.dwType == RIM_TYPEMOUSE) {
                 mouseDeltaRaw.x += rawInput->data.mouse.lLastX;
                 mouseDeltaRaw.y += rawInput->data.mouse.lLastY;
-            } else if (rawInput->header.dwType == RIM_TYPEHID && rawInput->header.hDevice == controller.dualSenseHID) {
+            } else if (rawInput->header.dwType == RIM_TYPEHID && rawInput->header.hDevice == controllerDualSenseHID) {
                 for (uint packetIndex = 0; packetIndex < rawInput->data.hid.dwCount; packetIndex++) {
                     // controller.getStateDualSense(&rawInput->data.hid.bRawData[rawInput->data.hid.dwSizeHid * packetIndex], rawInput->data.hid.dwSizeHid);
                 }
@@ -2355,7 +2372,7 @@ void editorMainMenuBar() {
         if (ImGui::BeginMenu("Game")) {
             if (ImGui::MenuItem("Play", "CTRL+P")) {
                 editor->active = false;
-                // windowHideCursor(true);
+                windowHideCursor(true);
                 worldReset();
             }
             ImGui::EndMenu();
@@ -2495,9 +2512,9 @@ void editorAddObjectPopup() {
 }
 
 void editorUpdate() {
-    if (ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
+    if ((ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) || (controller.back && controller.backDownDuration == 0)) {
         editor->active = false;
-        // windowHideCursor(true);
+        windowHideCursor(true);
         worldReset();
         return;
     }
@@ -2619,7 +2636,7 @@ void editorUpdate() {
 }
 
 void gameUpdate() {
-    if (editor && ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
+    if (editor && ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || (controller.back && controller.backDownDuration == 0)) {
         editor->active = true;
         windowHideCursor(false);
         return;
@@ -2727,7 +2744,6 @@ void addTLASInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
     for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance.meshNodes.size(); meshNodeIndex++) {
         ModelNode* meshNode = modelInstance.model->meshNodes[meshNodeIndex];
         ModelInstanceMeshNode& instanceMeshNode = modelInstance.meshNodes[meshNodeIndex];
-        uint meshIndex = (uint)(meshNode->mesh - &modelInstance.model->meshes[0]);
         XMMATRIX transform = instanceMeshNode.transformMat;
         transform = XMMatrixMultiply(transform, XMMatrixScaling(1, 1, -1)); // convert RH to LH
         transform = XMMatrixMultiply(transform, modelInstance.transform.toMat());
@@ -2803,7 +2819,7 @@ void render() {
     XMMATRIX cameraLookAtMat = XMMatrixLookAtLH(XMVectorSet(0, 0, 0, 0), cameraLookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
     XMMATRIX cameraLookAtMatInverseTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, cameraLookAtMat));
     XMMATRIX cameraProjectMat = XMMatrixPerspectiveFovLH(RADIAN(cameraFovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f);
-    XMMATRIX cameraProjectViewMat = XMMatrixMultiply(cameraProjectMat, cameraLookAtMat);
+    XMMATRIX cameraProjectViewMat = XMMatrixMultiply(cameraLookAtMat, cameraProjectMat);
     XMMATRIX cameraProjectViewInverseMat = XMMatrixInverse(nullptr, cameraProjectViewMat);
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC renderTextureSRVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = 1}};
@@ -2832,7 +2848,7 @@ void render() {
             .cameraViewMatInverseTranspose = cameraLookAtMatInverseTranspose,
             .cameraProjMat = cameraProjectMat,
             .cameraProjViewMat = cameraProjectViewMat,
-            .cameraProjViewInverseMat = cameraProjectViewInverseMat,
+            //.cameraProjViewInverseMat = cameraProjectViewInverseMat,
         };
         assert(d3d.constantsBufferOffset == 0);
         memcpy(d3d.constantsBufferPtr + d3d.constantsBufferOffset, &renderInfo, sizeof(renderInfo));
@@ -2866,6 +2882,8 @@ void render() {
                 meshSkinningInfos.push_back(MeshSkinningInfo{.meshNode = meshNode, .instanceMeshNode = instanceMeshNode, .matsBuffer = modelInstance->skins[skinIndex].matsBuffer->GetResource()->GetGPUVirtualAddress()});
             }
         }
+
+        PIXSetMarker(d3d.graphicsCmdList, 0, "vertexSkinning");
         d3d.graphicsCmdList->SetPipelineState(d3d.vertexSkinning);
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.vertexSkinningRootSig);
         d3d.graphicsCmdList->ResourceBarrier((uint)verticeBufferBarriers.size(), &verticeBufferBarriers[0]);
@@ -2880,14 +2898,16 @@ void render() {
         d3d.graphicsCmdList->ResourceBarrier((uint)verticeBufferBarriers.size(), &verticeBufferBarriers[0]);
         static std::vector<D3D12_RESOURCE_BARRIER> blasBarriers;
         blasBarriers.resize(0);
+        PIXSetMarker(d3d.graphicsCmdList, 0, "build BLAS");
         for (MeshSkinningInfo& info : meshSkinningInfos) {
             static std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
             geometryDescs.resize(0);
-            for (const ModelPrimitive& primitive : info.meshNode->mesh->primitives) {
+            for (ModelPrimitive& primitive : info.meshNode->mesh->primitives) {
                 geometryDescs.push_back(D3D12_RAYTRACING_GEOMETRY_DESC{
                     .Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
                     .Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE,
                     .Triangles = {
+                        .Transform3x4 = 0,
                         .IndexFormat = DXGI_FORMAT_R32_UINT,
                         .VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
                         .IndexCount = (uint)primitive.indicesCount,
@@ -2897,18 +2917,8 @@ void render() {
                     },
                 });
             }
-            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS blasInputs = {
-                .Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL,
-                .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD,
-                .NumDescs = (uint)geometryDescs.size(),
-                .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY,
-                .pGeometryDescs = geometryDescs.data(),
-            };
-            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC blasDesc = {
-                .DestAccelerationStructureData = info.instanceMeshNode->blas->GetResource()->GetGPUVirtualAddress(),
-                .Inputs = blasInputs,
-                .ScratchAccelerationStructureData = info.instanceMeshNode->blasScratch->GetResource()->GetGPUVirtualAddress(),
-            };
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS blasInputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL, .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD, .NumDescs = (uint)geometryDescs.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .pGeometryDescs = geometryDescs.data()};
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC blasDesc = {.DestAccelerationStructureData = info.instanceMeshNode->blas->GetResource()->GetGPUVirtualAddress(), .Inputs = blasInputs, .ScratchAccelerationStructureData = info.instanceMeshNode->blasScratch->GetResource()->GetGPUVirtualAddress()};
             d3d.graphicsCmdList->BuildRaytracingAccelerationStructure(&blasDesc, 0, nullptr);
             blasBarriers.push_back(D3D12_RESOURCE_BARRIER{.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = info.instanceMeshNode->blas->GetResource()}});
         }
@@ -2932,10 +2942,9 @@ void render() {
             }
             addTLASInstance(gameObjects[objIndex].modelInstance, XMMatrixTranslationFromVector(translate), ObjectTypeGameObject, objIndex);
         }
-        XMVECTOR q = quaternionBetween(float3(0, 1, 0), player.movement);
-        addTLASInstance(modelInstanceCylinder, XMMatrixAffineTransformation(XMVectorSet(0.05f, player.movement.length(), 0.05f, 0), XMVectorSet(0, 0, 0, 0), q, (player.position - player.camera.position).toXMVector()), ObjectTypeNone, 0);
-    }
-    {
+
+        addTLASInstance(modelInstanceCylinder, XMMatrixAffineTransformation(XMVectorSet(0.05f, player.movement.length(), 0.05f, 0), XMVectorSet(0, 0, 0, 0), quaternionBetween(float3(0, 1, 0), player.movement), (player.position - player.camera.position).toXMVector()), ObjectTypeNone, 0);
+
         assert(vectorSizeof(tlasInstancesBuildInfos) < d3d.tlasInstancesBuildInfosBuffer->GetSize());
         assert(vectorSizeof(tlasInstancesInfos) < d3d.tlasInstancesInfosBuffer->GetSize());
         assert(vectorSizeof(blasGeometriesInfos) < d3d.blasGeometriesInfosBuffer->GetSize());
@@ -2943,13 +2952,14 @@ void render() {
         memcpy(d3d.tlasInstancesInfosBufferPtr, tlasInstancesInfos.data(), vectorSizeof(tlasInstancesInfos));
         memcpy(d3d.blasGeometriesInfosBufferPtr, blasGeometriesInfos.data(), vectorSizeof(blasGeometriesInfos));
 
-        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL, .NumDescs = (uint)tlasInstancesBuildInfos.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .InstanceDescs = d3d.tlasInstancesBuildInfosBuffer->GetResource()->GetGPUVirtualAddress()};
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS tlasInputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL, .NumDescs = (uint)tlasInstancesBuildInfos.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .InstanceDescs = d3d.tlasInstancesBuildInfosBuffer->GetResource()->GetGPUVirtualAddress()};
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
-        d3d.device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
+        d3d.device->GetRaytracingAccelerationStructurePrebuildInfo(&tlasInputs, &prebuildInfo);
         assert(prebuildInfo.ResultDataMaxSizeInBytes < d3d.tlasBuffer->GetSize());
         assert(prebuildInfo.ScratchDataSizeInBytes < d3d.tlasScratchBuffer->GetSize());
 
-        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress(), .Inputs = inputs, .ScratchAccelerationStructureData = d3d.tlasScratchBuffer->GetResource()->GetGPUVirtualAddress()};
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress(), .Inputs = tlasInputs, .ScratchAccelerationStructureData = d3d.tlasScratchBuffer->GetResource()->GetGPUVirtualAddress()};
+        PIXSetMarker(d3d.graphicsCmdList, 0, "build TLAS");
         d3d.graphicsCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
         D3D12_RESOURCE_BARRIER tlasBarrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = d3d.tlasBuffer->GetResource()}};
         d3d.graphicsCmdList->ResourceBarrier(1, &tlasBarrier);
@@ -2960,13 +2970,13 @@ void render() {
         } else {
             XMFLOAT4X4 cameraViewMat;
             XMFLOAT4X4 cameraProjMat;
-            XMStoreFloat4x4(&cameraViewMat, XMMatrixTranspose(cameraLookAtMatInverseTranspose));
-            XMStoreFloat4x4(&cameraProjMat, XMMatrixTranspose(cameraProjectMat));
+            XMStoreFloat4x4(&cameraViewMat, cameraLookAtMatInverseTranspose);
+            XMStoreFloat4x4(&cameraProjMat, cameraProjectMat);
             float2 pixelCoord = ((float2((float)mouseSelectX, (float)mouseSelectY) + 0.5f) / float2((float)settings.renderW, (float)settings.renderH)) * 2.0f - 1.0f;
-            RayDesc rayDesc = {.origin = {cameraViewMat.m[3][0], cameraViewMat.m[3][1], cameraViewMat.m[3][2]}, .min = 0.0f, .max = FLT_MAX};
+            RayDesc rayDesc = {.origin = {cameraViewMat.m[0][3], cameraViewMat.m[1][3], cameraViewMat.m[2][3]}, .min = 0.0f, .max = FLT_MAX};
             float aspect = cameraProjMat.m[1][1] / cameraProjMat.m[0][0];
             float tanHalfFovY = 1.0f / cameraProjMat.m[1][1];
-            rayDesc.dir = (float3(cameraViewMat.m[0][0], cameraViewMat.m[0][1], cameraViewMat.m[0][2]) * pixelCoord.x * tanHalfFovY * aspect) - (float3(cameraViewMat.m[1][0], cameraViewMat.m[1][1], cameraViewMat.m[1][2]) * pixelCoord.y * tanHalfFovY) + (float3(cameraViewMat.m[2][0], cameraViewMat.m[2][1], cameraViewMat.m[2][2]));
+            rayDesc.dir = (float3(cameraViewMat.m[0][0], cameraViewMat.m[1][0], cameraViewMat.m[2][0]) * pixelCoord.x * tanHalfFovY * aspect) - (float3(cameraViewMat.m[0][1], cameraViewMat.m[1][1], cameraViewMat.m[2][1]) * pixelCoord.y * tanHalfFovY) + (float3(cameraViewMat.m[0][2], cameraViewMat.m[1][2], cameraViewMat.m[2][2]));
             rayDesc.dir = rayDesc.dir.normalize();
             d3d.collisionQueriesBufferPtr[0] = {.rayDesc = rayDesc, .instanceInclusionMask = 0xff & ~ObjectTypeNone};
         }
@@ -2985,6 +2995,7 @@ void render() {
         dispatchDesc.Width = 2, dispatchDesc.Height = 1, dispatchDesc.Depth = 1;
         assert(d3d.constantsBufferOffset < d3d.constantsBuffer->GetSize());
 
+        PIXSetMarker(d3d.graphicsCmdList, 0, "collisionQuery");
         d3d.graphicsCmdList->SetPipelineState1(d3d.collisionQuery);
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.collisionQueryRootSig);
         d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
@@ -3009,6 +3020,7 @@ void render() {
         D3D12_RESOURCE_BARRIER renderTextureTransition = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.renderTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}};
         d3d.graphicsCmdList->ResourceBarrier(1, &renderTextureTransition);
 
+        PIXSetMarker(d3d.graphicsCmdList, 0, "renderScene");
         d3d.graphicsCmdList->SetPipelineState1(d3d.renderScene);
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.renderSceneRootSig);
         d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
@@ -3027,18 +3039,34 @@ void render() {
         d3d.graphicsCmdList->RSSetScissorRects(1, &scissor);
         d3d.graphicsCmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         {
+            PIXSetMarker(d3d.graphicsCmdList, 0, "postProcess");
             d3d.graphicsCmdList->SetPipelineState(d3d.postProcess);
             d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.postProcessRootSig);
             d3d.graphicsCmdList->SetGraphicsRoot32BitConstant(0, settings.hdr, 0);
             d3d.graphicsCmdList->DrawInstanced(3, 1, 0, 0);
         }
         {
-            // shapeCircles.resize(0);
-            // shapeLines.resize(0);
-            // shapeCircles.push_back(ShapeCircle{.center = {0.5, 0.5}, .radius = 0.05});
-            // shapeLines.push_back(ShapeLine{.p0 = {0.5, 0.5}, .p1 = {0.5, 0.7}, .thickness = 0.01});
-            // memcpy(d3d.shapeCirclesBufferPtr, shapeCircles.data(), shapeCircles.size() * sizeof(ShapeCircle));
-            // memcpy(d3d.shapeLinesBufferPtr, shapeLines.data(), shapeLines.size() * sizeof(ShapeLine));
+            shapeCircles.resize(0);
+            shapeLines.resize(0);
+            if (editor && editor->active) {
+                if (editor->selectedObjectType == ObjectTypePlayer) {
+                    if (player.modelInstance.model->skeletonRootNode) {
+                        XMMatrixScaling(1, 1, -1);
+                        player.modelInstance.transform.toMat();
+                        modelTraverseNodesAndGetPositionAsCircles(player.modelInstance.model, player.modelInstance.model->skeletonRootNode, player.modelInstance.globalTransformMats, shapeCircles);
+                    }
+                } else if (editor->selectedObjectType == ObjectTypeGameObject) {
+                    GameObject& gameObject = gameObjects[editor->selectedObjectIndex];
+                    if (gameObject.modelInstance.model->skeletonRootNode) {
+                        modelTraverseNodesAndGetPositionAsCircles(gameObject.modelInstance.model, gameObject.modelInstance.model->skeletonRootNode, gameObject.modelInstance.globalTransformMats, shapeCircles);
+                    }
+                }
+            }
+            //shapeCircles.push_back(ShapeCircle{.center = player.position - player.camera.position, .radius = 0.02f});
+            //shapeLines.push_back(ShapeLine{.p0 = player.position - player.camera.position, .thickness = 0.01f, .p1 = player.position + float3(0, 1, 0) - player.camera.position});
+            memcpy(d3d.shapeCirclesBufferPtr, shapeCircles.data(), shapeCircles.size() * sizeof(ShapeCircle));
+            memcpy(d3d.shapeLinesBufferPtr, shapeLines.data(), shapeLines.size() * sizeof(ShapeLine));
+            PIXSetMarker(d3d.graphicsCmdList, 0, "shapes");
             d3d.graphicsCmdList->SetPipelineState(d3d.shapes);
             d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.shapesRootSig);
             uint constants[4] = {settings.renderW, settings.renderH, (uint)shapeCircles.size(), (uint)shapeLines.size()};
@@ -3048,6 +3076,7 @@ void render() {
             d3d.graphicsCmdList->DrawInstanced(3, 1, 0, 0);
         }
         {
+            PIXSetMarker(d3d.graphicsCmdList, 0, "imgui");
             d3d.graphicsCmdList->SetPipelineState(d3d.imgui);
             float blendFactor[] = {0, 0, 0, 0};
             d3d.graphicsCmdList->OMSetBlendFactor(blendFactor);
@@ -3122,7 +3151,7 @@ void updateGameLiveReloadProcs() {
 int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) {
     assert(SetCurrentDirectoryW(exeDir.c_str()));
     showConsole();
-    settingsLoad(saveDir / "settings.yaml");
+    settingsInit(saveDir / "settings.yaml");
     windowInit();
     windowShow();
     imguiInit();
