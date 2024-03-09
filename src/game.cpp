@@ -465,6 +465,7 @@ static std::vector<ShapeCircle> shapeCircles;
 static std::vector<ShapeLine> shapeLines;
 
 static Editor* editor = new Editor();
+static float editorCameraMoveSpeedMax = 1000.0f;
 static ImVec2 editorMainMenuBarPos = {};
 static ImVec2 editorMainMenuBarSize = {};
 static ImVec2 editorObjectWindowPos = {};
@@ -1410,10 +1411,10 @@ void modelTraverseNodesAndGetGlobalTransforms(Model* model, ModelNode* node, con
 }
 
 void modelTraverseNodesAndGetPositionAsCircles(Model* model, ModelNode* node, std::vector<XMMATRIX>& nodeGlobalTransformMats, std::vector<ShapeCircle>& circles) {
-    int nodeIndex = node - &model->nodes[0];
+    int64 nodeIndex = node - &model->nodes[0];
     XMMATRIX& mat = nodeGlobalTransformMats[nodeIndex];
     XMVECTOR center = XMVector3Transform(XMVectorSet(0, 0, 0, 1), mat);
-    circles.push_back(ShapeCircle{.center = float3(center), .radius = 0.01});
+    circles.push_back(ShapeCircle{.center = Position(center) - editor->camera.position, .radius = 0.01f});
     for (ModelNode* childNode : node->children) {
         modelTraverseNodesAndGetPositionAsCircles(model, childNode, nodeGlobalTransformMats, circles);
     }
@@ -2360,7 +2361,7 @@ void editorMainMenuBar() {
         }
         if (ImGui::BeginMenu("Editor")) {
             if (ImGui::BeginMenu("Camera")) {
-                ImGui::SliderFloat("moveSpeed", &editor->camera.moveSpeed, 0.1f, 100.0f);
+                ImGui::SliderFloat("moveSpeed", &editor->camera.moveSpeed, 0.1f, editorCameraMoveSpeedMax);
                 ImGui::EndMenu();
             }
             ImGui::Separator();
@@ -2565,7 +2566,7 @@ void editorUpdate() {
     if (editor->cameraMoving || controllerStickMoved()) {
         float pitch = (mouseDeltaRaw.y * mouseSensitivity - controller.rsY * controllerSensitivity) * (float)frameTime;
         float yaw = (mouseDeltaRaw.x * mouseSensitivity + controller.rsX * controllerSensitivity) * (float)frameTime;
-        editor->camera.moveSpeed = std::clamp(editor->camera.moveSpeed + ImGui::GetIO().MouseWheel, 0.1f, 100.0f);
+        editor->camera.moveSpeed = std::clamp(editor->camera.moveSpeed + ImGui::GetIO().MouseWheel, 0.1f, editorCameraMoveSpeedMax);
         float distance = (float)frameTime / 5.0f * editor->camera.moveSpeed;
         float3 translate = {-controller.lsX * distance, 0, controller.lsY * distance};
         if (ImGui::IsKeyDown(ImGuiKey_W)) translate.z = distance;
@@ -2818,7 +2819,7 @@ void render() {
     }
     XMMATRIX cameraLookAtMat = XMMatrixLookAtLH(XMVectorSet(0, 0, 0, 0), cameraLookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
     XMMATRIX cameraLookAtMatInverseTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, cameraLookAtMat));
-    XMMATRIX cameraProjectMat = XMMatrixPerspectiveFovLH(RADIAN(cameraFovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 100.0f);
+    XMMATRIX cameraProjectMat = XMMatrixPerspectiveFovLH(RADIAN(cameraFovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 1000.0f);
     XMMATRIX cameraProjectViewMat = XMMatrixMultiply(cameraLookAtMat, cameraProjectMat);
     XMMATRIX cameraProjectViewInverseMat = XMMatrixInverse(nullptr, cameraProjectViewMat);
     {

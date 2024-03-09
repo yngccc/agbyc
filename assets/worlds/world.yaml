@@ -1,13 +1,13 @@
 editorCamera:
-  position: [104179,28635,113638]
-  pitchYaw: [0.21380879,-2.6275153]
-  moveSpeed: 30.312
+  position: [-14808,37265,-62626]
+  pitchYaw: [0.23653972,0.0891398]
+  moveSpeed: 63.427
 skybox:
   file: skybox\industrial_sunset_02_puresky_4k.dds
 player:
   file: models\robot\gltf\robot.gltf
   scale: [1,1,1]
-  rotate: [0,0,0,1]
+  rotate: [-0,0,-0,1]
   translate: [0,0,0]
   spawnPosition: [0,0,0]
   walkSpeed: 1
@@ -22,8 +22,8 @@ gameObjects:
   - name: referencePlane
     file: models/plane/gltf/plane.gltf
     scale: [1,1,1]
-    rotate: [0,0,0,1]
-    translate: [0,0,0]
+    rotate: [-0,0,-0,1]
+    translate: [0,1.1920929e-07,0]
   - name: cesiumMan
     file: models\cesiumMan\cesiumMan.gltf
     scale: [2.76,2.76,2.76]
@@ -33,7 +33,7 @@ gameObjects:
     file: models/cube/cube.gltf
     scale: [1,1,1]
     rotate: [-0,0,-0,1]
-    translate: [2.9925933,0,0]
+    translate: [2.992593,0,0]
   - name: animatedCube
     file: models\animatedCube\AnimatedCube.gltf
     scale: [1,1,1]
@@ -51,11 +51,11 @@ gameObjects:
     translate: [0,3.7848938,0]
   - name: girlDriver
     file: models\girlDriver\gltf\girlDriver.gltf
-    scale: [0.7098838,0.709886,0.7098838]
-    rotate: [0,0.9840335,0,-0.17798312]
-    translate: [-0.9434476,0.6879333,4.6135435]
+    scale: [1,1,1]
+    rotate: [0,0,0,1]
+    translate: [5,0,5]
   - name: robot
     file: models\robot\gltf\robot.gltf
-    scale: [0.9999985,1,0.9999985]
-    rotate: [0,0.8000281,0,-0.5999625]
-    translate: [5.353129,0,5.0973306]
+    scale: [1,1,1]
+    rotate: [-0,0,-0,1]
+    translate: [0,0,7.751974]

@@ -150,18 +150,26 @@ struct float4 {
     std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
 };
 
+#define scale  10000.0f // 0.1mm precision
+#define scaleInv 0.0001f
 struct Position {
-    // 0.1mm precision
     int x = 0, y = 0, z = 0;
 
-    void operator=(float3 p) { x = int(p.x * 10000.0), y = int(p.y * 10000.0), z = int(p.z * 10000.0); }
-    Position operator+(float3 p) const { return Position{x + int(p.x * 10000.0), y + int(p.y * 10000.0), z + int(p.z * 10000.0)}; }
-    void operator+=(float3 p) { x += int(p.x * 10000.0), y += int(p.y * 10000.0), z += int(p.z * 10000.0); }
-    Position operator-() const { return Position{-x, -y, -z}; }
-    float3 operator-(Position p) const { return float3((x - p.x) * 0.0001f, (y - p.y) * 0.0001f, (z - p.z) * 0.0001f); }
-    float3 toFloat3() const { return float3(x * 0.0001f, y * 0.0001f, z * 0.0001f); }
-    XMVECTOR toXMVector() const { return XMVectorSet(x * 0.0001f, y * 0.0001f, z * 0.0001f, 0); }
+    Position() = default;
+    Position(int px, int py, int pz) : x(px), y(py), z(pz) {}
+    Position(float px, float py, float pz) : x(int(px * scale)), y(int(py * scale)), z(int(pz * scale)) {}
+    Position(float3 p) : x(int(p.x * scale)), y(int(p.y * scale)), z(int(p.z * scale)) {}
+    Position(XMVECTOR p) : x(int(XMVectorGetX(p) * scale)), y(int(XMVectorGetY(p) * scale)), z(int(XMVectorGetZ(p) * scale)) {}
+    void operator=(float3 p) { x = int(p.x * scale), y = int(p.y * scale), z = int(p.z * scale); }
+    void operator+=(float3 p) { x += int(p.x * scale), y += int(p.y * scale), z += int(p.z * scale); }
+    Position operator+(float3 p) const { return Position(x + int(p.x * scale), y + int(p.y * scale), z + int(p.z * scale)); }
+    Position operator-() const { return Position(-x, -y, -z); }
+    float3 operator-(Position p) const { return float3((x - p.x) * scaleInv, (y - p.y) * scaleInv, (z - p.z) * scaleInv); }
+    float3 toFloat3() const { return float3(x * scaleInv, y * scaleInv, z * scaleInv); }
+    XMVECTOR toXMVector() const { return XMVectorSet(x * scaleInv, y * scaleInv, z * scaleInv, 0); }
 };
+#undef scale
+#undef scaleInv
 
 struct Transform {
     float3 s = {1, 1, 1};
