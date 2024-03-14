@@ -14,8 +14,9 @@
 #define BLAS_GEOMETRIES_INFOS_DESCRIPTOR(name) StructuredBuffer<BLASGeometryInfo> name = ResourceDescriptorHeap[5];
 #define SKYBOX_TEXTURE_DESCRIPTOR(name) Texture2D<float3> name = ResourceDescriptorHeap[6];
 #define IMGUI_IMAGE_DESCRIPTOR(name) Texture2D<float4> name = ResourceDescriptorHeap[7];
-#define COLLISION_QUERIES_DESCRIPTOR(name) StructuredBuffer<CollisionQuery> name = ResourceDescriptorHeap[8];
-#define COLLISION_QUERY_RESULTS_DESCRIPTOR(name) RWStructuredBuffer<CollisionQueryResult> name = ResourceDescriptorHeap[9];
+#define DIRECT_WRITE_IMAGE_DESCRIPTOR(name) Texture2D<float4> name = ResourceDescriptorHeap[8];
+#define COLLISION_QUERIES_DESCRIPTOR(name) StructuredBuffer<CollisionQuery> name = ResourceDescriptorHeap[9];
+#define COLLISION_QUERY_RESULTS_DESCRIPTOR(name) RWStructuredBuffer<CollisionQueryResult> name = ResourceDescriptorHeap[10];
 
 float srgbToLinear(float e) {
     if (e <= 0.04045) {

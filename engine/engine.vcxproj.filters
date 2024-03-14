@@ -1,0 +1,108 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Source Files\hlsl">
+      <UniqueIdentifier>{48b9c6d8-307f-4578-bfe8-a3904a49f153}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\libs">
+      <UniqueIdentifier>{9905ef11-e9a9-4865-9b34-67cf306fa657}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Worlds">
+      <UniqueIdentifier>{d300a186-cd66-4bd6-ac5f-db796f4b77b9}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\src\engine.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\tracy\TracyClient.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\d3d12MA\D3D12MemAlloc.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\imgui\ImGuizmo.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\stb\stb_image.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\cgltf\cgltf.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\rapidyaml\rapidyaml-0.5.0.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\stb\stb_ds.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\stb\stb_image_write.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\imgui\imgui.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\imgui\imgui_draw.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\imgui\imgui_tables.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\imgui\imgui_widgets.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\src\structsHLSL.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\common.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\imgui\imconfig.h">
+      <Filter>Source Files\libs</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
+    <None Include="..\src\hlsl\shared.hlsli">
+      <Filter>Source Files\hlsl</Filter>
+    </None>
+    <None Include="..\assets\worlds\world.yaml">
+      <Filter>Worlds</Filter>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="..\src\hlsl\collisionQuery.hlsl">
+      <Filter>Source Files\hlsl</Filter>
+    </FxCompile>
+    <FxCompile Include="..\src\hlsl\imguiPS.hlsl">
+      <Filter>Source Files\hlsl</Filter>
+    </FxCompile>
+    <FxCompile Include="..\src\hlsl\imguiVS.hlsl">
+      <Filter>Source Files\hlsl</Filter>
+    </FxCompile>
+    <FxCompile Include="..\src\hlsl\postProcessPS.hlsl">
+      <Filter>Source Files\hlsl</Filter>
+    </FxCompile>
+    <FxCompile Include="..\src\hlsl\postProcessVS.hlsl">
+      <Filter>Source Files\hlsl</Filter>
+    </FxCompile>
+    <FxCompile Include="..\src\hlsl\renderScene.hlsl">
+      <Filter>Source Files\hlsl</Filter>
+    </FxCompile>
+    <FxCompile Include="..\src\hlsl\vertexSkinningCS.hlsl">
+      <Filter>Source Files\hlsl</Filter>
+    </FxCompile>
+    <FxCompile Include="..\src\hlsl\shapesVS.hlsl">
+      <Filter>Source Files\hlsl</Filter>
+    </FxCompile>
+    <FxCompile Include="..\src\hlsl\shapesPS.hlsl">
+      <Filter>Source Files\hlsl</Filter>
+    </FxCompile>
+  </ItemGroup>
+</Project>

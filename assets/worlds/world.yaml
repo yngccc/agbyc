@@ -1,19 +1,19 @@
 editorCamera:
-  position: [-14808,37265,-62626]
-  pitchYaw: [0.23653972,0.0891398]
-  moveSpeed: 63.427
+  position: [-26156,16751,123223]
+  pitchYaw: [0.1304593,2.8370326]
+  moveSpeed: 140.086
 skybox:
-  file: skybox\industrial_sunset_02_puresky_4k.dds
+  file: skybox\sunflowers_puresky_4k.dds
 player:
   file: models\robot\gltf\robot.gltf
   scale: [1,1,1]
   rotate: [-0,0,-0,1]
-  translate: [0,0,0]
+  translate: [-0.07436317,0,-3.8146973e-06]
   spawnPosition: [0,0,0]
   walkSpeed: 1
   runSpeed: 5
   idleAnimationIndex: 4
-  walkAnimationIndex: 5
+  walkAnimationIndex: 6
   runAnimationIndex: 2
   jumpAnimationIndex: 0
   cameraLookAtOffset: [0,1,0]
@@ -23,7 +23,7 @@ gameObjects:
     file: models/plane/gltf/plane.gltf
     scale: [1,1,1]
     rotate: [-0,0,-0,1]
-    translate: [0,1.1920929e-07,0]
+    translate: [0,0,0]
   - name: cesiumMan
     file: models\cesiumMan\cesiumMan.gltf
     scale: [2.76,2.76,2.76]
@@ -33,7 +33,7 @@ gameObjects:
     file: models/cube/cube.gltf
     scale: [1,1,1]
     rotate: [-0,0,-0,1]
-    translate: [2.992593,0,0]
+    translate: [2.992593,0,-1.1920929e-07]
   - name: animatedCube
     file: models\animatedCube\AnimatedCube.gltf
     scale: [1,1,1]

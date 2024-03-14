@@ -45,16 +45,16 @@ struct Joint {
 struct Material {
 #ifdef __cplusplus
     float3 diffuse;
-    uint diffuseTextureIndex;
+    uint32 diffuseTextureIndex;
     float3 emissive;
-    uint emissiveTextureIndex;
-    // uint normalTextureIndex;
+    uint32 emissiveTextureIndex;
+    // uint32 normalTextureIndex;
 #else
     float3 diffuse;
     uint diffuseTextureIndex;
     float3 emissive;
     uint emissiveTextureIndex;
-    // uint normalTextureIndex;
+    // uint32 normalTextureIndex;
 #endif
 };
 
@@ -83,15 +83,15 @@ struct RenderInfo {
 #ifdef __cplusplus
     XMMATRIX cameraViewMat;
     XMMATRIX cameraViewMatInverseTranspose;
-    XMMATRIX cameraProjMat;
-    XMMATRIX cameraProjViewMat;
-    //XMMATRIX cameraProjViewInverseMat;
+    XMMATRIX cameraProjectMat;
+    XMMATRIX cameraViewProjectMat;
+    //XMMATRIX cameraProjectViewInverseMat;
 #else
     float4x4 cameraViewMat;
     float4x4 cameraViewMatInverseTranspose;
-    float4x4 cameraProjMat;
-    float4x4 cameraProjViewMat;
-    //float4x4 cameraProjViewInverseMat;
+    float4x4 cameraProjectMat;
+    float4x4 cameraViewProjectMat;
+    //float4x4 cameraViewProjectInverseMat;
 #endif
 };
 
@@ -110,9 +110,9 @@ enum TLASInstanceFlag : uint {
 struct TLASInstanceInfo {
 #ifdef __cplusplus
     ObjectType objectType;
-    uint objectIndex;
-    uint flags;
-    uint blasGeometriesOffset;
+    uint32 objectIndex;
+    uint32 flags;
+    uint32 blasGeometriesOffset;
 #else
     ObjectType objectType;
     uint objectIndex;
@@ -141,8 +141,8 @@ struct RayDesc {
 struct CollisionQuery {
 #ifdef __cplusplus
     RayDesc rayDesc;
-    uint instanceInclusionMask;
-    uint padding[3];
+    uint32 instanceInclusionMask;
+    uint32 padding[3];
 #else
     RayDesc rayDesc;
     uint instanceInclusionMask;
@@ -153,7 +153,7 @@ struct CollisionQuery {
 struct CollisionQueryResult {
 #ifdef __cplusplus
     float3 distance;
-    uint instanceIndex;
+    uint32 instanceIndex;
 #else
     float3 distance;
     uint instanceIndex;

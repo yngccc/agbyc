@@ -17,10 +17,10 @@ float drawCircle(in float3 center, in float radius, in uint2 pixelIndex, in uint
         float d = distance(float2(pixelIndex), centerPixel);
         if (d <= renderTargetSize.y * radius) {
             return 1;
-        } else{
+        } else {
             return 0;
         }
-    } else{
+    } else {
         return 0;
     }
 }
@@ -32,8 +32,9 @@ float drawLine(in float3 p0, in float3 p1, in float thickness, in uint2 pixelInd
     p_1.y = -p_1.y;
     p_0 /= p_0.w;
     p_1 /= p_1.w;
-    p_0.xy = clamp(p_0.xy, float2(-1, -1), float2(1, 1));
-    p_1.xy = clamp(p_1.xy, float2(-1, -1), float2(1, 1));
+    if (p_0.x <= -1 || p_0.x >= 1 || p_0.y <= -1 || p_0.y >= 1 || p_0.z <= 0 || p_0.z >= 1 || p_1.x <= -1 || p_1.x >= 1 || p_1.y <= -1 || p_1.y >= 1 || p_1.z <= 0 || p_1.z >= 1) {
+        return 0;
+    }
     p_0.xy = (p_0.xy + 1.0) * 0.5;
     p_1.xy = (p_1.xy + 1.0) * 0.5;
     p_0.xy *= (float2)renderTargetSize;
@@ -67,7 +68,7 @@ VSOutput vertexShader(uint vertexID : SV_VertexID) {
 }
 
 [RootSignature(rootSig)]
-float4 pixelShader(VSOutput vsOutput) : SV_TARGET{
+float4 pixelShader(VSOutput vsOutput) : SV_TARGET {
     RENDER_INFO_DESCRIPTOR(renderInfo);
     uint2 renderTargetSize = constants.xy;
     uint circleCount = constants.z;
@@ -76,11 +77,11 @@ float4 pixelShader(VSOutput vsOutput) : SV_TARGET{
     float v = 0;
     for (uint circleIndex = 0; circleIndex < circleCount; circleIndex++) {
         ShapeCircle c = shapeCircles[circleIndex];
-        v += drawCircle(c.center, c.radius, pixelIndex, renderTargetSize, renderInfo.cameraProjViewMat);
+        v += drawCircle(c.center, c.radius, pixelIndex, renderTargetSize, renderInfo.cameraViewProjectMat);
     }
     for (uint lineIndex = 0; lineIndex < lineCount; lineIndex++) {
         ShapeLine l = shapeLines[lineIndex];
-        v += drawLine(l.p0, l.p1, l.thickness, pixelIndex, renderTargetSize, renderInfo.cameraProjViewMat);
+        v += drawLine(l.p0, l.p1, l.thickness, pixelIndex, renderTargetSize, renderInfo.cameraViewProjectMat);
     }
     v = saturate(v);
     return float4(1, 1, 1, v * 0.8);

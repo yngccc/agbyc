@@ -1,11 +1,62 @@
-#include <cstdint>
+#include <algorithm>
+#include <array>
+#include <filesystem>
 #include <format>
+#include <fstream>
+#include <list>
+#include <span>
+#include <stack>
+#include <streambuf>
 #include <string>
 #include <vector>
 
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <windowsx.h>
+#include <hidsdi.h>
+#include <shellapi.h>
+#include <shellscalingapi.h>
+#include <shlobj.h>
+#include <userenv.h>
+#include <xinput.h>
+#include <atlbase.h>
+#include <atlconv.h>
+#include <cderr.h>
+#include <commdlg.h>
+
+#include <d3d12.h>
+#include <d3d12sdklayers.h>
+#include <d3dx12.h>
+#include <dxgi1_6.h>
+#include <dxgidebug.h>
+#include <d3d11on12.h>
+#include <dwrite.h>
+#include <d2d1_3.h>
+
+#include <directxtex.h>
 #define _XM_SSE4_INTRINSICS_
 #include <directxmath.h>
 using namespace DirectX;
+
+#include <pix3.h>
+
+#include <rapidyaml/rapidyaml-0.5.0.hpp>
+
+#include <cgltf/cgltf.h>
+
+#include <stb/stb_image.h>
+#include <stb/stb_image_write.h>
+
+#include <imgui/imgui.h>
+#include <imgui/imgui_internal.h>
+#include <imgui/imguizmo.h>
+
+#include <d3d12ma/d3d12memalloc.h>
+
+#include <tracy/tracy/tracy.hpp>
+
+#include <nvapi/nvapi.h>
 
 typedef int8_t int8;
 typedef int16_t int16;
@@ -13,6 +64,7 @@ typedef int64_t int64;
 typedef uint8_t uint8;
 typedef uint16_t uint16;
 typedef uint64_t uint64;
+typedef uint32_t uint32;
 typedef uint32_t uint;
 
 static const float euler = 2.71828182845904523536f;
@@ -25,8 +77,8 @@ static const float sqrt2 = 1.41421356237309504880f;
 #define RADIAN(d) (d * (pi / 180.0f))
 #define DEGREE(r) (r * (180.0f / pi))
 
-template <typename T, uint N>
-constexpr uint countof(const T (&)[N]) { return N; }
+template <typename T, uint32 N>
+constexpr uint32 countof(const T (&)[N]) { return N; }
 
 template <typename T>
 uint64 vectorSizeof(const std::vector<T>& v) { return v.size() * sizeof(T); }
@@ -37,19 +89,19 @@ T align(T x, T2 n) {
     return remainder == 0 ? x : x + ((T)n - remainder);
 }
 
-bool getBit(uint n, uint index) {
+bool getBit(uint32 n, uint32 index) {
     return (n >> index) & 1;
 }
 
-uint setBit(uint n, uint index) {
+uint32 setBit(uint32 n, uint32 index) {
     return n |= (1 << index);
 }
 
-uint unsetBit(uint n, uint index) {
+uint32 unsetBit(uint32 n, uint32 index) {
     return n &= ~(1 << index);
 }
 
-uint toggleBit(uint n, uint index) {
+uint32 toggleBit(uint32 n, uint32 index) {
     return n ^= (1 << index);
 }
 
@@ -69,7 +121,7 @@ struct uint16_4 {
 };
 
 struct uint_4 {
-    uint x = 0, y = 0, z = 0, w = 0;
+    uint32 x = 0, y = 0, z = 0, w = 0;
     std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
 };
 
@@ -150,7 +202,7 @@ struct float4 {
     std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
 };
 
-#define scale  10000.0f // 0.1mm precision
+#define scale 10000.0f // 0.1mm precision
 #define scaleInv 0.0001f
 struct Position {
     int x = 0, y = 0, z = 0;
@@ -204,3 +256,406 @@ XMVECTOR quaternionBetween(float3 v1, float3 v2) {
         return XMQuaternionNormalize(XMVectorSet(u.x, u.y, u.z, c + k));
     }
 }
+
+#include "structsHLSL.h"
+
+enum WindowMode {
+    WindowModeWindowed,
+    WindowModeBorderless,
+    WindowModeFullscreen
+};
+
+struct Settings {
+    WindowMode windowMode = WindowModeWindowed;
+    uint32 windowX = 0, windowY = 0;
+    uint32 windowW = 1920, windowH = 1080;
+    uint32 renderW = 1920, renderH = 1080;
+    DXGI_RATIONAL refreshRate = {60, 1};
+    bool hdr = false;
+};
+
+struct Window {
+    HWND hwnd;
+};
+
+struct DisplayMode {
+    uint32 resolutionW;
+    uint32 resolutionH;
+    std::vector<DXGI_RATIONAL> refreshRates;
+};
+
+struct D3DDescriptor {
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle;
+    D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle;
+};
+
+struct D3D {
+    IDXGIFactory7* dxgiFactory;
+    IDXGIOutput6* dxgiOutput;
+    IDXGIAdapter4* dxgiAdapter;
+    std::vector<DisplayMode> displayModes;
+    ID3D12Device5* device;
+
+    // bool gpuUploadHeapSupported;
+
+    ID3D12CommandQueue* graphicsQueue;
+    ID3D12CommandAllocator* graphicsCmdAllocator;
+    ID3D12GraphicsCommandList4* graphicsCmdList;
+
+    ID3D12Fence* renderDoneFence;
+    HANDLE renderDoneFenceEvent;
+    uint64 renderDoneFenceValue;
+
+    ID3D12Fence* collisionQueriesFence;
+    HANDLE collisionQueriesFenceEvent;
+    uint64 collisionQueriesFenceValue;
+
+    ID3D12CommandQueue* transferQueue;
+    ID3D12CommandAllocator* transferCmdAllocator;
+    ID3D12GraphicsCommandList4* transferCmdList;
+
+    ID3D12Fence* transferDoneFence;
+    HANDLE transferDoneFenceEvent;
+    uint64 transferDoneFenceCounter;
+
+    IDXGISwapChain4* swapChain;
+    DXGI_FORMAT swapChainFormat;
+    ID3D12Resource* swapChainImages[2];
+    D3D12_CPU_DESCRIPTOR_HANDLE swapChainImageRTVDescriptors[2];
+    D3D12_CPU_DESCRIPTOR_HANDLE swapChainImageUAVDescriptors[2];
+
+    ID3D12DescriptorHeap* rtvDescriptorHeap;
+    uint32 rtvDescriptorCount;
+    ID3D12DescriptorHeap* cbvSrvUavDescriptorHeap;
+    uint32 cbvSrvUavDescriptorSize;
+    uint32 cbvSrvUavDescriptorCapacity;
+    uint32 cbvSrvUavDescriptorCount;
+
+    D3D12MA::Allocator* allocator;
+
+    D3D12MA::Allocation* stagingBuffer;
+    uint8* stagingBufferPtr;
+    uint32 stagingBufferOffset = 0;
+
+    D3D12MA::Allocation* constantsBuffer;
+    uint8* constantsBufferPtr;
+    uint32 constantsBufferOffset = 0;
+
+    D3D12MA::Allocation* renderTexture;
+    D3D12MA::Allocation* renderTexturePrevFrame;
+    DXGI_FORMAT renderTextureFormat;
+
+    D3D12MA::Allocation* shapeCirclesBuffer;
+    D3D12MA::Allocation* shapeLinesBuffer;
+    uint8* shapeCirclesBufferPtr;
+    uint8* shapeLinesBufferPtr;
+
+    D3D12MA::Allocation* imguiImage;
+    D3D12MA::Allocation* imguiVertexBuffer;
+    D3D12MA::Allocation* imguiIndexBuffer;
+    uint8* imguiVertexBufferPtr;
+    uint8* imguiIndexBufferPtr;
+
+    D3D12MA::Allocation* directWriteImage;
+
+    D3D12MA::Allocation* defaultMaterialBaseColorImage;
+    D3D12_SHADER_RESOURCE_VIEW_DESC defaultMaterialBaseColorImageSRVDesc;
+
+    D3D12MA::Allocation* tlasInstancesBuildInfosBuffer;
+    D3D12MA::Allocation* tlasInstancesInfosBuffer;
+    D3D12MA::Allocation* blasGeometriesInfosBuffer;
+    uint8* tlasInstancesBuildInfosBufferPtr;
+    uint8* tlasInstancesInfosBufferPtr;
+    uint8* blasGeometriesInfosBufferPtr;
+
+    D3D12MA::Allocation* tlasBuffer;
+    D3D12MA::Allocation* tlasScratchBuffer;
+
+    D3D12MA::Allocation* collisionQueriesBuffer;
+    CollisionQuery* collisionQueriesBufferPtr;
+    D3D12MA::Allocation* collisionQueryResultsUAVBuffer;
+    D3D12MA::Allocation* collisionQueryResultsBuffer;
+    CollisionQueryResult* collisionQueryResultsBufferPtr;
+
+    ID3D12StateObject* renderScene;
+    ID3D12StateObjectProperties* renderSceneProps;
+    ID3D12RootSignature* renderSceneRootSig;
+    void* renderSceneRayGenID;
+    void* renderScenePrimaryRayMissID;
+    void* renderScenePrimaryRayHitGroupID;
+    void* renderSceneSecondaryRayMissID;
+    void* renderSceneSecondaryRayHitGroupID;
+
+    ID3D12StateObject* collisionQuery;
+    ID3D12StateObjectProperties* collisionQueryProps;
+    ID3D12RootSignature* collisionQueryRootSig;
+    void* collisionQueryRayGenID;
+    void* collisionQueryMissID;
+    void* collisionQueryHitGroupID;
+
+    ID3D12PipelineState* vertexSkinning;
+    ID3D12RootSignature* vertexSkinningRootSig;
+
+    ID3D12PipelineState* postProcess;
+    ID3D12RootSignature* postProcessRootSig;
+
+    ID3D12PipelineState* shapes;
+    ID3D12RootSignature* shapesRootSig;
+
+    ID3D12PipelineState* imgui;
+    ID3D12RootSignature* imguiRootSig;
+};
+
+struct DirectWrite {
+    ID3D11Device* d3d11Device;
+    ID3D11DeviceContext* d3d11DeviceContext;
+    ID3D11On12Device* d3d11On12Device;
+    IDXGIDevice* dxgiDevice;
+
+    IDWriteFactory* dWriteFactory;
+    IDWriteTextFormat* dWriteTextFormat;
+    ID2D1SolidColorBrush* dWriteColorBrush;
+
+    ID2D1Factory3* d2dFactory;
+    ID2D1Device1* d2dDevice;
+    ID2D1DeviceContext1* d2dDeviceContext;
+
+    ID3D11Resource* image;
+    IDXGISurface* imageSurface;
+    ID2D1Bitmap1* imageRenderTarget;
+
+    //ID2D1HwndRenderTarget* d2dRenderTarget;
+    //ID2D1SolidColorBrush* d2dBrush;
+};
+
+struct ModelImage {
+    D3D12MA::Allocation* gpuData;
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc;
+};
+
+struct ModelTextureSampler {
+};
+
+struct ModelTexture {
+    ModelImage* image;
+    ModelTextureSampler sampler;
+};
+
+struct ModelMaterial {
+    std::string name;
+    float4 baseColorFactor = {1, 1, 1, 1};
+    ModelTexture* baseColorTexture;
+};
+
+struct ModelPrimitive {
+    uint32 verticesBufferOffset;
+    uint32 verticesCount;
+    uint32 indicesBufferOffset;
+    uint32 indicesCount;
+    ModelMaterial* material;
+};
+
+struct ModelMesh {
+    std::string name;
+    std::vector<ModelPrimitive> primitives;
+    std::vector<Vertex> vertices;
+    std::vector<uint> indices;
+    D3D12MA::Allocation* verticesBuffer;
+    D3D12MA::Allocation* indicesBuffer;
+    D3D12MA::Allocation* blas;
+    D3D12MA::Allocation* blasScratch;
+};
+
+struct ModelNode;
+
+struct ModelJoint {
+    ModelNode* node;
+    XMMATRIX inverseBindMat;
+};
+
+struct ModelSkin {
+    std::vector<ModelJoint> joints;
+};
+
+struct ModelNode {
+    std::string name;
+    ModelNode* parent;
+    std::vector<ModelNode*> children;
+    XMMATRIX globalTransform;
+    XMMATRIX localTransform;
+    ModelMesh* mesh;
+    ModelSkin* skin;
+};
+
+enum ModelAnimationSamplerInterpolation {
+    AnimationSamplerInterpolationLinear,
+    AnimationSamplerInterpolationStep,
+    AnimationSamplerInterpolationCubicSpline,
+};
+
+struct ModelAnimationSamplerKeyFrame {
+    float time = 0;
+    float4 xyzw = {0, 0, 0, 0};
+};
+
+struct ModelAnimationSampler {
+    ModelAnimationSamplerInterpolation interpolation;
+    std::vector<ModelAnimationSamplerKeyFrame> keyFrames;
+};
+
+enum ModelAnimationChannelType {
+    AnimationChannelTypeTranslate,
+    AnimationChannelTypeRotate,
+    AnimationChannelTypeScale
+};
+
+struct ModelAnimationChannel {
+    ModelNode* node;
+    ModelAnimationSampler* sampler;
+    ModelAnimationChannelType type;
+};
+
+struct ModelAnimation {
+    std::string name;
+    std::vector<ModelAnimationChannel> channels;
+    std::vector<ModelAnimationSampler> samplers;
+    double timeLength;
+};
+
+struct Model {
+    std::filesystem::path filePath;
+    cgltf_data* gltfData;
+    std::vector<ModelNode> nodes;
+    std::vector<ModelNode*> rootNodes;
+    std::vector<ModelNode*> meshNodes;
+    std::vector<ModelMesh> meshes;
+    std::vector<ModelSkin> skins;
+    ModelNode* skeletonRootNode;
+    std::vector<ModelAnimation> animations;
+    std::vector<ModelMaterial> materials;
+    std::vector<ModelTexture> textures;
+    std::vector<ModelImage> images;
+};
+
+struct ModelInstanceSkin {
+    std::vector<XMMATRIX> mats;
+    D3D12MA::Allocation* matsBuffer;
+    uint8* matsBufferPtr;
+};
+
+struct ModelInstanceMeshNode {
+    XMMATRIX transformMat;
+    D3D12MA::Allocation* verticesBuffer;
+    D3D12MA::Allocation* blas;
+    D3D12MA::Allocation* blasScratch;
+};
+
+struct ModelInstance {
+    Model* model;
+    Transform transform;
+    std::vector<ModelInstanceMeshNode> meshNodes;
+    ModelAnimation* animation;
+    double animationTime;
+    std::vector<Transform> localTransforms;
+    std::vector<XMMATRIX> globalTransformMats;
+    std::vector<ModelInstanceSkin> skins;
+};
+
+struct CameraPlayer {
+    Position position;
+    Position lookAt;
+    float3 lookAtOffset;
+    float2 pitchYaw;
+    float distance;
+    float fovVertical = 50;
+};
+
+struct CameraEditor {
+    Position position;
+    Position lookAt;
+    float2 pitchYaw;
+    float fovVertical = 50;
+    float moveSpeed = 1;
+};
+
+enum PlayerState {
+    PlayerStateIdle,
+    PlayerStateWalk,
+    PlayerStateRun,
+    PlayerStateJump,
+};
+
+struct PlayerStateTransition {
+};
+
+struct Player {
+    ModelInstance modelInstance;
+    Position spawnPosition;
+    Position position;
+    float3 PitchYawRoll;
+    float walkSpeed;
+    float runSpeed;
+    float3 movement;
+    PlayerState state;
+    float3 velocity;
+    float3 acceleration;
+    uint32 idleAnimationIndex;
+    uint32 walkAnimationIndex;
+    uint32 runAnimationIndex;
+    uint32 jumpAnimationIndex;
+    CameraPlayer camera;
+};
+
+struct Skybox {
+    std::filesystem::path hdriTextureFilePath;
+    D3D12MA::Allocation* hdriTexture;
+};
+
+struct GameObject {
+    std::string name;
+    ModelInstance modelInstance;
+    Position spawnPosition;
+    Position position;
+    bool toBeDeleted;
+};
+
+enum EditorUndoType {
+    WorldEditorUndoTypeObjectDeletion
+};
+
+struct EditorUndoObjectDeletion {
+    ObjectType objectType;
+    void* object;
+};
+
+struct EditorUndo {
+    EditorUndoType type;
+    union {
+        EditorUndoObjectDeletion* objectDeletion;
+    };
+};
+
+struct Editor {
+    bool active = true;
+    CameraEditor camera;
+    bool cameraMoving;
+    ObjectType selectedObjectType;
+    uint32 selectedObjectIndex;
+    std::stack<EditorUndo> undos;
+};
+
+struct Controller {
+    bool back, start;
+    bool a, b, x, y;
+    bool up, down, left, right;
+    bool lb, rb;
+    bool ls, rs;
+    float lt, rt;
+    float lsX, lsY, rsX, rsY;
+
+    float backDownDuration, startDownDuration;
+    float aDownDuration, bDownDuration, xDownDuration, yDownDuration;
+    float upDownDuration, downDownDuration, leftDownDuration, rightDownDuration;
+    float lbDownDuration, rbDownDuration;
+    float lsDownDuration, rsDownDuration;
+};

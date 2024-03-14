@@ -31,7 +31,7 @@ void rayGen() {
     BVH_DESCRIPTOR(bvh);
     TLAS_INSTANCES_INFOS_DESCRIPTOR(instanceInfos);
 
-    RayDesc primaryRay = pinholeCameraRay(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjMat);
+    RayDesc primaryRay = pinholeCameraRay(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjectMat);
     PrimaryRayPayload primaryRayPayload;
     TraceRay(bvh, RAY_FLAG_NONE, 0xff, 0, 0, 0, primaryRay, primaryRayPayload);
     renderTexture[pixelIndex] = float4(primaryRayPayload.color.rgb, 1);
