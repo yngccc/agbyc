@@ -86,10 +86,10 @@
     <FxCompile Include="..\src\hlsl\imguiVS.hlsl">
       <Filter>Source Files\hlsl</Filter>
     </FxCompile>
-    <FxCompile Include="..\src\hlsl\postProcessPS.hlsl">
+    <FxCompile Include="..\src\hlsl\compositePS.hlsl">
       <Filter>Source Files\hlsl</Filter>
     </FxCompile>
-    <FxCompile Include="..\src\hlsl\postProcessVS.hlsl">
+    <FxCompile Include="..\src\hlsl\compositeVS.hlsl">
       <Filter>Source Files\hlsl</Filter>
     </FxCompile>
     <FxCompile Include="..\src\hlsl\renderScene.hlsl">

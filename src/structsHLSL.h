@@ -4,12 +4,14 @@ struct Vertex {
 #ifdef __cplusplus
     float3 position;
     float3 normal;
+    float4 tangent;  // bitangent = cross(normal, tangent.xyz) * tangent.w
     float2 uv;
     uint16_4 joints;
     float4 jointWeights;
 #else
     float3 position;
     float3 normal;
+    float4 tangent;
     float2 uv;
     uint16_t joints[4];
     float4 jointWeights;
@@ -84,14 +86,14 @@ struct RenderInfo {
     XMMATRIX cameraViewMat;
     XMMATRIX cameraViewMatInverseTranspose;
     XMMATRIX cameraProjectMat;
-    XMMATRIX cameraViewProjectMat;
-    //XMMATRIX cameraProjectViewInverseMat;
+    // XMMATRIX cameraViewProjectMat;
+    // XMMATRIX cameraProjectViewInverseMat;
 #else
     float4x4 cameraViewMat;
     float4x4 cameraViewMatInverseTranspose;
     float4x4 cameraProjectMat;
-    float4x4 cameraViewProjectMat;
-    //float4x4 cameraViewProjectInverseMat;
+    // float4x4 cameraViewProjectMat;
+    // float4x4 cameraViewProjectInverseMat;
 #endif
 };
 
@@ -160,26 +162,33 @@ struct CollisionQueryResult {
 #endif
 };
 
+enum CompositeFlag : uint {
+    CompositeFlagHDR = 0x01,
+    CompositeFlagDirectWrite = 0x01 << 1,
+};
+
 struct ShapeCircle {
 #ifdef __cplusplus
-    float3 center;
+    float2 center;
     float radius;
+    float padding;
 #else
-    float3 center;
+    float2 center;
     float radius;
+    float padding;
 #endif
 };
 
 struct ShapeLine {
 #ifdef __cplusplus
-    float3 p0;
+    float2 p0;
+    float2 p1;
     float thickness;
-    float3 p1;
-    float padding;
+    float3 padding;
 #else
-    float3 p0;
+    float2 p0;
+    float2 p1;
     float thickness;
-    float3 p1;
-    float padding;
+    float3 padding;
 #endif
 };

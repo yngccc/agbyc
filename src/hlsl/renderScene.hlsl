@@ -34,7 +34,7 @@ void rayGen() {
     RayDesc primaryRay = pinholeCameraRay(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjectMat);
     PrimaryRayPayload primaryRayPayload;
     TraceRay(bvh, RAY_FLAG_NONE, 0xff, 0, 0, 0, primaryRay, primaryRayPayload);
-    renderTexture[pixelIndex] = float4(primaryRayPayload.color.rgb, 1);
+    renderTexture[pixelIndex] = float4(primaryRayPayload.color, 1);
 }
 
 [shader("miss")]

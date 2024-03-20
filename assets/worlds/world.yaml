@@ -1,7 +1,7 @@
 editorCamera:
-  position: [-26156,16751,123223]
-  pitchYaw: [0.1304593,2.8370326]
-  moveSpeed: 140.086
+  position: [-507609,43110,542376]
+  pitchYaw: [-0.016242411,2.686049]
+  moveSpeed: 383.826
 skybox:
   file: skybox\sunflowers_puresky_4k.dds
 player:
@@ -21,9 +21,9 @@ player:
 gameObjects:
   - name: referencePlane
     file: models/plane/gltf/plane.gltf
-    scale: [1,1,1]
+    scale: [1,1.0000002,1]
     rotate: [-0,0,-0,1]
-    translate: [0,0,0]
+    translate: [0,-1.1920929e-07,9.536743e-07]
   - name: cesiumMan
     file: models\cesiumMan\cesiumMan.gltf
     scale: [2.76,2.76,2.76]
@@ -58,4 +58,4 @@ gameObjects:
     file: models\robot\gltf\robot.gltf
     scale: [1,1,1]
     rotate: [-0,0,-0,1]
-    translate: [0,0,7.751974]
+    translate: [0,0,8.20654]

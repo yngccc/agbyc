@@ -35,6 +35,14 @@ static std::vector<BLASGeometryInfo> blasGeometriesInfos;
 static std::vector<ShapeCircle> shapeCircles;
 static std::vector<ShapeLine> shapeLines;
 
+static XMMATRIX cameraViewMat;
+static XMMATRIX cameraViewMatInverseTranspose;
+static XMMATRIX cameraProjectMat;
+static XMMATRIX cameraViewProjectMat;
+static XMMATRIX cameraViewProjectInverseMat;
+
+static bool showMenu = false;
+
 static Editor* editor = new Editor();
 static float editorCameraMoveSpeedMax = 1000.0f;
 static ImVec2 editorMainMenuBarPos = {};
@@ -375,9 +383,9 @@ void d3dTransferQueueWait() {
     }
 }
 
-D3D12MA::Allocation* d3dCreateImage(const D3D12MA::ALLOCATION_DESC& allocDesc, const D3D12_RESOURCE_DESC& resourceDesc, D3D12_SUBRESOURCE_DATA* imageMipsData, const wchar_t* name = nullptr) {
+D3D12MA::Allocation* d3dCreateImage(const D3D12MA::ALLOCATION_DESC& allocDesc, D3D12_CLEAR_VALUE* clearValue, const D3D12_RESOURCE_DESC& resourceDesc, D3D12_SUBRESOURCE_DATA* imageMipsData, const wchar_t* name) {
     D3D12MA::Allocation* image;
-    assert(SUCCEEDED(d3d.allocator->CreateResource(&allocDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image, {}, nullptr)));
+    assert(SUCCEEDED(d3d.allocator->CreateResource(&allocDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, clearValue, &image, {}, nullptr)));
     if (name) {
         image->GetResource()->SetName(name);
     }
@@ -396,10 +404,6 @@ D3D12MA::Allocation* d3dCreateImage(const D3D12MA::ALLOCATION_DESC& allocDesc, c
         d3d.stagingBufferOffset += (uint)requiredSize;
     }
     return image;
-}
-
-D3D12MA::Allocation* d3dCreateImage(const D3D12_RESOURCE_DESC& resourceDesc, D3D12_SUBRESOURCE_DATA* imageMipsData, const wchar_t* name = nullptr) {
-    return d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, resourceDesc, imageMipsData, name);
 }
 
 D3D12MA::Allocation* d3dCreateImageSTB(const std::filesystem::path& ddsFilePath, const wchar_t* name = nullptr) {
@@ -482,9 +486,10 @@ void d3dRayTracingValidationCallBack(void* pUserData, NVAPI_D3D12_RAYTRACING_VAL
 
 void d3dInit() {
     bool debug = commandLineContain(L"d3ddebug");
+    // debug = false;
     uint factoryFlags = 0;
     if (debug) {
-        factoryFlags = DXGI_CREATE_FACTORY_DEBUG;
+        factoryFlags = factoryFlags | DXGI_CREATE_FACTORY_DEBUG;
         ID3D12Debug1* debug;
         assert(SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))));
         debug->EnableDebugLayer();
@@ -499,8 +504,8 @@ void d3dInit() {
     assert(SUCCEEDED(D3D12CreateDevice(d3d.dxgiAdapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&d3d.device))));
     if (debug) {
         ID3D12InfoQueue1* infoQueue;
-        assert(SUCCEEDED(d3d.device->QueryInterface(IID_PPV_ARGS(&infoQueue))));
         DWORD callbackCookie;
+        assert(SUCCEEDED(d3d.device->QueryInterface(IID_PPV_ARGS(&infoQueue))));
         assert(SUCCEEDED(infoQueue->RegisterMessageCallback(d3dMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &callbackCookie)));
     }
     assert(SUCCEEDED(d3d.dxgiAdapter->GetDesc(&dxgiAdapterDesc)));
@@ -691,17 +696,18 @@ void d3dInit() {
             ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&imguiTextureData, &imguiTextureWidth, &imguiTextureHeight);
             D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint64)imguiTextureWidth, .Height = (uint)imguiTextureHeight, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
             D3D12_SUBRESOURCE_DATA data = {.pData = imguiTextureData, .RowPitch = imguiTextureWidth * 4, .SlicePitch = imguiTextureWidth * imguiTextureHeight * 4};
-            d3d.imguiImage = d3dCreateImage(desc, &data, L"imguiImage");
+            d3d.imguiImage = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, nullptr, desc, &data, L"imguiImage");
         }
         {
-            D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = 1024, .Height = 1024, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}, .Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
-            d3d.directWriteImage = d3dCreateImage(desc, nullptr, L"directWrite");
+            D3D12_CLEAR_VALUE clearValue = {.Format = DXGI_FORMAT_R8G8B8A8_UNORM, .Color = {0.0f, 0.0f, 0.0f, 0.0f}};
+            D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = settings.renderW, .Height = settings.renderH, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}, .Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
+            d3d.directWriteImage = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, &clearValue, desc, nullptr, L"directWrite");
         }
         {
             uint8_4 defaultMaterialBaseColorImageData[4] = {{255, 255, 255, 255}, {255, 255, 255, 255}, {255, 255, 255, 255}, {255, 255, 255, 255}};
             D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = 2, .Height = 2, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
             D3D12_SUBRESOURCE_DATA data = {.pData = defaultMaterialBaseColorImageData, .RowPitch = 8, .SlicePitch = 16};
-            d3d.defaultMaterialBaseColorImage = d3dCreateImage(desc, &data, L"defaultMaterialBaseColorImage");
+            d3d.defaultMaterialBaseColorImage = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, nullptr, desc, &data, L"defaultMaterialBaseColorImage");
             d3d.defaultMaterialBaseColorImageSRVDesc = {.Format = desc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = desc.MipLevels}};
         }
         D3D12_RESOURCE_BARRIER barriers[] = {
@@ -723,22 +729,22 @@ void d3dUpdateShaders() {
         if (lastWriteTime > prevLastWriteTime) {
             prevLastWriteTime = lastWriteTime;
             d3dWaitForRender();
-            if (d3d.renderScene) d3d.renderScene->Release();
-            if (d3d.renderSceneProps) d3d.renderSceneProps->Release();
+            if (d3d.renderScenePSO) d3d.renderScenePSO->Release();
+            if (d3d.renderScenePSOProps) d3d.renderScenePSOProps->Release();
             if (d3d.renderSceneRootSig) d3d.renderSceneRootSig->Release();
             std::vector<uint8> rtByteCode = fileReadBytes(shaderPath);
             D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"primaryRayMiss"}, {L"primaryRayHitGroup"}, {L"primaryRayClosestHit"}, {L"secondaryRayMiss"}, {L"secondaryRayHitGroup"}, {L"secondaryRayClosestHit"}};
             D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
             D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
             D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
-            assert(SUCCEEDED(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.renderScene))));
-            assert(SUCCEEDED(d3d.renderScene->QueryInterface(IID_PPV_ARGS(&d3d.renderSceneProps))));
+            assert(SUCCEEDED(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.renderScenePSO))));
+            assert(SUCCEEDED(d3d.renderScenePSO->QueryInterface(IID_PPV_ARGS(&d3d.renderScenePSOProps))));
             assert(SUCCEEDED(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.renderSceneRootSig))));
-            assert(d3d.renderSceneRayGenID = d3d.renderSceneProps->GetShaderIdentifier(L"rayGen"));
-            assert(d3d.renderScenePrimaryRayMissID = d3d.renderSceneProps->GetShaderIdentifier(L"primaryRayMiss"));
-            assert(d3d.renderScenePrimaryRayHitGroupID = d3d.renderSceneProps->GetShaderIdentifier(L"primaryRayHitGroup"));
-            assert(d3d.renderSceneSecondaryRayMissID = d3d.renderSceneProps->GetShaderIdentifier(L"secondaryRayMiss"));
-            assert(d3d.renderSceneSecondaryRayHitGroupID = d3d.renderSceneProps->GetShaderIdentifier(L"secondaryRayHitGroup"));
+            assert(d3d.renderSceneRayGenID = d3d.renderScenePSOProps->GetShaderIdentifier(L"rayGen"));
+            assert(d3d.renderScenePrimaryRayMissID = d3d.renderScenePSOProps->GetShaderIdentifier(L"primaryRayMiss"));
+            assert(d3d.renderScenePrimaryRayHitGroupID = d3d.renderScenePSOProps->GetShaderIdentifier(L"primaryRayHitGroup"));
+            assert(d3d.renderSceneSecondaryRayMissID = d3d.renderScenePSOProps->GetShaderIdentifier(L"secondaryRayMiss"));
+            assert(d3d.renderSceneSecondaryRayHitGroupID = d3d.renderScenePSOProps->GetShaderIdentifier(L"secondaryRayHitGroup"));
         }
     }
     {
@@ -748,7 +754,7 @@ void d3dUpdateShaders() {
         if (lastWriteTime > prevLastWriteTime) {
             prevLastWriteTime = lastWriteTime;
             d3dWaitForRender();
-            if (d3d.collisionQuery) d3d.collisionQuery->Release();
+            if (d3d.collisionQueryPSO) d3d.collisionQueryPSO->Release();
             if (d3d.collisionQueryProps) d3d.collisionQueryProps->Release();
             if (d3d.collisionQueryRootSig) d3d.collisionQueryRootSig->Release();
             std::vector<uint8> rtByteCode = fileReadBytes(shaderPath);
@@ -756,8 +762,8 @@ void d3dUpdateShaders() {
             D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
             D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
             D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
-            assert(SUCCEEDED(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.collisionQuery))));
-            assert(SUCCEEDED(d3d.collisionQuery->QueryInterface(IID_PPV_ARGS(&d3d.collisionQueryProps))));
+            assert(SUCCEEDED(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.collisionQueryPSO))));
+            assert(SUCCEEDED(d3d.collisionQueryPSO->QueryInterface(IID_PPV_ARGS(&d3d.collisionQueryProps))));
             assert(SUCCEEDED(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.collisionQueryRootSig))));
             assert(d3d.collisionQueryRayGenID = d3d.collisionQueryProps->GetShaderIdentifier(L"rayGen"));
             assert(d3d.collisionQueryMissID = d3d.collisionQueryProps->GetShaderIdentifier(L"miss"));
@@ -771,17 +777,17 @@ void d3dUpdateShaders() {
         if (lastWriteTime > prevLastWriteTime) {
             prevLastWriteTime = lastWriteTime;
             d3dWaitForRender();
-            if (d3d.vertexSkinning) d3d.vertexSkinning->Release();
+            if (d3d.vertexSkinningPSO) d3d.vertexSkinningPSO->Release();
             if (d3d.vertexSkinningRootSig) d3d.vertexSkinningRootSig->Release();
             std::vector<uint8> csByteCode = fileReadBytes(shaderPath);
             D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {.pRootSignature = d3d.vertexSkinningRootSig, .CS = {.pShaderBytecode = csByteCode.data(), .BytecodeLength = csByteCode.size()}};
-            assert(SUCCEEDED(d3d.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&d3d.vertexSkinning))));
+            assert(SUCCEEDED(d3d.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&d3d.vertexSkinningPSO))));
             assert(SUCCEEDED(d3d.device->CreateRootSignature(0, csByteCode.data(), csByteCode.size(), IID_PPV_ARGS(&d3d.vertexSkinningRootSig))));
         }
     }
     {
-        static std::filesystem::path shaderPathVS = exeDir / "postProcessVS.cso";
-        static std::filesystem::path shaderPathPS = exeDir / "postProcessPS.cso";
+        static std::filesystem::path shaderPathVS = exeDir / "compositeVS.cso";
+        static std::filesystem::path shaderPathPS = exeDir / "compositePS.cso";
         static std::filesystem::file_time_type prevLastWriteTimeVS = {};
         static std::filesystem::file_time_type prevLastWriteTimePS = {};
         std::filesystem::file_time_type lastWriteTimeVS = std::filesystem::last_write_time(shaderPathVS);
@@ -790,8 +796,8 @@ void d3dUpdateShaders() {
             prevLastWriteTimeVS = lastWriteTimeVS;
             prevLastWriteTimePS = lastWriteTimePS;
             d3dWaitForRender();
-            if (d3d.postProcess) d3d.postProcess->Release();
-            if (d3d.postProcessRootSig) d3d.postProcessRootSig->Release();
+            if (d3d.compositePSO) d3d.compositePSO->Release();
+            if (d3d.compositeRootSig) d3d.compositeRootSig->Release();
             std::vector<uint8> vsByteCode = fileReadBytes(shaderPathVS);
             std::vector<uint8> psByteCode = fileReadBytes(shaderPathPS);
             D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {
@@ -805,8 +811,8 @@ void d3dUpdateShaders() {
                 .RTVFormats = {d3d.swapChainFormat},
                 .SampleDesc = {.Count = 1},
             };
-            assert(SUCCEEDED(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.postProcess))));
-            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, psByteCode.data(), psByteCode.size(), IID_PPV_ARGS(&d3d.postProcessRootSig))));
+            assert(SUCCEEDED(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.compositePSO))));
+            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, psByteCode.data(), psByteCode.size(), IID_PPV_ARGS(&d3d.compositeRootSig))));
         }
     }
     {
@@ -820,7 +826,7 @@ void d3dUpdateShaders() {
             prevLastWriteTimeVS = lastWriteTimeVS;
             prevLastWriteTimePS = lastWriteTimePS;
             d3dWaitForRender();
-            if (d3d.shapes) d3d.shapes->Release();
+            if (d3d.shapesPSO) d3d.shapesPSO->Release();
             if (d3d.shapesRootSig) d3d.shapesRootSig->Release();
             std::vector<uint8> vsByteCode = fileReadBytes(shaderPathVS);
             std::vector<uint8> psByteCode = fileReadBytes(shaderPathPS);
@@ -848,7 +854,7 @@ void d3dUpdateShaders() {
                 .RTVFormats = {d3d.swapChainFormat},
                 .SampleDesc = {.Count = 1},
             };
-            assert(SUCCEEDED(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.shapes))));
+            assert(SUCCEEDED(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.shapesPSO))));
             assert(SUCCEEDED(d3d.device->CreateRootSignature(0, psByteCode.data(), psByteCode.size(), IID_PPV_ARGS(&d3d.shapesRootSig))));
         }
     }
@@ -863,7 +869,7 @@ void d3dUpdateShaders() {
             prevLastWriteTimeVS = lastWriteTimeVS;
             prevLastWriteTimePS = lastWriteTimePS;
             d3dWaitForRender();
-            if (d3d.imgui) d3d.imgui->Release();
+            if (d3d.imguiPSO) d3d.imguiPSO->Release();
             if (d3d.imguiRootSig) d3d.imguiRootSig->Release();
             std::vector<uint8> vsByteCode = fileReadBytes(shaderPathVS);
             std::vector<uint8> psByteCode = fileReadBytes(shaderPathPS);
@@ -894,7 +900,7 @@ void d3dUpdateShaders() {
                 .RTVFormats = {d3d.swapChainFormat},
                 .SampleDesc = {.Count = 1},
             };
-            assert(SUCCEEDED(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.imgui))));
+            assert(SUCCEEDED(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.imguiPSO))));
             assert(SUCCEEDED(d3d.device->CreateRootSignature(0, vsByteCode.data(), vsByteCode.size(), IID_PPV_ARGS(&d3d.imguiRootSig))));
         }
     }
@@ -990,13 +996,13 @@ void directWriteInit() {
     assert(SUCCEEDED(directWrite.dWriteFactory->CreateTextFormat(L"Verdana", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 50.0f, L"en-us", &directWrite.dWriteTextFormat)));
     assert(SUCCEEDED(directWrite.dWriteTextFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)));
     assert(SUCCEEDED(directWrite.dWriteTextFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)));
-    assert(SUCCEEDED(directWrite.d2dDeviceContext->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &directWrite.dWriteColorBrush)));
+    assert(SUCCEEDED(directWrite.d2dDeviceContext->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White, 1.0f), &directWrite.dWriteColorBrush)));
 
     D3D11_RESOURCE_FLAGS flags = {.BindFlags = D3D11_BIND_RENDER_TARGET};
     assert(SUCCEEDED(directWrite.d3d11On12Device->CreateWrappedResource(d3d.directWriteImage->GetResource(), &flags, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET, IID_PPV_ARGS(&directWrite.image))));
     assert(SUCCEEDED(directWrite.image->QueryInterface(IID_PPV_ARGS(&directWrite.imageSurface))));
     float dpi = (float)GetDpiForWindow(window.hwnd);
-    D2D1_BITMAP_PROPERTIES1 bitmapProperties = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM, D2D1_ALPHA_MODE_IGNORE), dpi, dpi);
+    D2D1_BITMAP_PROPERTIES1 bitmapProperties = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), dpi, dpi);
     assert(SUCCEEDED(directWrite.d2dDeviceContext->CreateBitmapFromDxgiSurface(directWrite.imageSurface, &bitmapProperties, &directWrite.imageRenderTarget)));
 }
 
@@ -1018,15 +1024,67 @@ void modelTraverseNodesAndGetGlobalTransforms(Model* model, ModelNode* node, con
     }
 }
 
-void modelTraverseNodesAndGetPositions(Model* model, ModelNode* node, std::vector<XMMATRIX>& nodeGlobalTransformMats, std::vector<ShapeCircle>& circles, std::vector<ShapeLine>& lines) {
+void modelTraverseNodesAndGetPositions(Model* model, ModelNode* node, std::vector<XMMATRIX>& nodeGlobalTransformMats) {
     int64 nodeIndex = node - &model->nodes[0];
-    XMVECTOR position = XMVector3Transform(XMVectorSet(0, 0, 0, 1), nodeGlobalTransformMats[nodeIndex]);
-    circles.push_back(ShapeCircle{.center = Position(position) - editor->camera.position, .radius = 0.005f});
+    float3 nodePosition = Position(XMVector4Transform(XMVectorSet(0, 0, 0, 1), nodeGlobalTransformMats[nodeIndex])) - editor->camera.position;
+    XMVECTOR nodePositionViewSpace = XMVector4Transform(nodePosition.toXMVector(), cameraViewMat);
+    XMVECTOR nodePositionClipSpace = XMVector4Transform(nodePositionViewSpace, cameraProjectMat);
+    float4 nodePositionNDCSpace = nodePositionClipSpace;
+    nodePositionNDCSpace /= nodePositionNDCSpace.w;
+    BoundingFrustum frustum(cameraProjectMat);
+    ContainmentType frustumContainsNode = frustum.Contains(nodePositionViewSpace);
+    if (frustumContainsNode == CONTAINS) {
+        shapeCircles.push_back(ShapeCircle{.center = (float2(nodePositionNDCSpace.x, -nodePositionNDCSpace.y) + 1.0f) * 0.5f, .radius = 0.005f});
+    }
     for (ModelNode* childNode : node->children) {
         int64 childNodeIndex = childNode - &model->nodes[0];
-        XMVECTOR childPosition = XMVector3Transform(XMVectorSet(0, 0, 0, 1), nodeGlobalTransformMats[childNodeIndex]);
-        lines.push_back(ShapeLine{.p0 = Position(position) - editor->camera.position, .thickness = 0.0015f, .p1 = Position(childPosition) - editor->camera.position});
-        modelTraverseNodesAndGetPositions(model, childNode, nodeGlobalTransformMats, circles, lines);
+        float3 childNodePosition = Position(XMVector3Transform(XMVectorSet(0, 0, 0, 1), nodeGlobalTransformMats[childNodeIndex])) - editor->camera.position;
+        XMVECTOR childNodePositionViewSpace = XMVector4Transform(childNodePosition.toXMVector(), cameraViewMat);
+        XMVECTOR childNodePositionClipSpace = XMVector4Transform(childNodePositionViewSpace, cameraProjectMat);
+        float4 childNodePositionNDCSpace = childNodePositionClipSpace;
+        childNodePositionNDCSpace /= childNodePositionNDCSpace.w;
+        ContainmentType frustumContainsChildNode = frustum.Contains(childNodePositionViewSpace);
+        if (frustumContainsNode && frustumContainsChildNode) {
+            shapeLines.push_back(ShapeLine{.p0 = (float2(nodePositionNDCSpace.x, -nodePositionNDCSpace.y) + 1.0f) * 0.5f, .p1 = (float2(childNodePositionNDCSpace.x, -childNodePositionNDCSpace.y) + 1.0f) * 0.5f, .thickness = 0.0015f});
+        } else if (!frustumContainsNode && !frustumContainsChildNode) {
+            float t;
+            XMVECTOR dir = XMVector3Normalize(XMVectorSubtract(nodePositionViewSpace, childNodePositionViewSpace));
+            if (frustum.Intersects(childNodePositionViewSpace, dir, t)) {
+                XMVECTOR intersection0ViewSpace = XMVectorAdd(childNodePositionViewSpace, XMVectorMultiply(dir, XMVectorSet(t, t, t, 0)));
+                XMVECTOR intersection0ClipSpace = XMVector4Transform(intersection0ViewSpace, cameraProjectMat);
+                float4 intersection0NDCSpace = intersection0ClipSpace;
+                intersection0NDCSpace /= intersection0NDCSpace.w;
+                dir = XMVectorNegate(dir);
+                if (frustum.Intersects(nodePositionViewSpace, dir, t)) {
+                    XMVECTOR intersection1ViewSpace = XMVectorAdd(nodePositionViewSpace, XMVectorMultiply(dir, XMVectorSet(t, t, t, 0)));
+                    XMVECTOR intersection1ClipSpace = XMVector4Transform(intersection1ViewSpace, cameraProjectMat);
+                    float4 intersection1NDCSpace = intersection1ClipSpace;
+                    intersection1NDCSpace /= intersection1NDCSpace.w;
+                    shapeLines.push_back(ShapeLine{.p0 = (float2(intersection0NDCSpace.x, -intersection0NDCSpace.y) + 1.0f) * 0.5f, .p1 = (float2(intersection1NDCSpace.x, -intersection1NDCSpace.y) + 1.0f) * 0.5f, .thickness = 0.0015f});
+                }
+            }
+        } else if (frustumContainsNode) {
+            float t;
+            XMVECTOR dir = XMVector3Normalize(XMVectorSubtract(nodePositionViewSpace, childNodePositionViewSpace));
+            if (frustum.Intersects(childNodePositionViewSpace, dir, t)) {
+                XMVECTOR intersectionViewSpace = XMVectorAdd(childNodePositionViewSpace, XMVectorMultiply(dir, XMVectorSet(t, t, t, 0)));
+                XMVECTOR intersectionClipSpace = XMVector4Transform(intersectionViewSpace, cameraProjectMat);
+                float4 intersectionNDCSpace = intersectionClipSpace;
+                intersectionNDCSpace /= intersectionNDCSpace.w;
+                shapeLines.push_back(ShapeLine{.p0 = (float2(nodePositionNDCSpace.x, -nodePositionNDCSpace.y) + 1.0f) * 0.5f, .p1 = (float2(intersectionNDCSpace.x, -intersectionNDCSpace.y) + 1.0f) * 0.5f, .thickness = 0.0015f});
+            }
+        } else if (frustumContainsChildNode) {
+            float t;
+            XMVECTOR dir = XMVector3Normalize(XMVectorSubtract(childNodePositionViewSpace, nodePositionViewSpace));
+            if (frustum.Intersects(nodePositionViewSpace, dir, t)) {
+                XMVECTOR intersectionViewSpace = XMVectorAdd(nodePositionViewSpace, XMVectorMultiply(dir, XMVectorSet(t, t, t, 0)));
+                XMVECTOR intersectionClipSpace = XMVector4Transform(intersectionViewSpace, cameraProjectMat);
+                float4 intersectionNDCSpace = intersectionClipSpace;
+                intersectionNDCSpace /= intersectionNDCSpace.w;
+                shapeLines.push_back(ShapeLine{.p0 = (float2(intersectionNDCSpace.x, -intersectionNDCSpace.y) + 1.0f) * 0.5f, .p1 = (float2(childNodePositionNDCSpace.x, -childNodePositionNDCSpace.y) + 1.0f) * 0.5f, .thickness = 0.0015f});
+            }
+        }
+        modelTraverseNodesAndGetPositions(model, childNode, nodeGlobalTransformMats);
     }
 }
 
@@ -1120,6 +1178,7 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
                 cgltf_accessor* indices = gltfPrimitive.indices;
                 cgltf_accessor* positions = nullptr;
                 cgltf_accessor* normals = nullptr;
+                cgltf_accessor* tangents = nullptr;
                 cgltf_accessor* uvs = nullptr;
                 cgltf_accessor* jointIndices = nullptr;
                 cgltf_accessor* jointWeights = nullptr;
@@ -1128,6 +1187,8 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
                         positions = attribute.data;
                     } else if (attribute.type == cgltf_attribute_type_normal) {
                         normals = attribute.data;
+                    } else if (attribute.type == cgltf_attribute_type_tangent) {
+                        tangents = attribute.data;
                     } else if (attribute.type == cgltf_attribute_type_texcoord) {
                         uvs = attribute.data;
                     } else if (attribute.type == cgltf_attribute_type_joints) {
@@ -1141,12 +1202,14 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
                 assert(indices->count % 3 == 0 && indices->type == cgltf_type_scalar && (indices->component_type == cgltf_component_type_r_16u || indices->component_type == cgltf_component_type_r_32u));
                 assert(positions->type == cgltf_type_vec3 && positions->component_type == cgltf_component_type_r_32f);
                 assert(normals->count == positions->count && normals->type == cgltf_type_vec3 && normals->component_type == cgltf_component_type_r_32f);
-                if (uvs) assert(uvs->count == positions->count && uvs->component_type == cgltf_component_type_r_32f && uvs->type == cgltf_type_vec2);
+                if (tangents) assert(tangents->count == positions->count && tangents->type == cgltf_type_vec4 && tangents->component_type == cgltf_component_type_r_32f);
+                if (uvs) assert(uvs->count == positions->count && uvs->type == cgltf_type_vec2 && uvs->component_type == cgltf_component_type_r_32f);
                 if (jointIndices) assert(jointIndices->count == positions->count && (jointIndices->component_type == cgltf_component_type_r_16u || jointIndices->component_type == cgltf_component_type_r_8u) && jointIndices->type == cgltf_type_vec4 && (jointIndices->stride == 8 || jointIndices->stride == 4));
                 if (jointWeights) assert(jointWeights->count == positions->count && jointWeights->component_type == cgltf_component_type_r_32f && jointWeights->type == cgltf_type_vec4 && jointWeights->stride == 16);
+                void* indicesBuffer = (uint8*)(indices->buffer_view->buffer->data) + indices->offset + indices->buffer_view->offset;
                 float3* positionsBuffer = (float3*)((uint8*)(positions->buffer_view->buffer->data) + positions->offset + positions->buffer_view->offset);
                 float3* normalsBuffer = (float3*)((uint8*)(normals->buffer_view->buffer->data) + normals->offset + normals->buffer_view->offset);
-                void* indicesBuffer = (uint8*)(indices->buffer_view->buffer->data) + indices->offset + indices->buffer_view->offset;
+                float4* tangentsBuffer = tangents ? (float4*)((uint8*)(tangents->buffer_view->buffer->data) + tangents->offset + tangents->buffer_view->offset) : nullptr;
                 float2* uvsBuffer = uvs ? (float2*)((uint8*)(uvs->buffer_view->buffer->data) + uvs->offset + uvs->buffer_view->offset) : nullptr;
                 void* jointIndicesBuffer = jointIndices ? (uint8*)(jointIndices->buffer_view->buffer->data) + jointIndices->offset + jointIndices->buffer_view->offset : nullptr;
                 float4* jointWeightsBuffer = jointWeights ? (float4*)((uint8*)(jointWeights->buffer_view->buffer->data) + jointWeights->offset + jointWeights->buffer_view->offset) : nullptr;
@@ -1158,6 +1221,7 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
                 primitive.indicesCount = (uint)indices->count;
                 for (uint vertexIndex = 0; vertexIndex < positions->count; vertexIndex++) {
                     Vertex vertex = {.position = positionsBuffer[vertexIndex], .normal = normalsBuffer[vertexIndex]};
+                    if (tangentsBuffer) vertex.tangent = tangentsBuffer[vertexIndex];
                     if (uvsBuffer) vertex.uv = uvsBuffer[vertexIndex];
                     if (jointIndicesBuffer) {
                         if (jointIndices->component_type == cgltf_component_type_r_16u) vertex.joints = ((uint16_4*)jointIndicesBuffer)[vertexIndex];
@@ -2267,6 +2331,15 @@ void gameUpdate() {
         windowHideCursor(false);
         return;
     }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !showMenu) {
+        showMenu = true;
+    } else if (showMenu) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            showMenu = false;
+        } else {
+            return;
+        }
+    }
     if (d3d.collisionQueriesFenceValue > 0) {
         d3dWaitForCollisionQueries();
         CollisionQueryResult queryResult = d3d.collisionQueryResultsBufferPtr[1];
@@ -2431,17 +2504,27 @@ void d3dRender() {
     d3d.constantsBufferOffset = 0;
     d3d.cbvSrvUavDescriptorCount = 0;
 
-    float3 cameraLookAt = player.camera.lookAt - player.camera.position;
     float cameraFovVertical = player.camera.fovVertical;
+    float3 cameraLookAt = player.camera.lookAt - player.camera.position;
     if (editor && editor->active) {
         cameraLookAt = editor->camera.lookAt - editor->camera.position;
         cameraFovVertical = editor->camera.fovVertical;
     }
-    XMMATRIX cameraLookAtMat = XMMatrixLookAtLH(XMVectorSet(0, 0, 0, 0), cameraLookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
-    XMMATRIX cameraLookAtMatInverseTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, cameraLookAtMat));
-    XMMATRIX cameraProjectMat = XMMatrixPerspectiveFovLH(RADIAN(cameraFovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 1000.0f);
-    XMMATRIX cameraProjectViewMat = XMMatrixMultiply(cameraLookAtMat, cameraProjectMat);
-    XMMATRIX cameraProjectViewInverseMat = XMMatrixInverse(nullptr, cameraProjectViewMat);
+    cameraViewMat = XMMatrixLookAtLH(XMVectorSet(0, 0, 0, 0), cameraLookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
+    cameraViewMatInverseTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, cameraViewMat));
+    cameraProjectMat = XMMatrixPerspectiveFovLH(RADIAN(cameraFovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 1000.0f);
+    cameraViewProjectMat = XMMatrixMultiply(cameraViewMat, cameraProjectMat);
+    cameraViewProjectInverseMat = XMMatrixInverse(nullptr, cameraViewProjectMat);
+
+    // XMMATRIX view_ = XMMatrixLookAtLH(XMVectorSet(0, 0, 0, 0), XMVectorSet(1, 1, 1, 0), XMVectorSet(0, 1, 0, 0));
+    // XMMATRIX proj_ = XMMatrixPerspectiveFovLH(RADIAN(cameraFovVertical), (float)settings.renderW / (float)settings.renderH, 0.001f, 1000.0f);
+    // XMMATRIX vp_ = XMMatrixMultiply(view_, proj_);
+    // float4 v = XMVector4Transform(XMVectorSet(0, 0, -0.1f, 1), vp_);
+    // float3 v_ = {v.x / v.w, v.y / v.w, v.z / v.w};
+
+    // BoundingFrustum frustrum(proj_);
+    // BoundingFrustum frustrum_;
+    // frustrum.Transform(frustrum_, view_);
 
     d3dWaitForRender();
 
@@ -2473,11 +2556,9 @@ void d3dRender() {
     }
     {
         RenderInfo renderInfo = {
-            .cameraViewMat = cameraLookAtMat,
-            .cameraViewMatInverseTranspose = cameraLookAtMatInverseTranspose,
+            .cameraViewMat = cameraViewMat,
+            .cameraViewMatInverseTranspose = cameraViewMatInverseTranspose,
             .cameraProjectMat = cameraProjectMat,
-            .cameraViewProjectMat = cameraProjectViewMat,
-            //.cameraViewProjInverseMat = cameraProjectViewInverseMat,
         };
         assert(d3d.constantsBufferOffset == 0);
         memcpy(d3d.constantsBufferPtr + d3d.constantsBufferOffset, &renderInfo, sizeof(renderInfo));
@@ -2513,7 +2594,7 @@ void d3dRender() {
         }
 
         PIXSetMarker(d3d.graphicsCmdList, 0, "vertexSkinning");
-        d3d.graphicsCmdList->SetPipelineState(d3d.vertexSkinning);
+        d3d.graphicsCmdList->SetPipelineState(d3d.vertexSkinningPSO);
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.vertexSkinningRootSig);
         d3d.graphicsCmdList->ResourceBarrier((uint)verticeBufferBarriers.size(), &verticeBufferBarriers[0]);
         for (MeshSkinningInfo& info : meshSkinningInfos) {
@@ -2597,15 +2678,15 @@ void d3dRender() {
         if (mouseSelectX == UINT_MAX) {
             d3d.collisionQueriesBufferPtr[0] = {.rayDesc = {.origin = {0, 0, 0}, .min = 0, .dir = {0, 0, 0}, .max = 0}};
         } else {
-            XMFLOAT4X4 cameraViewMat;
-            XMFLOAT4X4 cameraProjMat;
-            XMStoreFloat4x4(&cameraViewMat, cameraLookAtMatInverseTranspose);
-            XMStoreFloat4x4(&cameraProjMat, cameraProjectMat);
+            XMFLOAT4X4 viewMat;
+            XMFLOAT4X4 projMat;
+            XMStoreFloat4x4(&viewMat, cameraViewMatInverseTranspose);
+            XMStoreFloat4x4(&projMat, cameraProjectMat);
             float2 pixelCoord = ((float2((float)mouseSelectX, (float)mouseSelectY) + 0.5f) / float2((float)settings.renderW, (float)settings.renderH)) * 2.0f - 1.0f;
-            RayDesc rayDesc = {.origin = {cameraViewMat.m[0][3], cameraViewMat.m[1][3], cameraViewMat.m[2][3]}, .min = 0.0f, .max = FLT_MAX};
-            float aspect = cameraProjMat.m[1][1] / cameraProjMat.m[0][0];
-            float tanHalfFovY = 1.0f / cameraProjMat.m[1][1];
-            rayDesc.dir = (float3(cameraViewMat.m[0][0], cameraViewMat.m[1][0], cameraViewMat.m[2][0]) * pixelCoord.x * tanHalfFovY * aspect) - (float3(cameraViewMat.m[0][1], cameraViewMat.m[1][1], cameraViewMat.m[2][1]) * pixelCoord.y * tanHalfFovY) + (float3(cameraViewMat.m[0][2], cameraViewMat.m[1][2], cameraViewMat.m[2][2]));
+            RayDesc rayDesc = {.origin = {viewMat.m[0][3], viewMat.m[1][3], viewMat.m[2][3]}, .min = 0.0f, .max = FLT_MAX};
+            float aspect = projMat.m[1][1] / projMat.m[0][0];
+            float tanHalfFovY = 1.0f / projMat.m[1][1];
+            rayDesc.dir = (float3(viewMat.m[0][0], viewMat.m[1][0], viewMat.m[2][0]) * pixelCoord.x * tanHalfFovY * aspect) - (float3(viewMat.m[0][1], viewMat.m[1][1], viewMat.m[2][1]) * pixelCoord.y * tanHalfFovY) + (float3(viewMat.m[0][2], viewMat.m[1][2], viewMat.m[2][2]));
             rayDesc.dir = rayDesc.dir.normalize();
             d3d.collisionQueriesBufferPtr[0] = {.rayDesc = rayDesc, .instanceInclusionMask = 0xff & ~ObjectTypeNone};
         }
@@ -2625,7 +2706,7 @@ void d3dRender() {
         assert(d3d.constantsBufferOffset < d3d.constantsBuffer->GetSize());
 
         PIXSetMarker(d3d.graphicsCmdList, 0, "collisionQuery");
-        d3d.graphicsCmdList->SetPipelineState1(d3d.collisionQuery);
+        d3d.graphicsCmdList->SetPipelineState1(d3d.collisionQueryPSO);
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.collisionQueryRootSig);
         d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
 
@@ -2650,14 +2731,29 @@ void d3dRender() {
         d3d.graphicsCmdList->ResourceBarrier(1, &renderTextureTransition);
 
         PIXSetMarker(d3d.graphicsCmdList, 0, "renderScene");
-        d3d.graphicsCmdList->SetPipelineState1(d3d.renderScene);
+        d3d.graphicsCmdList->SetPipelineState1(d3d.renderScenePSO);
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.renderSceneRootSig);
         d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
+    }
+    if (showMenu) {
+        PIXSetMarker(d3d.graphicsCmdList, 0, "directWrite");
+        D2D1_RECT_F textRect = D2D1::RectF(0.0f, 0.0f, (float)settings.renderW, (float)settings.renderH);
+        static const WCHAR text[] = L"Options\nExit to Main Menu\nExit to Desktop\n";
+        directWrite.d3d11On12Device->AcquireWrappedResources(&directWrite.image, 1);
+        directWrite.d2dDeviceContext->SetTarget(directWrite.imageRenderTarget);
+        directWrite.d2dDeviceContext->BeginDraw();
+        directWrite.d2dDeviceContext->Clear(D2D1_COLOR_F{0.0f, 0.0f, 0.0f, 0.0f});
+        directWrite.d2dDeviceContext->SetTransform(D2D1::Matrix3x2F::Identity());
+        directWrite.d2dDeviceContext->DrawTextW(text, _countof(text) - 1, directWrite.dWriteTextFormat, &textRect, directWrite.dWriteColorBrush);
+        directWrite.d2dDeviceContext->EndDraw();
+        directWrite.d3d11On12Device->ReleaseWrappedResources(&directWrite.image, 1);
+        directWrite.d3d11DeviceContext->Flush();
     }
     {
         uint swapChainBackBufferIndex = d3d.swapChain->GetCurrentBackBufferIndex();
         D3D12_RESOURCE_BARRIER imageTransitions[] = {
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.swapChainImages[swapChainBackBufferIndex], .StateBefore = D3D12_RESOURCE_STATE_PRESENT, .StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET}},
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.directWriteImage->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.renderTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
         };
         d3d.graphicsCmdList->ResourceBarrier(countof(imageTransitions), imageTransitions);
@@ -2668,13 +2764,17 @@ void d3dRender() {
         d3d.graphicsCmdList->RSSetScissorRects(1, &scissor);
         d3d.graphicsCmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         {
-            PIXSetMarker(d3d.graphicsCmdList, 0, "postProcess");
-            d3d.graphicsCmdList->SetPipelineState(d3d.postProcess);
-            d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.postProcessRootSig);
-            d3d.graphicsCmdList->SetGraphicsRoot32BitConstant(0, settings.hdr, 0);
+            PIXSetMarker(d3d.graphicsCmdList, 0, "composite");
+            d3d.graphicsCmdList->SetPipelineState(d3d.compositePSO);
+            d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.compositeRootSig);
+            uint32 compositeFlags = 0;
+            if (settings.hdr) compositeFlags |= CompositeFlagHDR;
+            if (showMenu) compositeFlags |= CompositeFlagDirectWrite;
+            d3d.graphicsCmdList->SetGraphicsRoot32BitConstant(0, compositeFlags, 0);
             d3d.graphicsCmdList->DrawInstanced(3, 1, 0, 0);
         }
         {
+            PIXSetMarker(d3d.graphicsCmdList, 0, "shapes");
             shapeCircles.resize(0);
             shapeLines.resize(0);
             if (editor && editor->active) {
@@ -2682,21 +2782,18 @@ void d3dRender() {
                     if (player.modelInstance.model->skeletonRootNode) {
                         XMMatrixScaling(1, 1, -1);
                         player.modelInstance.transform.toMat();
-                        modelTraverseNodesAndGetPositions(player.modelInstance.model, player.modelInstance.model->skeletonRootNode, player.modelInstance.globalTransformMats, shapeCircles, shapeLines);
+                        modelTraverseNodesAndGetPositions(player.modelInstance.model, player.modelInstance.model->skeletonRootNode, player.modelInstance.globalTransformMats);
                     }
                 } else if (editor->selectedObjectType == ObjectTypeGameObject) {
                     GameObject& gameObject = gameObjects[editor->selectedObjectIndex];
                     if (gameObject.modelInstance.model->skeletonRootNode) {
-                        modelTraverseNodesAndGetPositions(gameObject.modelInstance.model, gameObject.modelInstance.model->skeletonRootNode, gameObject.modelInstance.globalTransformMats, shapeCircles, shapeLines);
+                        modelTraverseNodesAndGetPositions(gameObject.modelInstance.model, gameObject.modelInstance.model->skeletonRootNode, gameObject.modelInstance.globalTransformMats);
                     }
                 }
             }
-            // shapeCircles.push_back(ShapeCircle{.center = player.position - player.camera.position, .radius = 0.02f});
-            // shapeLines.push_back(ShapeLine{.p0 = player.position - player.camera.position, .thickness = 0.01f, .p1 = player.position + float3(0, 1, 0) - player.camera.position});
             memcpy(d3d.shapeCirclesBufferPtr, shapeCircles.data(), shapeCircles.size() * sizeof(ShapeCircle));
             memcpy(d3d.shapeLinesBufferPtr, shapeLines.data(), shapeLines.size() * sizeof(ShapeLine));
-            PIXSetMarker(d3d.graphicsCmdList, 0, "shapes");
-            d3d.graphicsCmdList->SetPipelineState(d3d.shapes);
+            d3d.graphicsCmdList->SetPipelineState(d3d.shapesPSO);
             d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.shapesRootSig);
             uint constants[4] = {settings.renderW, settings.renderH, (uint)shapeCircles.size(), (uint)shapeLines.size()};
             d3d.graphicsCmdList->SetGraphicsRoot32BitConstants(0, countof(constants), constants, 0);
@@ -2706,7 +2803,7 @@ void d3dRender() {
         }
         {
             PIXSetMarker(d3d.graphicsCmdList, 0, "imgui");
-            d3d.graphicsCmdList->SetPipelineState(d3d.imgui);
+            d3d.graphicsCmdList->SetPipelineState(d3d.imguiPSO);
             float blendFactor[] = {0, 0, 0, 0};
             d3d.graphicsCmdList->OMSetBlendFactor(blendFactor);
             d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.imguiRootSig);
@@ -2743,25 +2840,8 @@ void d3dRender() {
             }
         }
         std::swap(imageTransitions[0].Transition.StateBefore, imageTransitions[0].Transition.StateAfter);
-        d3d.graphicsCmdList->ResourceBarrier(1, &imageTransitions[0]);
-    }
-    {
-        PIXSetMarker(d3d.graphicsCmdList, 0, "directWrite");
-        D3D12_RESOURCE_DESC directWriteImageDesc = d3d.directWriteImage->GetResource()->GetDesc();
-        D2D1_SIZE_F rtSize = {.width = (float)directWriteImageDesc.Width, .height = (float)directWriteImageDesc.Height};
-        D2D1_RECT_F textRect = D2D1::RectF(0, 0, rtSize.width, rtSize.height);
-        static const WCHAR text[] = L"11On12";
-        directWrite.d3d11On12Device->AcquireWrappedResources(&directWrite.image, 1);
-        directWrite.d2dDeviceContext->SetTarget(directWrite.imageRenderTarget);
-        directWrite.d2dDeviceContext->BeginDraw();
-        //directWrite.d2dDeviceContext->Clear(D2D1_COLOR_F{1.0f, 1.0f, 1.0f, 1.0f});
-        directWrite.d2dDeviceContext->SetTransform(D2D1::Matrix3x2F::Identity());
-        directWrite.d2dDeviceContext->DrawTextW(text, _countof(text) - 1, directWrite.dWriteTextFormat, &textRect, directWrite.dWriteColorBrush);
-        directWrite.d2dDeviceContext->EndDraw();
-        directWrite.d3d11On12Device->ReleaseWrappedResources(&directWrite.image, 1);
-        directWrite.d3d11DeviceContext->Flush();
-    }
-    {
+        std::swap(imageTransitions[1].Transition.StateBefore, imageTransitions[1].Transition.StateAfter);
+        d3d.graphicsCmdList->ResourceBarrier(2, imageTransitions);
     }
 
     assert(SUCCEEDED(d3d.graphicsCmdList->Close()));
@@ -2777,7 +2857,6 @@ void d3dRender() {
 
 int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) {
     assert(SetCurrentDirectoryW(exeDir.c_str()));
-    showConsole();
     settingsInit(saveDir / "settings.yaml");
     windowInit();
     windowShow();
