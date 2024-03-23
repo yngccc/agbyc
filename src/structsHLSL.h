@@ -46,17 +46,23 @@ struct Joint {
 
 struct Material {
 #ifdef __cplusplus
-    float3 diffuse;
-    uint32 diffuseTextureIndex;
     float3 emissive;
     uint32 emissiveTextureIndex;
-    // uint32 normalTextureIndex;
+    float3 baseColor;
+    uint32 baseColorTextureIndex;
+    float metallic;
+    float roughness;
+    uint32 metallicRoughnessTextureIndex;
+    uint32 normalTextureIndex;
 #else
-    float3 diffuse;
-    uint diffuseTextureIndex;
     float3 emissive;
     uint emissiveTextureIndex;
-    // uint32 normalTextureIndex;
+    float3 baseColor;
+    uint baseColorTextureIndex;
+    float metallic;
+    float roughness;
+    uint metallicRoughnessTextureIndex;
+    uint normalTextureIndex;
 #endif
 };
 
@@ -125,9 +131,15 @@ struct TLASInstanceInfo {
 
 struct BLASGeometryInfo {
 #ifdef __cplusplus
-    float4 baseColorFactor;
+    float3 emissive;
+    float metallic;
+    float3 baseColor;
+    float roughness;
 #else
-    float4 baseColorFactor;
+    float3 emissive;
+    float metallic;
+    float3 baseColor;
+    float roughness;
 #endif
 };
 

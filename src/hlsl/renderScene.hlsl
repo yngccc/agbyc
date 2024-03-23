@@ -56,10 +56,13 @@ void primaryRayClosestHit(inout PrimaryRayPayload payload, in BuiltInTriangleInt
     } else{
         BLAS_GEOMETRIES_INFOS_DESCRIPTOR(blasGeometriesInfos);
         BLASGeometryInfo blasGeometryInfo = blasGeometriesInfos[instanceInfo.blasGeometriesOffset + GeometryIndex()];
-        uint verticesDescriptorIndex = InstanceID() + GeometryIndex() * 3;
+        uint verticesDescriptorIndex = InstanceID() + GeometryIndex() * 6;
         StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex)];
         StructuredBuffer<uint> indices = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex + 1)];
-        Texture2D<float3> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex + 2)];
+        Texture2D<float3> emissiveTexture = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex + 2)];
+        Texture2D<float3> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex + 3)];
+        Texture2D<float3> metallicRoughnessTexture = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex + 4)];
+        Texture2D<float3> normalTexture = ResourceDescriptorHeap[NonUniformResourceIndex(verticesDescriptorIndex + 5)];
 
         uint triangleIndex = PrimitiveIndex() * 3;
         Vertex v0 = vertices[indices[NonUniformResourceIndex(triangleIndex)]];
@@ -85,7 +88,7 @@ void primaryRayClosestHit(inout PrimaryRayPayload payload, in BuiltInTriangleInt
         float2 texGradient1, texGradient2;
         anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGradient1, texGradient2);
         
-        float3 baseColor = baseColorTexture.SampleGrad(sampler0, uv, texGradient1, texGradient2) * blasGeometryInfo.baseColorFactor.xyz;
+        float3 baseColor = baseColorTexture.SampleGrad(sampler0, uv, texGradient1, texGradient2) * blasGeometryInfo.baseColor;
         float3 lightDir = normalize(float3(1, 1, 1));
         float ndotl = dot(normal, lightDir);
         payload.color = baseColor * ndotl;

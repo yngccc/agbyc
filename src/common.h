@@ -71,9 +71,9 @@ static const float euler = 2.71828182845904523536f;
 static const float pi = 3.14159265358979323846f;
 static const float sqrt2 = 1.41421356237309504880f;
 
-#define KILOBYTES(n) (1024 * (n))
-#define MEGABYTES(n) (1024 * 1024 * (n))
-#define GIGABYTES(n) (1024 * 1024 * 1024 * (n))
+#define KILOBYTES(n) (1024ll * (n))
+#define MEGABYTES(n) (1024ll * 1024ll * (n))
+#define GIGABYTES(n) (1024ll * 1024ll * 1024ll * (n))
 #define RADIAN(d) (d * (pi / 180.0f))
 #define DEGREE(r) (r * (180.0f / pi))
 
@@ -112,6 +112,11 @@ struct int2 {
 struct uint8_4 {
     uint8 x = 0, y = 0, z = 0, w = 0;
     std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
+};
+
+struct uint8_2 {
+    uint8 x = 0, y = 0;
+    std::string toString() const { return std::format("[{}, {}]", x, y); }
 };
 
 struct uint16_4 {
@@ -411,7 +416,7 @@ struct D3D {
 
     D3D12MA::Allocation* stagingBuffer;
     uint8* stagingBufferPtr;
-    uint32 stagingBufferOffset = 0;
+    uint64 stagingBufferOffset = 0;
 
     D3D12MA::Allocation* constantsBuffer;
     uint8* constantsBufferPtr;
@@ -426,16 +431,22 @@ struct D3D {
     uint8* shapeCirclesBufferPtr;
     uint8* shapeLinesBufferPtr;
 
-    D3D12MA::Allocation* imguiImage;
+    D3D12MA::Allocation* imguiTexture;
     D3D12MA::Allocation* imguiVertexBuffer;
     D3D12MA::Allocation* imguiIndexBuffer;
     uint8* imguiVertexBufferPtr;
     uint8* imguiIndexBufferPtr;
 
-    D3D12MA::Allocation* directWriteImage;
+    D3D12MA::Allocation* directWriteTexture;
 
-    D3D12MA::Allocation* defaultMaterialBaseColorImage;
-    D3D12_SHADER_RESOURCE_VIEW_DESC defaultMaterialBaseColorImageSRVDesc;
+    D3D12MA::Allocation* defaultEmissiveTexture;
+    D3D12MA::Allocation* defaultBaseColorTexture;
+    D3D12MA::Allocation* defaultMetallicRoughnessTexture;
+    D3D12MA::Allocation* defaultNormalTexture;
+    D3D12_SHADER_RESOURCE_VIEW_DESC defaultEmissiveTextureSRVDesc;
+    D3D12_SHADER_RESOURCE_VIEW_DESC defaultBaseColorTextureSRVDesc;
+    D3D12_SHADER_RESOURCE_VIEW_DESC defaultMetallicRoughnessTextureSRVDesc;
+    D3D12_SHADER_RESOURCE_VIEW_DESC defaultNormalTextureSRVDesc;
 
     D3D12MA::Allocation* tlasInstancesBuildInfosBuffer;
     D3D12MA::Allocation* tlasInstancesInfosBuffer;
@@ -514,13 +525,20 @@ struct ModelTextureSampler {
 
 struct ModelTexture {
     ModelImage* image;
-    ModelTextureSampler sampler;
+    D3D12_TEXTURE_ADDRESS_MODE wrapU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	D3D12_TEXTURE_ADDRESS_MODE wrapV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
 };
 
 struct ModelMaterial {
     std::string name;
-    float4 baseColorFactor = {1, 1, 1, 1};
+    float3 emissive = {0, 0, 0};
+    float4 baseColor = {1, 1, 1, 1};
+    float metallic;
+    float roughness;
+    ModelTexture* emissiveTexture;
     ModelTexture* baseColorTexture;
+    ModelTexture* metallicRoughnessTexture;
+    ModelTexture* normalTexture;
 };
 
 struct ModelPrimitive {
