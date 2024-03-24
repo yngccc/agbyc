@@ -135,7 +135,7 @@ struct float2 {
 
     float2() = default;
     float2(float x, float y) : x(x), y(y) {}
-    float2(const XMVECTOR& v) : x(XMVectorGetX(v)), y(XMVectorGetY(v)) {}
+    float2(XMVECTOR v) : x(XMVectorGetX(v)), y(XMVectorGetY(v)) {}
     bool operator==(float2 v) const { return x == v.x && y == v.y; }
     bool operator!=(float2 v) const { return x != v.x || y != v.y; }
     float& operator[](int i) { return (&x)[i]; }
@@ -163,7 +163,7 @@ struct float3 {
     float3() = default;
     float3(float x, float y, float z) : x(x), y(y), z(z) {}
     float3(const float* v) : x(v[0]), y(v[1]), z(v[2]) {}
-    float3(const XMVECTOR& v) : x(XMVectorGetX(v)), y(XMVectorGetY(v)), z(XMVectorGetZ(v)) {}
+    float3(XMVECTOR v) : x(XMVectorGetX(v)), y(XMVectorGetY(v)), z(XMVectorGetZ(v)) {}
     void operator=(const XMVECTOR& v) { x = XMVectorGetX(v), y = XMVectorGetY(v), z = XMVectorGetZ(v); }
     bool operator==(const float3& v) const { return x == v.x && y == v.y && z == v.z; }
     bool operator!=(const float3& v) const { return x != v.x || y != v.y || z != v.z; }
@@ -207,7 +207,7 @@ struct float4 {
     float4() = default;
     float4(float x, float y, float z, float w) : x(x), y(y), z(z), w(w) {}
     float4(const float* v) : x(v[0]), y(v[1]), z(v[2]), w(v[3]) {}
-    float4(const XMVECTOR& v) : x(XMVectorGetX(v)), y(XMVectorGetY(v)), z(XMVectorGetZ(v)), w(XMVectorGetW(v)) {}
+    float4(XMVECTOR v) : x(XMVectorGetX(v)), y(XMVectorGetY(v)), z(XMVectorGetZ(v)), w(XMVectorGetW(v)) {}
     void operator=(const XMVECTOR& v) { x = XMVectorGetX(v), y = XMVectorGetY(v), z = XMVectorGetZ(v), w = XMVectorGetW(v); }
     void operator=(const float3& v) { x = v.x, y = v.y, z = v.z, w = 0; }
     float& operator[](int i) { return (&x)[i]; }
@@ -290,7 +290,7 @@ XMVECTOR quaternionBetween(float3 v1, float3 v2) {
     }
 }
 
-float3 worldToNDC(float3 position, const XMMATRIX& cameraProjViewMat) {
+float3 worldToNDC(float3 position, XMMATRIX cameraProjViewMat) {
     float4 ndc = XMVector4Transform(XMVectorSet(position.x, position.y, position.z, 1.0f), cameraProjViewMat);
     ndc /= ndc.w;
     return float3(ndc.x, ndc.y, ndc.z);
@@ -307,19 +307,19 @@ bool insideAABB(float3 position, AABB aabb) {
            position.x <= aabb.max.x && position.y <= aabb.max.y && position.z <= aabb.max.z;
 }
 
-bool intersectSegmentPlane(float3 a, float3 b, Plane p, float& t, float3& q) {
+bool intersectSegmentPlane(float3 a, float3 b, Plane p, float* t, float3* q) {
     float3 ab = b - a;
-    t = (p.d - p.n.dot(a)) / p.n.dot(ab);
-    if (t >= 0.0f && t <= 1.0f) {
-        q = a + ab * t;
+    *t = (p.d - p.n.dot(a)) / p.n.dot(ab);
+    if (*t >= 0.0f && *t <= 1.0f) {
+        *q = a + ab * t;
         return true;
     } else {
         return false;
     }
 }
 
-bool intersectRayAABB(float3 p, float3 d, AABB a, float& tmin, float3& q) {
-    tmin = 0.0f;
+bool intersectRayAABB(float3 p, float3 d, AABB a, float* tmin, float3* q) {
+    *tmin = 0.0f;
     float tmax = FLT_MAX;
     for (int i = 0; i < 3; i++) {
         if (fabs(d[i]) < 0.00001f /*EPSILON*/) {
@@ -329,12 +329,12 @@ bool intersectRayAABB(float3 p, float3 d, AABB a, float& tmin, float3& q) {
             float t1 = (a.min[i] - p[i]) * ood;
             float t2 = (a.max[i] - p[i]) * ood;
             if (t1 > t2) std::swap(t1, t2);
-            if (t1 > tmin) tmin = t1;
+            if (t1 > *tmin) *tmin = t1;
             if (t2 > tmax) tmax = t2;
-            if (tmin > tmax) return false;
+            if (*tmin > tmax) return false;
         }
     }
-    q = p + d * tmin;
+    *q = p + d * *tmin;
     return true;
 }
 
@@ -638,7 +638,6 @@ struct ModelInstanceSkin {
 };
 
 struct ModelInstanceMeshNode {
-    XMMATRIX transformMat;
     D3D12MA::Allocation* verticesBuffer;
     D3D12MA::Allocation* blas;
     D3D12MA::Allocation* blasScratch;
@@ -687,6 +686,7 @@ struct Player {
     Position spawnPosition;
     Position position;
     float3 PitchYawRoll;
+    XMMATRIX transformMat;
     float walkSpeed;
     float runSpeed;
     float3 movement;
@@ -700,17 +700,18 @@ struct Player {
     CameraPlayer camera;
 };
 
-struct Skybox {
-    std::filesystem::path hdriTextureFilePath;
-    D3D12MA::Allocation* hdriTexture;
-};
-
 struct GameObject {
     std::string name;
     ModelInstance modelInstance;
     Position spawnPosition;
     Position position;
+    XMMATRIX transformMat;
     bool toBeDeleted;
+};
+
+struct Skybox {
+    std::filesystem::path hdriTextureFilePath;
+    D3D12MA::Allocation* hdriTexture;
 };
 
 enum EditorUndoType {

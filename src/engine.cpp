@@ -53,7 +53,7 @@ static ImVec2 editorObjectPropertiesWindowPos = {};
 static ImVec2 editorObjectPropertiesWindowSize = {};
 static bool editorAddObjectPopupFlag = false;
 
-typedef int (*gameUpdateLiveProc)(ImGuiContext* imguiContext, Controller& controller, int2 mouseDeltaRaw, float mouseSensitivity, float controllerSensitivity, float frameTime, Player& player);
+typedef int (*gameUpdateLiveProc)(ImGuiContext* imguiContext, Controller controller, int2 mouseDeltaRaw, float mouseSensitivity, float controllerSensitivity, float frameTime, Player* player);
 static gameUpdateLiveProc gameUpdateLive = nullptr;
 
 static std::filesystem::path exeDir = [] {
@@ -1047,9 +1047,14 @@ void modelTraverseNodesAndGetGlobalTransforms(Model* model, ModelNode* node, con
     }
 }
 
-void modelTraverseNodesAndGetPositions(Model* model, ModelNode* node, std::vector<XMMATRIX>& nodeGlobalTransformMats) {
-    int64 nodeIndex = node - &model->nodes[0];
-    float3 nodePosition = Position(XMVector4Transform(XMVectorSet(0, 0, 0, 1), nodeGlobalTransformMats[nodeIndex])) - editor->camera.position;
+void modelInstanceTraverseNodesAndGetPositions(ModelInstance* modelInstance, ModelNode* node, const XMMATRIX& objectTransformMat) {
+    int64 nodeIndex = node - &modelInstance->model->nodes[0];
+    XMVECTOR nodePositionV = XMVector3Transform(XMVectorSet(0, 0, 0, 1), modelInstance->globalTransformMats[nodeIndex]);
+    nodePositionV = XMVector3Transform(nodePositionV, modelInstance->model->skeletonRootNode->globalTransform);
+    nodePositionV = XMVector3Transform(nodePositionV, XMMatrixScaling(1, 1, -1));
+    nodePositionV = XMVector3Transform(nodePositionV, modelInstance->transform.toMat());
+    //nodePositionV = XMVector3Transform(nodePositionV, objectTransformMat);
+    float3 nodePosition = Position(nodePositionV) - editor->camera.position;
     XMVECTOR nodePositionViewSpace = XMVector4Transform(nodePosition.toXMVector(), cameraViewMat);
     XMVECTOR nodePositionClipSpace = XMVector4Transform(nodePositionViewSpace, cameraProjectMat);
     float4 nodePositionNDCSpace = nodePositionClipSpace;
@@ -1060,14 +1065,14 @@ void modelTraverseNodesAndGetPositions(Model* model, ModelNode* node, std::vecto
         shapeCircles.push_back(ShapeCircle{.center = (float2(nodePositionNDCSpace.x, -nodePositionNDCSpace.y) + 1.0f) * 0.5f, .radius = 0.005f});
     }
     for (ModelNode* childNode : node->children) {
-        int64 childNodeIndex = childNode - &model->nodes[0];
-        float3 childNodePosition = Position(XMVector3Transform(XMVectorSet(0, 0, 0, 1), nodeGlobalTransformMats[childNodeIndex])) - editor->camera.position;
+        int64 childNodeIndex = childNode - &modelInstance->model->nodes[0];
+        float3 childNodePosition = Position(XMVector3Transform(XMVectorSet(0, 0, 0, 1), modelInstance->globalTransformMats[childNodeIndex])) - editor->camera.position;
         XMVECTOR childNodePositionViewSpace = XMVector4Transform(childNodePosition.toXMVector(), cameraViewMat);
         XMVECTOR childNodePositionClipSpace = XMVector4Transform(childNodePositionViewSpace, cameraProjectMat);
         float4 childNodePositionNDCSpace = childNodePositionClipSpace;
         childNodePositionNDCSpace /= childNodePositionNDCSpace.w;
         ContainmentType frustumContainsChildNode = frustum.Contains(childNodePositionViewSpace);
-        if (frustumContainsNode && frustumContainsChildNode) {
+ /*       if (frustumContainsNode && frustumContainsChildNode) {
             shapeLines.push_back(ShapeLine{.p0 = (float2(nodePositionNDCSpace.x, -nodePositionNDCSpace.y) + 1.0f) * 0.5f, .p1 = (float2(childNodePositionNDCSpace.x, -childNodePositionNDCSpace.y) + 1.0f) * 0.5f, .thickness = 0.0015f});
         } else if (!frustumContainsNode && !frustumContainsChildNode) {
             float t;
@@ -1106,8 +1111,8 @@ void modelTraverseNodesAndGetPositions(Model* model, ModelNode* node, std::vecto
                 intersectionNDCSpace /= intersectionNDCSpace.w;
                 shapeLines.push_back(ShapeLine{.p0 = (float2(intersectionNDCSpace.x, -intersectionNDCSpace.y) + 1.0f) * 0.5f, .p1 = (float2(childNodePositionNDCSpace.x, -childNodePositionNDCSpace.y) + 1.0f) * 0.5f, .thickness = 0.0015f});
             }
-        }
-        modelTraverseNodesAndGetPositions(model, childNode, nodeGlobalTransformMats);
+        }*/
+        modelInstanceTraverseNodesAndGetPositions(modelInstance, childNode, objectTransformMat);
     }
 }
 
@@ -1496,7 +1501,6 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
     for (uint meshNodeIndex = 0; meshNodeIndex < model->meshNodes.size(); meshNodeIndex++) {
         ModelNode* meshNode = model->meshNodes[meshNodeIndex];
         ModelInstanceMeshNode& instanceMeshNode = modelInstance.meshNodes[meshNodeIndex];
-        instanceMeshNode.transformMat = meshNode->globalTransform;
         if (!meshNode->skin || model->animations.size() == 0) {
             instanceMeshNode.verticesBuffer = meshNode->mesh->verticesBuffer;
             instanceMeshNode.blas = meshNode->mesh->blas;
@@ -1583,69 +1587,61 @@ void imguiModelInstance(ModelInstance* modelInstance) {
 }
 
 void modelInstanceUpdateAnimation(ModelInstance* modelInstance, double time) {
-    if (!modelInstance->animation) {
-        for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance->meshNodes.size(); meshNodeIndex++) {
-            modelInstance->meshNodes[meshNodeIndex].transformMat = modelInstance->model->meshNodes[meshNodeIndex]->globalTransform;
-        }
-    } else {
-        modelInstance->animationTime += time;
-        if (modelInstance->animationTime > modelInstance->animation->timeLength) {
-            modelInstance->animationTime -= modelInstance->animation->timeLength;
-        }
-        for (Transform& transform : modelInstance->localTransforms) transform = Transform{};
-        {
-            for (ModelAnimationChannel& channel : modelInstance->animation->channels) {
-                float4 frame0 = channel.sampler->keyFrames[0].xyzw;
-                float4 frame1 = channel.sampler->keyFrames[1].xyzw;
-                float percentage = 0;
-                for (uint frameIndex = 1; frameIndex < channel.sampler->keyFrames.size(); frameIndex++) {
-                    ModelAnimationSamplerKeyFrame& keyFrame = channel.sampler->keyFrames[frameIndex];
-                    if (modelInstance->animationTime <= keyFrame.time) {
-                        ModelAnimationSamplerKeyFrame& keyFramePrevious = channel.sampler->keyFrames[frameIndex - 1];
-                        frame0 = keyFramePrevious.xyzw;
-                        frame1 = keyFrame.xyzw;
-                        percentage = ((float)modelInstance->animationTime - keyFramePrevious.time) / (keyFrame.time - keyFramePrevious.time);
-                        break;
-                    }
+    if (!modelInstance->animation) return;
+
+    modelInstance->animationTime += time;
+    if (modelInstance->animationTime > modelInstance->animation->timeLength) {
+        modelInstance->animationTime -= modelInstance->animation->timeLength;
+    }
+    for (Transform& transform : modelInstance->localTransforms) transform = Transform{};
+    {
+        for (ModelAnimationChannel& channel : modelInstance->animation->channels) {
+            float4 frame0 = channel.sampler->keyFrames[0].xyzw;
+            float4 frame1 = channel.sampler->keyFrames[1].xyzw;
+            float percentage = 0;
+            for (uint frameIndex = 1; frameIndex < channel.sampler->keyFrames.size(); frameIndex++) {
+                ModelAnimationSamplerKeyFrame& keyFrame = channel.sampler->keyFrames[frameIndex];
+                if (modelInstance->animationTime <= keyFrame.time) {
+                    ModelAnimationSamplerKeyFrame& keyFramePrevious = channel.sampler->keyFrames[frameIndex - 1];
+                    frame0 = keyFramePrevious.xyzw;
+                    frame1 = keyFrame.xyzw;
+                    percentage = ((float)modelInstance->animationTime - keyFramePrevious.time) / (keyFrame.time - keyFramePrevious.time);
+                    break;
                 }
-                int64 nodeIndex = channel.node - &modelInstance->model->nodes[0];
-                if (channel.type == AnimationChannelTypeTranslate) {
-                    if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
-                        modelInstance->localTransforms[nodeIndex].t = lerp(frame0.xyz(), frame1.xyz(), percentage);
-                    } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
-                        modelInstance->localTransforms[nodeIndex].t = percentage < 1.0f ? frame0.xyz() : frame1.xyz();
-                    }
-                } else if (channel.type == AnimationChannelTypeRotate) {
-                    if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
-                        modelInstance->localTransforms[nodeIndex].r = slerp(frame0, frame1, percentage);
-                    } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
-                        modelInstance->localTransforms[nodeIndex].r = percentage < 1.0f ? frame0 : frame1;
-                    }
-                } else if (channel.type == AnimationChannelTypeScale) {
-                    if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
-                        modelInstance->localTransforms[nodeIndex].s = lerp(frame0.xyz(), frame1.xyz(), percentage);
-                    } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
-                        modelInstance->localTransforms[nodeIndex].s = percentage < 1.0f ? frame0.xyz() : frame1.xyz();
-                    }
+            }
+            int64 nodeIndex = channel.node - &modelInstance->model->nodes[0];
+            if (channel.type == AnimationChannelTypeTranslate) {
+                if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
+                    modelInstance->localTransforms[nodeIndex].t = lerp(frame0.xyz(), frame1.xyz(), percentage);
+                } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
+                    modelInstance->localTransforms[nodeIndex].t = percentage < 1.0f ? frame0.xyz() : frame1.xyz();
+                }
+            } else if (channel.type == AnimationChannelTypeRotate) {
+                if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
+                    modelInstance->localTransforms[nodeIndex].r = slerp(frame0, frame1, percentage);
+                } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
+                    modelInstance->localTransforms[nodeIndex].r = percentage < 1.0f ? frame0 : frame1;
+                }
+            } else if (channel.type == AnimationChannelTypeScale) {
+                if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
+                    modelInstance->localTransforms[nodeIndex].s = lerp(frame0.xyz(), frame1.xyz(), percentage);
+                } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
+                    modelInstance->localTransforms[nodeIndex].s = percentage < 1.0f ? frame0.xyz() : frame1.xyz();
                 }
             }
         }
-        for (ModelNode* rootNode : modelInstance->model->rootNodes) {
-            modelTraverseNodesAndGetGlobalTransforms(modelInstance->model, rootNode, XMMatrixIdentity(), modelInstance->localTransforms, modelInstance->globalTransformMats);
+    }
+    for (ModelNode* rootNode : modelInstance->model->rootNodes) {
+        modelTraverseNodesAndGetGlobalTransforms(modelInstance->model, rootNode, XMMatrixIdentity(), modelInstance->localTransforms, modelInstance->globalTransformMats);
+    }
+    for (uint skinIndex = 0; skinIndex < modelInstance->model->skins.size(); skinIndex++) {
+        ModelSkin& skin = modelInstance->model->skins[skinIndex];
+        ModelInstanceSkin& instanceSkin = modelInstance->skins[skinIndex];
+        for (uint jointIndex = 0; jointIndex < skin.joints.size(); jointIndex++) {
+            int64 nodeIndex = skin.joints[jointIndex].node - &modelInstance->model->nodes[0];
+            instanceSkin.mats[jointIndex] = XMMatrixMultiply(skin.joints[jointIndex].inverseBindMat, modelInstance->globalTransformMats[nodeIndex]);
         }
-        for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance->meshNodes.size(); meshNodeIndex++) {
-            int64 nodeIndex = modelInstance->model->meshNodes[meshNodeIndex] - &modelInstance->model->nodes[0];
-            modelInstance->meshNodes[meshNodeIndex].transformMat = XMMatrixMultiply(modelInstance->model->meshNodes[meshNodeIndex]->globalTransform, modelInstance->globalTransformMats[nodeIndex]);
-        }
-        for (uint skinIndex = 0; skinIndex < modelInstance->model->skins.size(); skinIndex++) {
-            ModelSkin& skin = modelInstance->model->skins[skinIndex];
-            ModelInstanceSkin& instanceSkin = modelInstance->skins[skinIndex];
-            for (uint jointIndex = 0; jointIndex < skin.joints.size(); jointIndex++) {
-                int64 nodeIndex = skin.joints[jointIndex].node - &modelInstance->model->nodes[0];
-                instanceSkin.mats[jointIndex] = XMMatrixMultiply(skin.joints[jointIndex].inverseBindMat, modelInstance->globalTransformMats[nodeIndex]);
-            }
-            memcpy(instanceSkin.matsBufferPtr, instanceSkin.mats.data(), vectorSizeof(instanceSkin.mats));
-        }
+        memcpy(instanceSkin.matsBufferPtr, instanceSkin.mats.data(), vectorSizeof(instanceSkin.mats));
     }
 }
 
@@ -2434,7 +2430,7 @@ void gameUpdate() {
         playerCameraSetPitchYaw(player.camera.pitchYaw + float2(pitch, yaw));
 
         ImGuiContext* imguiContext = ImGui::GetCurrentContext();
-        gameUpdateLive(imguiContext, controller, mouseDeltaRaw, mouseSensitivity, controllerSensitivity, (float)frameTime, player);
+        gameUpdateLive(imguiContext, controller, mouseDeltaRaw, mouseSensitivity, controllerSensitivity, (float)frameTime, &player);
     }
     //{
     //    float3 moveDir = {0, 0, 0};
@@ -2500,22 +2496,28 @@ void update() {
     ImGui::Render();
 }
 
-void addTLASInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransform, ObjectType objectType, uint objectIndex) {
+void addTLASInstance(ModelInstance* modelInstance, const XMMATRIX objectTransform, ObjectType objectType, uint objectIndex) {
     TLASInstanceInfo tlasInstanceInfo = {.objectType = objectType, .objectIndex = objectIndex, .blasGeometriesOffset = (uint)blasGeometriesInfos.size()};
     if (editor && editor->active) {
         if (objectType != ObjectTypeNone && editor->selectedObjectType == objectType && editor->selectedObjectIndex == objectIndex) {
             tlasInstanceInfo.flags |= TLASInstanceFlagSelected;
         }
     }
-    for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance.meshNodes.size(); meshNodeIndex++) {
-        ModelNode* meshNode = modelInstance.model->meshNodes[meshNodeIndex];
-        ModelInstanceMeshNode& instanceMeshNode = modelInstance.meshNodes[meshNodeIndex];
-        XMMATRIX transform = instanceMeshNode.transformMat;
+    for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance->meshNodes.size(); meshNodeIndex++) {
+        ModelNode* meshNode = modelInstance->model->meshNodes[meshNodeIndex];
+        ModelInstanceMeshNode* instanceMeshNode = &modelInstance->meshNodes[meshNodeIndex];
+        XMMATRIX transform;
+        if (meshNode->skin) {
+            transform = modelInstance->model->skeletonRootNode->globalTransform;
+        } else {
+            transform = meshNode->globalTransform;
+            if (modelInstance->globalTransformMats.size() > 0) transform = XMMatrixMultiply(transform, modelInstance->globalTransformMats[meshNode - &modelInstance->model->nodes[0]]);
+        }
         transform = XMMatrixMultiply(transform, XMMatrixScaling(1, 1, -1)); // convert RH to LH
-        transform = XMMatrixMultiply(transform, modelInstance.transform.toMat());
+        transform = XMMatrixMultiply(transform, modelInstance->transform.toMat());
         transform = XMMatrixMultiply(transform, objectTransform);
         transform = XMMatrixTranspose(transform);
-        D3D12_RAYTRACING_INSTANCE_DESC tlasInstanceBuildInfo = {.InstanceID = d3d.cbvSrvUavDescriptorCount, .InstanceMask = objectType, .AccelerationStructure = instanceMeshNode.blas->GetResource()->GetGPUVirtualAddress()};
+        D3D12_RAYTRACING_INSTANCE_DESC tlasInstanceBuildInfo = {.InstanceID = d3d.cbvSrvUavDescriptorCount, .InstanceMask = objectType, .AccelerationStructure = instanceMeshNode->blas->GetResource()->GetGPUVirtualAddress()};
         memcpy(tlasInstanceBuildInfo.Transform, &transform, sizeof(tlasInstanceBuildInfo.Transform));
         tlasInstancesBuildInfos.push_back(tlasInstanceBuildInfo);
         tlasInstancesInfos.push_back(tlasInstanceInfo);
@@ -2523,7 +2525,7 @@ void addTLASInstance(ModelInstance& modelInstance, const XMMATRIX& objectTransfo
             ModelPrimitive& primitive = meshNode->mesh->primitives[primitiveIndex];
             D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.verticesBufferOffset, .NumElements = primitive.verticesCount, .StructureByteStride = sizeof(struct Vertex)}};
             D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.indicesBufferOffset, .NumElements = primitive.indicesCount, .StructureByteStride = sizeof(uint)}};
-            d3dAppendSRVDescriptor(&vertexBufferDesc, instanceMeshNode.verticesBuffer->GetResource());
+            d3dAppendSRVDescriptor(&vertexBufferDesc, instanceMeshNode->verticesBuffer->GetResource());
             d3dAppendSRVDescriptor(&indexBufferDesc, meshNode->mesh->indicesBuffer->GetResource());
             if (primitive.material) {
                 blasGeometriesInfos.push_back(BLASGeometryInfo{.emissive = primitive.material->emissive, .metallic = primitive.material->metallic, .baseColor = primitive.material->baseColor.xyz(), .roughness = primitive.material->roughness});
@@ -2708,6 +2710,7 @@ void d3dRender() {
         d3d.graphicsCmdList->ResourceBarrier((uint)blasBarriers.size(), &blasBarriers[0]);
     }
     {
+        PIXSetMarker(d3d.graphicsCmdList, 0, "build TLAS");
         {
             XMVECTOR translate = (player.position - player.camera.position).toXMVector();
             XMVECTOR rotate = XMQuaternionRotationRollPitchYaw(0, player.PitchYawRoll.y, 0);
@@ -2715,18 +2718,19 @@ void d3dRender() {
                 translate = (player.spawnPosition - editor->camera.position).toXMVector();
                 rotate = XMQuaternionRotationRollPitchYaw(0, 0, 0);
             }
-            XMMATRIX transformMat = XMMatrixAffineTransformation(XMVectorSet(1, 1, 1, 0), XMVectorSet(0, 0, 0, 0), rotate, translate);
-            addTLASInstance(player.modelInstance, transformMat, ObjectTypePlayer, 0);
+            player.transformMat = XMMatrixAffineTransformation(XMVectorSet(1, 1, 1, 1), XMVectorSet(0, 0, 0, 0), rotate, translate);
+            addTLASInstance(&player.modelInstance, player.transformMat, ObjectTypePlayer, 0);
         }
         for (uint objIndex = 0; objIndex < gameObjects.size(); objIndex++) {
             XMVECTOR translate = (-player.camera.position).toXMVector();
             if (editor && editor->active) {
                 translate = (-editor->camera.position).toXMVector();
             }
-            addTLASInstance(gameObjects[objIndex].modelInstance, XMMatrixTranslationFromVector(translate), ObjectTypeGameObject, objIndex);
+            gameObjects[objIndex].transformMat = XMMatrixTranslationFromVector(translate);
+            addTLASInstance(&gameObjects[objIndex].modelInstance, gameObjects[objIndex].transformMat, ObjectTypeGameObject, objIndex);
         }
 
-        addTLASInstance(modelInstanceCylinder, XMMatrixAffineTransformation(XMVectorSet(0.05f, player.movement.length(), 0.05f, 0), XMVectorSet(0, 0, 0, 0), quaternionBetween(float3(0, 1, 0), player.movement), (player.position - player.camera.position).toXMVector()), ObjectTypeNone, 0);
+        addTLASInstance(&modelInstanceCylinder, XMMatrixAffineTransformation(XMVectorSet(0.05f, player.movement.length(), 0.05f, 0), XMVectorSet(0, 0, 0, 0), quaternionBetween(float3(0, 1, 0), player.movement), (player.position - player.camera.position).toXMVector()), ObjectTypeNone, 0);
 
         assert(vectorSizeof(tlasInstancesBuildInfos) < d3d.tlasInstancesBuildInfosBuffer->GetSize());
         assert(vectorSizeof(tlasInstancesInfos) < d3d.tlasInstancesInfosBuffer->GetSize());
@@ -2742,7 +2746,6 @@ void d3dRender() {
         assert(prebuildInfo.ScratchDataSizeInBytes < d3d.tlasScratchBuffer->GetSize());
 
         D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress(), .Inputs = tlasInputs, .ScratchAccelerationStructureData = d3d.tlasScratchBuffer->GetResource()->GetGPUVirtualAddress()};
-        PIXSetMarker(d3d.graphicsCmdList, 0, "build TLAS");
         d3d.graphicsCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
         D3D12_RESOURCE_BARRIER tlasBarrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = d3d.tlasBuffer->GetResource()}};
         d3d.graphicsCmdList->ResourceBarrier(1, &tlasBarrier);
@@ -2853,14 +2856,12 @@ void d3dRender() {
             if (editor && editor->active) {
                 if (editor->selectedObjectType == ObjectTypePlayer) {
                     if (player.modelInstance.model->skeletonRootNode) {
-                        XMMatrixScaling(1, 1, -1);
-                        player.modelInstance.transform.toMat();
-                        modelTraverseNodesAndGetPositions(player.modelInstance.model, player.modelInstance.model->skeletonRootNode, player.modelInstance.globalTransformMats);
+                        modelInstanceTraverseNodesAndGetPositions(&player.modelInstance, player.modelInstance.model->skeletonRootNode, player.transformMat);
                     }
                 } else if (editor->selectedObjectType == ObjectTypeGameObject) {
                     GameObject& gameObject = gameObjects[editor->selectedObjectIndex];
                     if (gameObject.modelInstance.model->skeletonRootNode) {
-                        modelTraverseNodesAndGetPositions(gameObject.modelInstance.model, gameObject.modelInstance.model->skeletonRootNode, gameObject.modelInstance.globalTransformMats);
+                        modelInstanceTraverseNodesAndGetPositions(&gameObject.modelInstance, gameObject.modelInstance.model->skeletonRootNode, gameObject.transformMat);
                     }
                 }
             }
