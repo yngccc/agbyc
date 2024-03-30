@@ -178,29 +178,3 @@ enum CompositeFlag : uint {
     CompositeFlagHDR = 0x01,
     CompositeFlagDirectWrite = 0x01 << 1,
 };
-
-struct ShapeCircle {
-#ifdef __cplusplus
-    float2 center;
-    float radius;
-    float padding;
-#else
-    float2 center;
-    float radius;
-    float padding;
-#endif
-};
-
-struct ShapeLine {
-#ifdef __cplusplus
-    float2 p0;
-    float2 p1;
-    float thickness;
-    float3 padding;
-#else
-    float2 p0;
-    float2 p1;
-    float thickness;
-    float3 padding;
-#endif
-};

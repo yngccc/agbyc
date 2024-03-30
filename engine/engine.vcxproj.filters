@@ -11,9 +11,6 @@
     <Filter Include="Source Files\libs">
       <UniqueIdentifier>{9905ef11-e9a9-4865-9b34-67cf306fa657}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Worlds">
-      <UniqueIdentifier>{d300a186-cd66-4bd6-ac5f-db796f4b77b9}</UniqueIdentifier>
-    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\src\engine.cpp">
@@ -23,9 +20,6 @@
       <Filter>Source Files\libs</Filter>
     </ClCompile>
     <ClCompile Include="..\include\d3d12MA\D3D12MemAlloc.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\include\imgui\ImGuizmo.cpp">
       <Filter>Source Files\libs</Filter>
     </ClCompile>
     <ClCompile Include="..\include\stb\stb_image.cpp">
@@ -55,6 +49,9 @@
     <ClCompile Include="..\include\imgui\imgui_widgets.cpp">
       <Filter>Source Files\libs</Filter>
     </ClCompile>
+    <ClCompile Include="..\include\imgui\ImGuizmo.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\structsHLSL.h">
@@ -71,9 +68,6 @@
     <None Include="packages.config" />
     <None Include="..\src\hlsl\shared.hlsli">
       <Filter>Source Files\hlsl</Filter>
-    </None>
-    <None Include="..\assets\worlds\world.yaml">
-      <Filter>Worlds</Filter>
     </None>
   </ItemGroup>
   <ItemGroup>
@@ -96,12 +90,6 @@
       <Filter>Source Files\hlsl</Filter>
     </FxCompile>
     <FxCompile Include="..\src\hlsl\vertexSkinningCS.hlsl">
-      <Filter>Source Files\hlsl</Filter>
-    </FxCompile>
-    <FxCompile Include="..\src\hlsl\shapesVS.hlsl">
-      <Filter>Source Files\hlsl</Filter>
-    </FxCompile>
-    <FxCompile Include="..\src\hlsl\shapesPS.hlsl">
       <Filter>Source Files\hlsl</Filter>
     </FxCompile>
   </ItemGroup>

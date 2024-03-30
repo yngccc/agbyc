@@ -1,3 +1,4 @@
+#include <cassert>
 #include <algorithm>
 #include <array>
 #include <filesystem>
@@ -9,37 +10,44 @@
 #include <streambuf>
 #include <string>
 #include <vector>
+#include <bitset>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <windowsx.h>
+#include <shellapi.h>
 #include <shellscalingapi.h>
 #include <shlobj.h>
 #include <cderr.h>
 #include <commdlg.h>
 
-#include <d3d12.h>
 #include <d3dx12.h>
 #include <dxgi1_6.h>
 #include <dxgidebug.h>
 #include <d3d11on12.h>
 #include <dwrite.h>
 #include <d2d1_3.h>
-
-#undef near
-#undef far
-
-#include <xinput.h>
+#include <pix3.h>
 
 #define _XM_SSE4_INTRINSICS_
 #include <directxmath.h>
 #include <directxtex.h>
 #include <directxcollision.h>
 #include <directxpackedvector.h>
-using namespace DirectX;
 
-#include <pix3.h>
+#include <xinput.h>
+
+#undef near
+#undef far
+
+#if !defined(NDEBUG) ^ defined(_DEBUG)
+#define NDEBUG
+#include <pxphysicsapi.h>
+#undef NDEBUG
+#else
+#include <pxphysicsapi.h>
+#endif
 
 #include <rapidyaml/rapidyaml-0.5.0.hpp>
 
@@ -55,8 +63,6 @@ using namespace DirectX;
 #include <d3d12ma/d3d12memalloc.h>
 
 #include <tracy/tracy/tracy.hpp>
-
-#include <nvapi/nvapi.h>
 
 typedef int8_t int8;
 typedef int16_t int16;
@@ -130,6 +136,9 @@ struct uint_4 {
     std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
 };
 
+using namespace DirectX;
+using namespace physx;
+
 struct float2 {
     float x = 0, y = 0;
 
@@ -147,6 +156,8 @@ struct float2 {
     float2 operator-() const { return float2(-x, -y); }
     float2 operator*(float v) const { return float2(x * v, y * v); }
     float2 operator*(float2 v) const { return float2(x * v.x, y * v.y); }
+    void operator*=(float v) { x *= v, y *= v; }
+    void operator*=(float2 v) { x *= v.x, y *= v.y; }
     float2 operator/(float v) const { return float2(x / v, y / v); }
     float2 operator/(float2 v) const { return float2(x / v.x, y / v.y); }
     std::string toString() const { return std::format("[{}, {}]", x, y); }
@@ -164,6 +175,7 @@ struct float3 {
     float3(float x, float y, float z) : x(x), y(y), z(z) {}
     float3(const float* v) : x(v[0]), y(v[1]), z(v[2]) {}
     float3(XMVECTOR v) : x(XMVectorGetX(v)), y(XMVectorGetY(v)), z(XMVectorGetZ(v)) {}
+    float3(PxVec3 p) : x(p.x), y(p.y), z(p.z) {}
     void operator=(const XMVECTOR& v) { x = XMVectorGetX(v), y = XMVectorGetY(v), z = XMVectorGetZ(v); }
     bool operator==(const float3& v) const { return x == v.x && y == v.y && z == v.z; }
     bool operator!=(const float3& v) const { return x != v.x || y != v.y || z != v.z; }
@@ -184,6 +196,7 @@ struct float3 {
     float3 operator/(float3 s) const { return float3(x / s.x, y / s.y, z / s.z); }
     void operator/=(float s) { x /= s, y /= s, z /= s; }
     void operator/=(float3 s) { x /= s.x, y /= s.y, z /= s.z; }
+    float2 xy() const { return float2(x, y); }
     XMVECTOR toXMVector() const { return XMVectorSet(x, y, z, 1.0f); }
     std::string toString() const { return std::format("[{}, {}, {}]", x, y, z); }
     float dot(float3 v) const { return x * v.x + y * v.y + z * v.z; }
@@ -212,8 +225,9 @@ struct float4 {
     void operator=(const float3& v) { x = v.x, y = v.y, z = v.z, w = 0; }
     float& operator[](int i) { return (&x)[i]; }
     float operator[](int i) const { return (&x)[i]; }
-    void operator/=(float s) { x /= s, y /= s, z /= s; w /= s; }
-    void operator/=(float4 s) { x /= s.x, y /= s.y, z /= s.z; w /= s.w; }
+    void operator/=(float s) { x /= s, y /= s, z /= s, w /= s; }
+    void operator/=(float4 s) { x /= s.x, y /= s.y, z /= s.z, w /= s.w; }
+    float2 xy() const { return float2(x, y); }
     float3 xyz() const { return float3(x, y, z); }
     XMVECTOR toXMVector() const { return XMVectorSet(x, y, z, w); }
     std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
@@ -229,13 +243,14 @@ struct Position {
     Position(float px, float py, float pz) : x(int(px * scale)), y(int(py * scale)), z(int(pz * scale)) {}
     Position(float3 p) : x(int(p.x * scale)), y(int(p.y * scale)), z(int(p.z * scale)) {}
     Position(XMVECTOR p) : x(int(XMVectorGetX(p) * scale)), y(int(XMVectorGetY(p) * scale)), z(int(XMVectorGetZ(p) * scale)) {}
+    Position(PxVec3 p) : x(int(p.x * scale)), y(int(p.y * scale)), z(int(p.z * scale)) {}
     void operator=(float3 p) { x = int(p.x * scale), y = int(p.y * scale), z = int(p.z * scale); }
     void operator+=(float3 p) { x += int(p.x * scale), y += int(p.y * scale), z += int(p.z * scale); }
     Position operator+(float3 p) const { return Position(x + int(p.x * scale), y + int(p.y * scale), z + int(p.z * scale)); }
     Position operator-() const { return Position(-x, -y, -z); }
     float3 operator-(Position p) const { return float3((x - p.x) * scaleInv, (y - p.y) * scaleInv, (z - p.z) * scaleInv); }
     float3 toFloat3() const { return float3(x * scaleInv, y * scaleInv, z * scaleInv); }
-    XMVECTOR toXMVector() const { return XMVectorSet(x * scaleInv, y * scaleInv, z * scaleInv, 0); }
+    XMVECTOR toXMVector() const { return XMVectorSet(x * scaleInv, y * scaleInv, z * scaleInv, 1.0f); }
 };
 #undef scale
 #undef scaleInv
@@ -290,10 +305,9 @@ XMVECTOR quaternionBetween(float3 v1, float3 v2) {
     }
 }
 
-float3 worldToNDC(float3 position, XMMATRIX cameraProjViewMat) {
-    float4 ndc = XMVector4Transform(XMVectorSet(position.x, position.y, position.z, 1.0f), cameraProjViewMat);
-    ndc /= ndc.w;
-    return float3(ndc.x, ndc.y, ndc.z);
+float2 ndcToScreen(float2 ndc, float2 screenSize) {
+    float2 coord = (float2(ndc.x, -ndc.y) + 1.0f) * 0.5f;
+    return coord * screenSize;
 }
 
 bool insideNDC(float3 position) {
@@ -336,6 +350,13 @@ bool intersectRayAABB(float3 p, float3 d, AABB a, float* tmin, float3* q) {
     }
     *q = p + d * *tmin;
     return true;
+}
+
+uint32 ARGBToABGR(uint32 argb) {
+    uint32 a_g_ = argb & 0xff00ff00;
+    uint32 _b__ = argb << 16 & 0x00ff0000;
+    uint32 ___r = argb >> 16 & 0x000000ff;
+    return a_g_ | _b__ | ___r;
 }
 
 #include "structsHLSL.h"
@@ -426,11 +447,6 @@ struct D3D {
     D3D12MA::Allocation* renderTexturePrevFrame;
     DXGI_FORMAT renderTextureFormat;
 
-    D3D12MA::Allocation* shapeCirclesBuffer;
-    D3D12MA::Allocation* shapeLinesBuffer;
-    uint8* shapeCirclesBufferPtr;
-    uint8* shapeLinesBufferPtr;
-
     D3D12MA::Allocation* imguiTexture;
     D3D12MA::Allocation* imguiVertexBuffer;
     D3D12MA::Allocation* imguiIndexBuffer;
@@ -486,9 +502,6 @@ struct D3D {
     ID3D12PipelineState* compositePSO;
     ID3D12RootSignature* compositeRootSig;
 
-    ID3D12PipelineState* shapesPSO;
-    ID3D12RootSignature* shapesRootSig;
-
     ID3D12PipelineState* imguiPSO;
     ID3D12RootSignature* imguiRootSig;
 };
@@ -515,6 +528,25 @@ struct DirectWrite {
     // ID2D1SolidColorBrush* d2dBrush;
 };
 
+struct CircleScreenSpace {
+    float2 center;
+    float radius;
+    uint32 color = 0xffffffff;
+    float thickness = 1.0f;
+};
+
+struct LineScreenSpace {
+    float2 p0, p1;
+    uint32 color = 0xffffffff;
+    float thickness = 1.0f;
+};
+
+struct TriangleScreenSpace {
+    float2 p0, p1, p2;
+    uint32 color = 0xffffffff;
+    float thickness = 1.0f;
+};
+
 struct ModelImage {
     D3D12MA::Allocation* gpuData;
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc;
@@ -526,7 +558,7 @@ struct ModelTextureSampler {
 struct ModelTexture {
     ModelImage* image;
     D3D12_TEXTURE_ADDRESS_MODE wrapU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-	D3D12_TEXTURE_ADDRESS_MODE wrapV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    D3D12_TEXTURE_ADDRESS_MODE wrapV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
 };
 
 struct ModelMaterial {
