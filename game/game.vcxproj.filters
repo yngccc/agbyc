@@ -14,35 +14,45 @@
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
     <Filter Include="Source Files\libs">
-      <UniqueIdentifier>{2c11e2f8-adbc-498c-ae0c-d82d5c426bff}</UniqueIdentifier>
+      <UniqueIdentifier>{9cba738d-d6da-4ceb-9d83-63f76ae3c800}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\src\game.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\include\stb\stb_ds.cpp">
+    <ClCompile Include="..\include\cgltf\cgltf.cpp">
       <Filter>Source Files\libs</Filter>
     </ClCompile>
-    <ClCompile Include="..\include\imgui\imgui.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\include\imgui\imgui_draw.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\include\imgui\imgui_tables.cpp">
+    <ClCompile Include="..\include\d3d12MA\D3D12MemAlloc.cpp">
       <Filter>Source Files\libs</Filter>
     </ClCompile>
     <ClCompile Include="..\include\imgui\imgui_widgets.cpp">
       <Filter>Source Files\libs</Filter>
     </ClCompile>
+    <ClCompile Include="..\include\imgui\imgui_tables.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\imgui\imgui_draw.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\imgui\imgui.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\imgui\ImGuizmo.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\rapidyaml\rapidyaml-0.5.0.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\stb\stb_image.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\include\tracy\TracyClient.cpp">
+      <Filter>Source Files\libs</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="..\include\imgui\imconfig.h">
-      <Filter>Source Files\libs</Filter>
-    </ClInclude>
   </ItemGroup>
 </Project>
