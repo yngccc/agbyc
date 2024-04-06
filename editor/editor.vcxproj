@@ -73,13 +73,13 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <TargetName>agbyc_editor_debug</TargetName>
-    <IncludePath>$(SolutionDir)include;$(SolutionDir)include\physx;$(IncludePath)</IncludePath>
-    <LibraryPath>$(SolutionDir)lib/debug;$(LibraryPath)</LibraryPath>
+    <IncludePath>$(SolutionDir)external\include;$(SolutionDir)external\include\physx;$(IncludePath)</IncludePath>
+    <LibraryPath>$(SolutionDir)external\lib_debug;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <TargetName>agbyc_editor_release</TargetName>
-    <IncludePath>$(SolutionDir)include;$(SolutionDir)include\physx;$(IncludePath)</IncludePath>
-    <LibraryPath>$(SolutionDir)lib/release;$(LibraryPath)</LibraryPath>
+    <IncludePath>$(SolutionDir)external\include;$(SolutionDir)external\include\physx;$(IncludePath)</IncludePath>
+    <LibraryPath>$(SolutionDir)external\lib_release;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -124,7 +124,7 @@
       <AdditionalDependencies>d3d12.lib;d3d11.lib;dxgi.lib;dxguid.lib;shcore.lib;xinput.lib;dwrite.lib;d2d1.lib;nvsdk_ngx_d_dbg.lib;physx_64.lib;physxcommon_64.lib;physxfoundation_64.lib;physxcooking_64.lib;pvdruntime_64.lib;lowlevel_static_64.lib;lowlevelaabb_static_64.lib;lowleveldynamics_static_64.lib;physxcharacterkinematic_static_64.lib;physxvehicle_static_64.lib;physxvehicle2_static_64.lib;physxextensions_static_64.lib;physxtask_static_64.lib;scenequery_static_64.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y /d  "$(SolutionDir)lib\debug\*.dll" "$(TargetDir)"</Command>
+      <Command>xcopy /y /d  "$(SolutionDir)external\lib_debug\*.dll" "$(TargetDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -145,7 +145,7 @@
       <AdditionalDependencies>d3d12.lib;d3d11.lib;dxgi.lib;dxguid.lib;shcore.lib;xinput.lib;dwrite.lib;d2d1.lib;nvsdk_ngx_d.lib;physx_64.lib;physxcommon_64.lib;physxfoundation_64.lib;physxcooking_64.lib;pvdruntime_64.lib;lowlevel_static_64.lib;lowlevelaabb_static_64.lib;lowleveldynamics_static_64.lib;physxcharacterkinematic_static_64.lib;physxvehicle_static_64.lib;physxvehicle2_static_64.lib;physxextensions_static_64.lib;physxtask_static_64.lib;scenequery_static_64.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y /d  "$(SolutionDir)lib\release\*.dll" "$(TargetDir)"</Command>
+      <Command>xcopy /y /d  "$(SolutionDir)external\lib_release\*.dll" "$(TargetDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -153,16 +153,16 @@
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\include\cgltf\cgltf.cpp" />
-    <ClCompile Include="..\include\d3d12MA\D3D12MemAlloc.cpp" />
-    <ClCompile Include="..\include\imgui\imgui.cpp" />
-    <ClCompile Include="..\include\imgui\ImGuizmo.cpp" />
-    <ClCompile Include="..\include\imgui\imgui_draw.cpp" />
-    <ClCompile Include="..\include\imgui\imgui_tables.cpp" />
-    <ClCompile Include="..\include\imgui\imgui_widgets.cpp" />
-    <ClCompile Include="..\include\rapidyaml\rapidyaml-0.5.0.cpp" />
-    <ClCompile Include="..\include\stb\stb_image.cpp" />
-    <ClCompile Include="..\include\tracy\TracyClient.cpp" />
+    <ClCompile Include="..\external\include\cgltf\cgltf.cpp" />
+    <ClCompile Include="..\external\include\d3d12MA\D3D12MemAlloc.cpp" />
+    <ClCompile Include="..\external\include\imgui\imgui.cpp" />
+    <ClCompile Include="..\external\include\imgui\ImGuizmo.cpp" />
+    <ClCompile Include="..\external\include\imgui\imgui_draw.cpp" />
+    <ClCompile Include="..\external\include\imgui\imgui_tables.cpp" />
+    <ClCompile Include="..\external\include\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="..\external\include\rapidyaml\rapidyaml-0.5.0.cpp" />
+    <ClCompile Include="..\external\include\stb\stb_image.cpp" />
+    <ClCompile Include="..\external\include\tracy\TracyClient.cpp" />
     <ClCompile Include="..\src\editor.cpp" />
   </ItemGroup>
   <ItemGroup>
