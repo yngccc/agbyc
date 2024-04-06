@@ -734,7 +734,6 @@ struct ModelInstanceMeshNode {
 
 struct ModelInstance {
     Model* model;
-    XMMATRIX transformMat;
     std::vector<ModelInstanceMeshNode> meshNodes;
     ModelAnimation* animation;
     double animationTime;
@@ -772,8 +771,8 @@ struct PlayerStateTransition {
 
 struct Player {
     ModelInstance modelInstance;
-    float3 spawnPosition;
-    XMMATRIX transformMat;
+    Transform transformDefault;
+    Transform transform;
     float walkSpeed;
     float runSpeed;
     float3 movement;
@@ -790,8 +789,8 @@ struct Player {
 struct GameObject {
     std::string name;
     ModelInstance modelInstance;
-    float3 spawnPosition;
-    XMMATRIX transformMat;
+    Transform transformDefault;
+    Transform transform;
     PxRigidActor* collision;
     bool toBeDeleted;
 };
@@ -833,9 +832,8 @@ struct EditorUndo {
     };
 };
 
-enum EditorGizmoTranslationTarget {
-    EditorGizmoTargetModelTransform,
-    EditorGizmoTargetSpawnPosition,
+enum EditorGizmoTarget {
+    EditorGizmoTargetTransform,
     EditorGizmoTargetCollisionTransform,
 };
 
@@ -855,8 +853,8 @@ struct Editor {
     ImVec2 objectPropertiesWindowSize;
 
     ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
-    ImGuizmo::MODE gizmoMode = ImGuizmo::WORLD;
-    EditorGizmoTranslationTarget gizmoTranslateTarget = EditorGizmoTargetModelTransform;
+    ImGuizmo::MODE gizmoMode = ImGuizmo::LOCAL;
+    EditorGizmoTarget gizmoTarget = EditorGizmoTargetTransform;
 };
 
 static bool quit = false;
@@ -2281,7 +2279,6 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
 
     ModelInstance modelInstance = {};
     modelInstance.model = model;
-    modelInstance.transformMat = matrixIdentity;
     modelInstance.meshNodes.resize(model->meshNodes.size());
     for (uint meshNodeIndex = 0; meshNodeIndex < model->meshNodes.size(); meshNodeIndex++) {
         ModelNode* meshNode = model->meshNodes[meshNodeIndex];
@@ -2396,24 +2393,26 @@ void modelInstanceGetSkeletonVisualization(ModelInstance* modelInstance, ModelNo
     }
 }
 
-void imguiTransform(Transform* transform) {
-    if (ImGui::TreeNode("Transform")) {
-        ImGui::InputFloat3("S", &transform->s.x, "%.6f"), ImGui::SameLine();
-        if (ImGui::Button("reset##scale")) transform->s = float3(1, 1, 1);
-        ImGui::InputFloat4("R", &transform->r.x, "%.6f"), ImGui::SameLine();
-        if (ImGui::Button("reset##rotate")) transform->r = float4(0, 0, 0, 1);
-        ImGui::InputFloat3("T", &transform->t.x, "%.6f"), ImGui::SameLine();
-        if (ImGui::Button("reset##translate")) transform->t = float3(0, 0, 0);
+bool imguiTransform(const char* label, Transform* transform) {
+    bool b = false;
+    if (ImGui::TreeNode(label)) {
+        if (ImGui::InputFloat3("S", &transform->s.x, "%.6f")) b = true;
+        ImGui::SameLine();
+        if (ImGui::Button("reset##s")) transform->s = float3(1, 1, 1), b = true;
+        if (ImGui::InputFloat4("R", &transform->r.x, "%.6f")) b = true;
+        ImGui::SameLine();
+        if (ImGui::Button("reset##r")) transform->r = float4(0, 0, 0, 1), b = true;
+        if (ImGui::InputFloat3("T", &transform->t.x, "%.6f")) b = true;
+        ImGui::SameLine();
+        if (ImGui::Button("reset##t")) transform->t = float3(0, 0, 0), b = true;
         ImGui::TreePop();
     }
+    return b;
 }
 
 void imguiModelInstance(ModelInstance* modelInstance) {
     if (ImGui::TreeNode("Model")) {
         ImGui::Text(std::format("File: {}", modelInstance->model->filePath.string()).c_str());
-        Transform transform(modelInstance->transformMat);
-        imguiTransform(&transform);
-        modelInstance->transformMat = transform.toMat();
         if (ImGui::TreeNode("Animations")) {
             for (uint animationIndex = 0; animationIndex < modelInstance->model->animations.size(); animationIndex++) {
                 ModelAnimation& modelAnimation = modelInstance->model->animations[animationIndex];
@@ -2628,13 +2627,8 @@ void worldInit(const std::filesystem::path& path) {
         std::string file;
         playerYaml["file"] >> file;
         player.modelInstance = modelInstanceInit(file);
-        Transform transform;
-        if (ryml::ConstNodeRef modelTransform = playerYaml.find_child("modelTransform"); modelTransform.valid()) {
-            modelTransform >> transform;
-        }
-        player.modelInstance.transformMat = transform.toMat();
-        playerYaml["spawnPosition"] >> player.spawnPosition;
-        player.transformMat = XMMatrixTranslation(player.spawnPosition.x, player.spawnPosition.y, player.spawnPosition.z);
+        playerYaml["transform"] >> player.transformDefault;
+        player.transform = player.transformDefault;
         player.state = PlayerStateIdle;
         playerYaml["walkSpeed"] >> player.walkSpeed;
         playerYaml["runSpeed"] >> player.runSpeed;
@@ -2645,7 +2639,7 @@ void worldInit(const std::filesystem::path& path) {
         player.modelInstance.animation = &player.modelInstance.model->animations[player.idleAnimationIndex];
         playerYaml["cameraLookAtOffset"] >> player.camera.lookAtOffset;
         playerYaml["cameraDistance"] >> player.camera.distance;
-        player.camera.lookAt = player.spawnPosition + player.camera.lookAtOffset;
+        player.camera.lookAt = player.transform.t + player.camera.lookAtOffset;
         playerCameraSetPitchYaw(float2(0, 0));
     }
     ryml::ConstNodeRef gameObjectsYaml = yamlRoot["gameObjects"];
@@ -2655,16 +2649,11 @@ void worldInit(const std::filesystem::path& path) {
         std::string file;
         objYaml["file"] >> file;
         obj.modelInstance = modelInstanceInit(file);
-        Transform transform;
-        if (ryml::ConstNodeRef modelTransform = objYaml.find_child("modelTransform"); modelTransform.valid()) {
-            modelTransform >> transform;
-        }
-        obj.modelInstance.transformMat = transform.toMat();
-        objYaml["spawnPosition"] >> obj.spawnPosition;
-        obj.transformMat = XMMatrixAffineTransformation(XMVectorSet(1, 1, 1, 1), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 0, 0, 1), obj.spawnPosition.toXMVector());
+        objYaml["transform"] >> obj.transformDefault;
+        obj.transform = obj.transformDefault;
         if (ryml::ConstNodeRef collisionYaml = objYaml.find_child("collision"); collisionYaml.valid()) {
             if (collisionYaml["type"] == "static") {
-                obj.collision = physxPhysics->createRigidStatic(Transform(obj.transformMat).toPxTransform());
+                obj.collision = physxPhysics->createRigidStatic(obj.transform.toPxTransform());
                 physxScene->addActor(*obj.collision);
                 for (ryml::ConstNodeRef childYaml : collisionYaml["shapes"].children()) {
                     if (childYaml["type"] == "plane") {
@@ -2732,8 +2721,7 @@ void worldSave() {
     ryml::NodeRef playerYaml = yamlRoot["player"];
     playerYaml |= ryml::MAP;
     playerYaml["file"] << player.modelInstance.model->filePath.string();
-    playerYaml["modelTransform"] << Transform(player.modelInstance.transformMat);
-    playerYaml["spawnPosition"] << player.spawnPosition;
+    playerYaml["transform"] << player.transformDefault;
     playerYaml["walkSpeed"] << player.walkSpeed;
     playerYaml["runSpeed"] << player.runSpeed;
     playerYaml["idleAnimationIndex"] << player.idleAnimationIndex;
@@ -2750,8 +2738,7 @@ void worldSave() {
         gameObjectYaml |= ryml::MAP;
         gameObjectYaml["name"] << obj.name;
         gameObjectYaml["file"] << obj.modelInstance.model->filePath.string();
-        gameObjectYaml["modelTransform"] << Transform(obj.modelInstance.transformMat);
-        gameObjectYaml["spawnPosition"] << obj.spawnPosition;
+        gameObjectYaml["transform"] << Transform(obj.transformDefault);
         if (obj.collision) {
             ryml::NodeRef collisionYaml = gameObjectYaml["collision"];
             collisionYaml |= ryml::MAP;
@@ -3138,7 +3125,7 @@ void editorObjectPropertiesWindow() {
             ImGui::Text("Player");
             imguiModelInstance(&player.modelInstance);
             if (ImGui::TreeNode("Locomotion")) {
-                ImGui::InputFloat3("SpawnPosition", &player.spawnPosition.x, "%.6f");
+                imguiTransform("Transform", &player.transformDefault);
                 ImGui::InputFloat3("Velocity", &player.velocity.x, "%.6f");
                 ImGui::InputFloat3("Acceleration", &player.acceleration.x, "%.6f");
                 ImGui::TreePop();
@@ -3168,7 +3155,7 @@ void editorObjectPropertiesWindow() {
             ImGui::Text("Name \"%s\"", obj.name.c_str());
             imguiModelInstance(&obj.modelInstance);
             if (ImGui::TreeNode("Locomotion")) {
-                ImGui::InputFloat3("SpawnPosition", &obj.spawnPosition.x, "%.6f");
+                imguiTransform("Transform", &obj.transformDefault);
                 ImGui::TreePop();
             }
             bool open = ImGui::TreeNode("Collision");
@@ -3414,25 +3401,21 @@ void editorUpdate() {
             ImGui::OpenPopup("gizmo properties");
         }
         if (ImGui::BeginPopup("gizmo properties")) {
-            if (ImGui::Selectable("world", editor.gizmoMode == ImGuizmo::WORLD)) {
-                editor.gizmoMode = ImGuizmo::WORLD;
-                ImGui::CloseCurrentPopup();
-            }
             if (ImGui::Selectable("local", editor.gizmoMode == ImGuizmo::LOCAL)) {
                 editor.gizmoMode = ImGuizmo::LOCAL;
                 ImGui::CloseCurrentPopup();
             }
+            if (ImGui::Selectable("world", editor.gizmoMode == ImGuizmo::WORLD)) {
+                editor.gizmoMode = ImGuizmo::WORLD;
+                ImGui::CloseCurrentPopup();
+            }
             ImGui::Separator();
-            if (ImGui::Selectable("modelTransform", editor.gizmoTranslateTarget == EditorGizmoTargetModelTransform)) {
-                editor.gizmoTranslateTarget = EditorGizmoTargetModelTransform;
+            if (ImGui::Selectable("transform", editor.gizmoTarget == EditorGizmoTargetTransform)) {
+                editor.gizmoTarget = EditorGizmoTargetTransform;
                 ImGui::CloseCurrentPopup();
             }
-            if (ImGui::Selectable("spawnPosition", editor.gizmoTranslateTarget == EditorGizmoTargetSpawnPosition)) {
-                editor.gizmoTranslateTarget = EditorGizmoTargetSpawnPosition;
-                ImGui::CloseCurrentPopup();
-            }
-            if (ImGui::Selectable("collisionTransform", editor.gizmoTranslateTarget == EditorGizmoTargetCollisionTransform)) {
-                editor.gizmoTranslateTarget = EditorGizmoTargetCollisionTransform;
+            if (ImGui::Selectable("collisionTransform", editor.gizmoTarget == EditorGizmoTargetCollisionTransform)) {
+                editor.gizmoTarget = EditorGizmoTargetCollisionTransform;
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
@@ -3451,32 +3434,24 @@ void editorUpdate() {
         return deltaTransformMat;
     };
     if (editor.selectedObjectType == ObjectTypePlayer) {
-        XMMATRIX transformMat = XMMatrixMultiply(player.modelInstance.transformMat, XMMatrixTranslation(player.spawnPosition.x, player.spawnPosition.y, player.spawnPosition.z));
+        XMMATRIX transformMat = player.transformDefault.toMat();
         XMMATRIX deltaTransformMat = transformGizmo(&transformMat);
-        if (editor.gizmoTranslateTarget == EditorGizmoTargetModelTransform) {
-            player.modelInstance.transformMat = XMMatrixMultiply(transformMat, XMMatrixTranslation(-player.spawnPosition.x, -player.spawnPosition.y, -player.spawnPosition.z));
-        } else if (editor.gizmoTranslateTarget == EditorGizmoTargetSpawnPosition) {
-            if (editor.gizmoOperation == ImGuizmo::OPERATION::TRANSLATE) {
-                player.spawnPosition = XMVector3Transform(player.spawnPosition.toXMVector(), deltaTransformMat);
-            }
+        if (editor.gizmoTarget == EditorGizmoTargetTransform) {
+            player.transformDefault = Transform(transformMat);
         }
     } else if (editor.selectedObjectType == ObjectTypeGameObject && editor.selectedObjectIndex < gameObjects.size()) {
         GameObject& obj = gameObjects[editor.selectedObjectIndex];
-        XMMATRIX transformMat = XMMatrixMultiply(obj.modelInstance.transformMat, XMMatrixTranslation(obj.spawnPosition.x, obj.spawnPosition.y, obj.spawnPosition.z));
+        XMMATRIX transformMat = obj.transformDefault.toMat();
         XMMATRIX deltaTransformMat = transformGizmo(&transformMat);
-        if (editor.gizmoTranslateTarget == EditorGizmoTargetModelTransform) {
-            obj.modelInstance.transformMat = XMMatrixMultiply(transformMat, XMMatrixTranslation(-obj.spawnPosition.x, -obj.spawnPosition.y, -obj.spawnPosition.z));
-        } else if (editor.gizmoTranslateTarget == EditorGizmoTargetSpawnPosition) {
-            if (editor.gizmoOperation == ImGuizmo::OPERATION::TRANSLATE) {
-                obj.spawnPosition = XMVector3Transform(obj.spawnPosition.toXMVector(), deltaTransformMat);
-            }
+        if (editor.gizmoTarget == EditorGizmoTargetTransform) {
+            obj.transformDefault = Transform(transformMat);
         }
     }
-    player.transformMat = XMMatrixAffineTransformation(XMVectorSet(1, 1, 1, 1), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 0, 0, 1), player.spawnPosition.toXMVector());
+    player.transform = player.transformDefault;
     for (GameObject& obj : gameObjects) {
-        obj.transformMat = XMMatrixAffineTransformation(XMVectorSet(1, 1, 1, 1), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 0, 0, 1), obj.spawnPosition.toXMVector());
+        obj.transform = obj.transformDefault;
         if (obj.collision) {
-            obj.collision->setGlobalPose(Transform(obj.transformMat).toPxTransform());
+            obj.collision->setGlobalPose(obj.transform.toPxTransform());
         }
     }
     {
@@ -3642,13 +3617,13 @@ void update() {
 #ifdef EDITOR
         if (editor.selectedObjectType == ObjectTypePlayer) {
             if (player.modelInstance.model->skeletonRootNode) {
-                XMMATRIX transformMat = XMMatrixMultiply(XMMatrixMultiply(XMMatrixMultiply(player.modelInstance.model->meshNodes[0]->globalTransform, XMMatrixScaling(0.001f, 0.001f, -0.001f)), player.modelInstance.transformMat), player.transformMat);
+                XMMATRIX transformMat = XMMatrixMultiply(XMMatrixMultiply(player.modelInstance.model->meshNodes[0]->globalTransform, XMMatrixScaling(0.001f, 0.001f, -0.001f)), player.transform.toMat());
                 modelInstanceGetSkeletonVisualization(&player.modelInstance, player.modelInstance.model->skeletonRootNode, transformMat);
             }
         } else if (editor.selectedObjectType == ObjectTypeGameObject) {
             GameObject& gameObject = gameObjects[editor.selectedObjectIndex];
             if (gameObject.modelInstance.model->skeletonRootNode) {
-                XMMATRIX transformMat = XMMatrixMultiply(XMMatrixMultiply(XMMatrixMultiply(gameObject.modelInstance.model->meshNodes[0]->globalTransform, XMMatrixScaling(0.001f, 0.001f, -0.001f)), gameObject.modelInstance.transformMat), gameObject.transformMat);
+                XMMATRIX transformMat = XMMatrixMultiply(XMMatrixMultiply(gameObject.modelInstance.model->meshNodes[0]->globalTransform, XMMatrixScaling(0.001f, 0.001f, -0.001f)), gameObject.transform.toMat());
                 modelInstanceGetSkeletonVisualization(&gameObject.modelInstance, gameObject.modelInstance.model->skeletonRootNode, transformMat);
             }
         }
@@ -3711,7 +3686,6 @@ void addTLASInstance(ModelInstance* modelInstance, const XMMATRIX& objectTransfo
             transform = XMMatrixMultiply(transform, modelInstance->globalTransformMats[meshNode - &modelInstance->model->nodes[0]]);
         }
         transform = XMMatrixMultiply(transform, XMMatrixScaling(0.001f, 0.001f, -0.001f)); // convert RH to LH && scaling down by 1000
-        transform = XMMatrixMultiply(transform, modelInstance->transformMat);
         transform = XMMatrixMultiply(transform, objectTransform);
         transform = XMMatrixTranspose(transform);
         D3D12_RAYTRACING_INSTANCE_DESC tlasInstanceBuildInfo = {.InstanceID = d3d.cbvSrvUavDescriptorCount, .InstanceMask = objectType, .AccelerationStructure = instanceMeshNode->blas->GetResource()->GetGPUVirtualAddress()};
@@ -3901,10 +3875,10 @@ void d3dRender() {
     }
     {
         PIXSetMarker(d3d.graphicsCmdList, 0, "build TLAS");
-        addTLASInstance(&player.modelInstance, player.transformMat, ObjectTypePlayer, 0);
+        addTLASInstance(&player.modelInstance, player.transform.toMat(), ObjectTypePlayer, 0);
         for (uint objIndex = 0; objIndex < gameObjects.size(); objIndex++) {
             GameObject& obj = gameObjects[objIndex];
-            addTLASInstance(&obj.modelInstance, obj.transformMat, ObjectTypeGameObject, objIndex);
+            addTLASInstance(&obj.modelInstance, obj.transform.toMat(), ObjectTypeGameObject, objIndex);
         }
         // addTLASInstance(&modelInstanceCylinder, XMMatrixAffineTransformation(XMVectorSet(0.05f, player.movement.length(), 0.05f, 0), XMVectorSet(0, 0, 0, 0), quaternionBetween(float3(0, 1, 0), player.movement), player.position.toXMVector()), ObjectTypeNone, 0);
 
