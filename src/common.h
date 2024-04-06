@@ -43,10 +43,10 @@
 
 #if !defined(NDEBUG) ^ defined(_DEBUG)
 #define NDEBUG
-#include <pxphysicsapi.h>
+#include <physx/pxphysicsapi.h>
 #undef NDEBUG
 #else
-#include <pxphysicsapi.h>
+#include <physx/pxphysicsapi.h>
 #endif
 
 #include <dlss/nvsdk_ngx.h>
@@ -69,6 +69,9 @@
 
 #include <tracy/tracy/tracy.hpp>
 
+using namespace DirectX;
+using namespace physx;
+
 typedef int8_t int8;
 typedef int16_t int16;
 typedef int64_t int64;
@@ -81,6 +84,7 @@ typedef uint32_t uint;
 static const float euler = 2.71828182845904523536f;
 static const float pi = 3.14159265358979323846f;
 static const float sqrt2 = 1.41421356237309504880f;
+static const XMMATRIX matrixIdentity = XMMatrixIdentity();
 
 #define KILOBYTES(n) (1024ll * (n))
 #define MEGABYTES(n) (1024ll * 1024ll * (n))
@@ -140,9 +144,6 @@ struct uint_4 {
     uint32 x = 0, y = 0, z = 0, w = 0;
     std::string toString() const { return std::format("[{}, {}, {}, {}]", x, y, z, w); }
 };
-
-using namespace DirectX;
-using namespace physx;
 
 struct float2 {
     float x = 0, y = 0;
@@ -258,7 +259,7 @@ struct Transform {
 };
 
 struct Plane {
-    float3 n;
+    float3 n = {0, 1, 0};
     float d;
 };
 
@@ -748,15 +749,15 @@ struct CameraPlayer {
     float3 lookAtOffset;
     float2 pitchYaw;
     float distance;
-    float fovVertical = 50;
+    float fovVertical = 50.0f;
 };
 
 struct CameraEditor {
     float3 position;
     float3 lookAt;
     float2 pitchYaw;
-    float fovVertical = 50;
-    float moveSpeed = 1;
+    float fovVertical = 50.0f;
+    float moveSpeed = 1.0f;
 };
 
 enum PlayerState {
@@ -772,8 +773,6 @@ struct PlayerStateTransition {
 struct Player {
     ModelInstance modelInstance;
     float3 spawnPosition;
-    float3 position;
-    float3 pitchYawRoll;
     XMMATRIX transformMat;
     float walkSpeed;
     float runSpeed;
@@ -792,8 +791,6 @@ struct GameObject {
     std::string name;
     ModelInstance modelInstance;
     float3 spawnPosition;
-    float3 position;
-    float4 rotation;
     XMMATRIX transformMat;
     PxRigidActor* collision;
     bool toBeDeleted;
@@ -839,7 +836,7 @@ struct EditorUndo {
 enum EditorGizmoTranslationTarget {
     EditorGizmoTargetModelTransform,
     EditorGizmoTargetSpawnPosition,
-    EditorGizmoTargetCollisionShapeTransform,
+    EditorGizmoTargetCollisionTransform,
 };
 
 struct Editor {
@@ -856,9 +853,6 @@ struct Editor {
     ImVec2 objectWindowSize;
     ImVec2 objectPropertiesWindowPos;
     ImVec2 objectPropertiesWindowSize;
-    bool addObjectPopupFlag;
-    bool addCollisionPopupFlag;
-    GameObject* collisionPopupTarget;
 
     ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
     ImGuizmo::MODE gizmoMode = ImGuizmo::WORLD;
@@ -2287,6 +2281,7 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
 
     ModelInstance modelInstance = {};
     modelInstance.model = model;
+    modelInstance.transformMat = matrixIdentity;
     modelInstance.meshNodes.resize(model->meshNodes.size());
     for (uint meshNodeIndex = 0; meshNodeIndex < model->meshNodes.size(); meshNodeIndex++) {
         ModelNode* meshNode = model->meshNodes[meshNodeIndex];
@@ -2489,7 +2484,7 @@ void modelInstanceUpdateAnimation(ModelInstance* modelInstance, double time) {
         }
     }
     for (ModelNode* rootNode : modelInstance->model->rootNodes) {
-        modelTraverseNodesAndGetGlobalTransforms(modelInstance->model, rootNode, XMMatrixIdentity(), modelInstance->localTransforms, modelInstance->globalTransformMats);
+        modelTraverseNodesAndGetGlobalTransforms(modelInstance->model, rootNode, matrixIdentity, modelInstance->localTransforms, modelInstance->globalTransformMats);
     }
     for (uint skinIndex = 0; skinIndex < modelInstance->model->skins.size(); skinIndex++) {
         ModelSkin& skin = modelInstance->model->skins[skinIndex];
@@ -2511,7 +2506,7 @@ void loadSimpleAssets() {
 void physxInit() {
     physxFoundation = PxCreateFoundation(PX_PHYSICS_VERSION, physxAllocator, physxErrorCallback);
     physxPhysics = PxCreatePhysics(PX_PHYSICS_VERSION, *physxFoundation, PxTolerancesScale(), true, nullptr);
-    physxDispatcher = PxDefaultCpuDispatcherCreate(2);
+    physxDispatcher = PxDefaultCpuDispatcherCreate(4);
     PxSceneDesc sceneDesc(physxPhysics->getTolerancesScale());
     sceneDesc.gravity = PxVec3(0.0f, -9.81f, 0.0f);
     sceneDesc.cpuDispatcher = physxDispatcher;
@@ -2582,15 +2577,17 @@ void editorCameraTranslate(float3 translate) {
 }
 #endif
 
-void operator>>(ryml::ConstNodeRef node, float2& v) { node[0] >> v.x, node[1] >> v.y; }
-void operator>>(ryml::ConstNodeRef node, float3& v) { node[0] >> v.x, node[1] >> v.y, node[2] >> v.z; }
-void operator>>(ryml::ConstNodeRef node, float4& v) { node[0] >> v.x, node[1] >> v.y, node[2] >> v.z, node[3] >> v.w; }
-void operator>>(ryml::ConstNodeRef node, Transform& t) { node["scale"] >> t.s, node["rotate"] >> t.r, node["translate"] >> t.t; }
+void operator>>(ryml::ConstNodeRef n, float2& v) { n[0] >> v.x, n[1] >> v.y; }
+void operator>>(ryml::ConstNodeRef n, float3& v) { n[0] >> v.x, n[1] >> v.y, n[2] >> v.z; }
+void operator>>(ryml::ConstNodeRef n, float4& v) { n[0] >> v.x, n[1] >> v.y, n[2] >> v.z, n[3] >> v.w; }
+void operator>>(ryml::ConstNodeRef n, Transform& t) { n[0] >> t.s.x, n[1] >> t.s.y, n[2] >> t.s.z, n[3] >> t.r.x, n[4] >> t.r.y, n[5] >> t.r.z, n[6] >> t.r.w, n[7] >> t.t.x, n[8] >> t.t.y, n[9] >> t.t.z; }
+void operator>>(ryml::ConstNodeRef n, PxTransform& t) { n[0] >> t.q.x, n[1] >> t.q.y, n[2] >> t.q.z, n[3] >> t.q.w, n[4] >> t.p.x, n[5] >> t.p.y, n[6] >> t.p.z; }
 
-void operator<<(ryml::NodeRef node, float2 v) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << v.x, node.append_child() << v.y; }
-void operator<<(ryml::NodeRef node, float3 v) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << v.x, node.append_child() << v.y, node.append_child() << v.z; }
-void operator<<(ryml::NodeRef node, float4 v) { node |= ryml::SEQ, node |= ryml::_WIP_STYLE_FLOW_SL, node.append_child() << v.x, node.append_child() << v.y, node.append_child() << v.z, node.append_child() << v.w; }
-void operator<<(ryml::NodeRef node, Transform t) { node["scale"] << t.s, node["rotate"] << t.r, node["translate"] << t.t; }
+void operator<<(ryml::NodeRef n, float2 v) { n |= ryml::SEQ, n |= ryml::_WIP_STYLE_FLOW_SL, n.append_child() << v.x, n.append_child() << v.y; }
+void operator<<(ryml::NodeRef n, float3 v) { n |= ryml::SEQ, n |= ryml::_WIP_STYLE_FLOW_SL, n.append_child() << v.x, n.append_child() << v.y, n.append_child() << v.z; }
+void operator<<(ryml::NodeRef n, float4 v) { n |= ryml::SEQ, n |= ryml::_WIP_STYLE_FLOW_SL, n.append_child() << v.x, n.append_child() << v.y, n.append_child() << v.z, n.append_child() << v.w; }
+void operator<<(ryml::NodeRef n, Transform t) { n |= ryml::SEQ, n |= ryml::_WIP_STYLE_FLOW_SL, n.append_child() << t.s.x, n.append_child() << t.s.y, n.append_child() << t.s.z, n.append_child() << t.r.x, n.append_child() << t.r.y, n.append_child() << t.r.z, n.append_child() << t.r.w, n.append_child() << t.t.x, n.append_child() << t.t.y, n.append_child() << t.t.z; }
+void operator<<(ryml::NodeRef n, PxTransform t) { n |= ryml::SEQ, n |= ryml::_WIP_STYLE_FLOW_SL, n.append_child() << t.q.x, n.append_child() << t.q.y, n.append_child() << t.q.z, n.append_child() << t.q.w, n.append_child() << t.p.x, n.append_child() << t.p.y, n.append_child() << t.p.z; }
 
 void worldInit(const std::filesystem::path& path) {
     if (!std::filesystem::exists(path)) assert(false);
@@ -2632,10 +2629,12 @@ void worldInit(const std::filesystem::path& path) {
         playerYaml["file"] >> file;
         player.modelInstance = modelInstanceInit(file);
         Transform transform;
-        playerYaml >> transform;
+        if (ryml::ConstNodeRef modelTransform = playerYaml.find_child("modelTransform"); modelTransform.valid()) {
+            modelTransform >> transform;
+        }
         player.modelInstance.transformMat = transform.toMat();
         playerYaml["spawnPosition"] >> player.spawnPosition;
-        player.position = player.spawnPosition;
+        player.transformMat = XMMatrixTranslation(player.spawnPosition.x, player.spawnPosition.y, player.spawnPosition.z);
         player.state = PlayerStateIdle;
         playerYaml["walkSpeed"] >> player.walkSpeed;
         playerYaml["runSpeed"] >> player.runSpeed;
@@ -2646,8 +2645,8 @@ void worldInit(const std::filesystem::path& path) {
         player.modelInstance.animation = &player.modelInstance.model->animations[player.idleAnimationIndex];
         playerYaml["cameraLookAtOffset"] >> player.camera.lookAtOffset;
         playerYaml["cameraDistance"] >> player.camera.distance;
-        player.camera.lookAt = player.position + player.camera.lookAtOffset;
-        playerCameraSetPitchYaw({0, 0});
+        player.camera.lookAt = player.spawnPosition + player.camera.lookAtOffset;
+        playerCameraSetPitchYaw(float2(0, 0));
     }
     ryml::ConstNodeRef gameObjectsYaml = yamlRoot["gameObjects"];
     for (ryml::ConstNodeRef objYaml : gameObjectsYaml) {
@@ -2657,27 +2656,52 @@ void worldInit(const std::filesystem::path& path) {
         objYaml["file"] >> file;
         obj.modelInstance = modelInstanceInit(file);
         Transform transform;
-        objYaml >> transform;
+        if (ryml::ConstNodeRef modelTransform = objYaml.find_child("modelTransform"); modelTransform.valid()) {
+            modelTransform >> transform;
+        }
         obj.modelInstance.transformMat = transform.toMat();
         objYaml["spawnPosition"] >> obj.spawnPosition;
+        obj.transformMat = XMMatrixAffineTransformation(XMVectorSet(1, 1, 1, 1), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 0, 0, 1), obj.spawnPosition.toXMVector());
         if (ryml::ConstNodeRef collisionYaml = objYaml.find_child("collision"); collisionYaml.valid()) {
             if (collisionYaml["type"] == "static") {
-                obj.collision = physxPhysics->createRigidStatic(PxTransform(PxIdentity));
+                obj.collision = physxPhysics->createRigidStatic(Transform(obj.transformMat).toPxTransform());
                 physxScene->addActor(*obj.collision);
                 for (ryml::ConstNodeRef childYaml : collisionYaml["shapes"].children()) {
-                    if (childYaml["type"] == "box") {
-                        ryml::ConstNodeRef extentsYaml = childYaml["extents"];
-                        ryml::ConstNodeRef transformYaml = childYaml["transform"];
-                        float ex, ey, ez;
-                        float tx, ty, tz;
-                        float qx, qy, qz, qw;
-                        extentsYaml[0] >> ex, extentsYaml[1] >> ey, extentsYaml[2] >> ez;
-                        transformYaml[0] >> tx, transformYaml[1] >> ty, transformYaml[2] >> tz;
-                        transformYaml[3] >> qx, transformYaml[4] >> qy, transformYaml[5] >> qz, transformYaml[6] >> qw;
-                        PxShape* boxShape = physxPhysics->createShape(PxBoxGeometry(ex, ey, ez), *physxDefaultMaterial);
-                        boxShape->setLocalPose(PxTransform(tx, ty, tz, PxQuat(qx, qy, qz, qw)));
+                    if (childYaml["type"] == "plane") {
+                        PxTransform transform;
+                        childYaml["transform"] >> transform;
+                        PxShape* planeShape = physxPhysics->createShape(PxPlaneGeometry(), *physxDefaultMaterial, true);
+                        planeShape->setLocalPose(transform);
+                        obj.collision->attachShape(*planeShape);
+                        planeShape->release();
+                    } else if (childYaml["type"] == "box") {
+                        float3 extents;
+                        PxTransform transform;
+                        childYaml["extents"] >> extents;
+                        childYaml["transform"] >> transform;
+                        PxShape* boxShape = physxPhysics->createShape(PxBoxGeometry(extents.x, extents.y, extents.z), *physxDefaultMaterial, true);
+                        boxShape->setLocalPose(transform);
                         obj.collision->attachShape(*boxShape);
                         boxShape->release();
+                    } else if (childYaml["type"] == "sphere") {
+                        float radius;
+                        PxTransform transform;
+                        childYaml["radius"] >> radius;
+                        childYaml["transform"] >> transform;
+                        PxShape* sphereShape = physxPhysics->createShape(PxSphereGeometry(radius), *physxDefaultMaterial, true);
+                        sphereShape->setLocalPose(transform);
+                        obj.collision->attachShape(*sphereShape);
+                        sphereShape->release();
+                    } else if (childYaml["type"] == "capsule") {
+                        float radius, halfHeight;
+                        PxTransform transform;
+                        childYaml["radius"] >> radius;
+                        childYaml["halfHeight"] >> halfHeight;
+                        childYaml["transform"] >> transform;
+                        PxShape* capsuleShape = physxPhysics->createShape(PxCapsuleGeometry(radius, halfHeight), *physxDefaultMaterial, true);
+                        capsuleShape->setLocalPose(transform);
+                        obj.collision->attachShape(*capsuleShape);
+                        capsuleShape->release();
                     } else {
                         assert(false);
                     }
@@ -2708,8 +2732,7 @@ void worldSave() {
     ryml::NodeRef playerYaml = yamlRoot["player"];
     playerYaml |= ryml::MAP;
     playerYaml["file"] << player.modelInstance.model->filePath.string();
-    playerYaml << Transform(player.modelInstance.transformMat);
-    ;
+    playerYaml["modelTransform"] << Transform(player.modelInstance.transformMat);
     playerYaml["spawnPosition"] << player.spawnPosition;
     playerYaml["walkSpeed"] << player.walkSpeed;
     playerYaml["runSpeed"] << player.runSpeed;
@@ -2727,7 +2750,7 @@ void worldSave() {
         gameObjectYaml |= ryml::MAP;
         gameObjectYaml["name"] << obj.name;
         gameObjectYaml["file"] << obj.modelInstance.model->filePath.string();
-        gameObjectYaml << Transform(obj.modelInstance.transformMat);
+        gameObjectYaml["modelTransform"] << Transform(obj.modelInstance.transformMat);
         gameObjectYaml["spawnPosition"] << obj.spawnPosition;
         if (obj.collision) {
             ryml::NodeRef collisionYaml = gameObjectYaml["collision"];
@@ -2741,24 +2764,39 @@ void worldSave() {
                 uint shapeCount = obj.collision->getShapes(shapes.data(), 256);
                 for (uint shapeIndex = 0; shapeIndex < shapeCount; shapeIndex++) {
                     PxShape* shape = shapes[shapeIndex];
-                    PxGeometryType::Enum geometryType = shape->getGeometryType();
+                    const PxGeometry& geometry = shape->getGeometry();
+                    PxGeometryType::Enum geometryType = geometry.getType();
                     if (geometryType == PxGeometryType::ePLANE) {
-                        assert(false);
                         PxTransform transform = shape->getLocalPose();
+                        ryml::NodeRef planeYaml = shapesYaml.append_child();
+                        planeYaml |= ryml::MAP;
+                        planeYaml["type"] = "plane";
+                        planeYaml["transform"] << transform;
                     } else if (geometryType == PxGeometryType::eBOX) {
-                        PxBoxGeometry box;
-                        assert(shape->getBoxGeometry(box));
+                        PxBoxGeometry box = (const PxBoxGeometry&)geometry;
                         PxTransform transform = shape->getLocalPose();
                         ryml::NodeRef boxYaml = shapesYaml.append_child();
                         boxYaml |= ryml::MAP;
                         boxYaml["type"] = "box";
-                        ryml::NodeRef extentsYaml = boxYaml["extents"];
-                        extentsYaml |= ryml::SEQ, extentsYaml |= ryml::_WIP_STYLE_FLOW_SL;
-                        extentsYaml.append_child() << box.halfExtents.x, extentsYaml.append_child() << box.halfExtents.y, extentsYaml.append_child() << box.halfExtents.z;
-                        ryml::NodeRef transformYaml = boxYaml["transform"];
-                        transformYaml |= ryml::SEQ, transformYaml |= ryml::_WIP_STYLE_FLOW_SL;
-                        transformYaml.append_child() << transform.p.x, transformYaml.append_child() << transform.p.y, transformYaml.append_child() << transform.p.z,
-                            transformYaml.append_child() << transform.q.x, transformYaml.append_child() << transform.q.y, transformYaml.append_child() << transform.q.z, transformYaml.append_child() << transform.q.w;
+                        boxYaml["extents"] << float3(box.halfExtents);
+                        boxYaml["transform"] << transform;
+                    } else if (geometryType == PxGeometryType::eSPHERE) {
+                        PxSphereGeometry sphere = (const PxSphereGeometry&)geometry;
+                        PxTransform transform = shape->getLocalPose();
+                        ryml::NodeRef sphereYaml = shapesYaml.append_child();
+                        sphereYaml |= ryml::MAP;
+                        sphereYaml["type"] = "sphere";
+                        sphereYaml["radius"] << sphere.radius;
+                        sphereYaml["transform"] << transform;
+                    } else if (geometryType == PxGeometryType::eCAPSULE) {
+                        PxCapsuleGeometry capsule = (const PxCapsuleGeometry&)geometry;
+                        PxTransform transform = shape->getLocalPose();
+                        ryml::NodeRef capsuleYaml = shapesYaml.append_child();
+                        capsuleYaml |= ryml::MAP;
+                        capsuleYaml["type"] = "capsule";
+                        capsuleYaml["radius"] << capsule.radius;
+                        capsuleYaml["halfHeight"] << capsule.halfHeight;
+                        capsuleYaml["transform"] << transform;
                     } else {
                         assert(false);
                     }
@@ -2775,6 +2813,7 @@ void worldSave() {
 }
 
 void worldReadSave(const std::filesystem::path& path) {
+#ifndef EDITOR
     if (!std::filesystem::exists(path)) return;
 
     std::string yamlStr = fileReadStr(path);
@@ -2782,20 +2821,26 @@ void worldReadSave(const std::filesystem::path& path) {
     ryml::ConstNodeRef yamlRoot = yamlTree.rootref();
 
     ryml::ConstNodeRef playerYaml = yamlRoot["player"];
-    playerYaml["position"] >> player.position;
+    Transform transform;
+    playerYaml["transform"] >> transform;
+    player.transformMat = transform.toMat();
+#endif;
 }
 
 void worldWriteSave(const std::filesystem::path& path) {
+#ifndef EDITOR
     ryml::Tree yamlTree;
     ryml::NodeRef yamlRoot = yamlTree.rootref();
     yamlRoot |= ryml::MAP;
 
     ryml::NodeRef playerYaml = yamlRoot["player"];
     playerYaml |= ryml::MAP;
-    playerYaml["position"] << player.position;
+    Transform transform(player.transformMat);
+    playerYaml["transform"] << transform;
 
     std::string yamlStr = ryml::emitrs_yaml<std::string>(yamlTree);
     fileWriteStr(path, yamlStr);
+#endif
 }
 
 // void worldReset() {
@@ -2995,9 +3040,6 @@ void editorMainMenuBar() {
                 ImGui::EndMenu();
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Add")) {
-                editor.addObjectPopupFlag = true;
-            }
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -3020,26 +3062,67 @@ void editorObjectsWindow() {
         if (editor.selectedObjectType == ObjectTypePlayer && ImGui::BeginPopup("player edit")) {
             ImGui::EndPopup();
         }
-        if (ImGui::TreeNode("Game Objects")) {
-            int objID = 0;
+        bool newGameObjectPopup = false;
+        bool open = ImGui::TreeNode("Game Objects");
+        if (ImGui::BeginPopupContextItem()) {
+            if (ImGui::Button("New Game Object")) {
+                newGameObjectPopup = true;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        if (newGameObjectPopup) {
+            ImGui::OpenPopup("NewGameObjectPopup");
+        }
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (ImGui::BeginPopupModal("NewGameObjectPopup", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            static int objectType = 0;
+            static char objectName[32] = {};
+            static char filePath[256] = {};
+            ImGui::Combo("Object Type", &objectType, "Game Object\0");
+            if (objectType == 0) {
+                ImGui::InputText("Name", objectName, sizeof(objectName));
+                ImGui::InputText("File", filePath, sizeof(filePath)), ImGui::SameLine();
+                if (ImGui::Button("Browse")) {
+                    OPENFILENAMEA openfileName = {.lStructSize = sizeof(OPENFILENAMEA), .hwndOwner = window.hwnd, .lpstrFile = filePath, .nMaxFile = sizeof(filePath)};
+                    GetOpenFileNameA(&openfileName);
+                }
+            }
+            if (ImGui::Button("Ok")) {
+                if (objectName[0] == '\0') {
+                    ImGui::DebugLog("error: object name is empty");
+                } else {
+                    std::filesystem::path path = std::filesystem::relative(filePath, assetsDir);
+                    if (objectType == 0) {
+                        GameObject gameObject = {.name = objectName, .modelInstance = modelInstanceInit(path)};
+                        gameObjects.push_back(std::move(gameObject));
+                    }
+                }
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        if (open) {
             for (uint objIndex = 0; objIndex < gameObjects.size(); objIndex++) {
                 GameObject& object = gameObjects[objIndex];
-                ImGui::PushID(objID++);
+                ImGui::PushID(objIndex);
                 if (ImGui::Selectable(object.name.c_str(), editor.selectedObjectType == ObjectTypeGameObject && editor.selectedObjectIndex == objIndex)) {
                     editor.selectedObjectType = ObjectTypeGameObject;
                     editor.selectedObjectIndex = objIndex;
                 }
-                ImGui::PopID();
-                if (editor.selectedObjectType == ObjectTypeGameObject && editor.selectedObjectIndex == objIndex && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
-                    ImGui::OpenPopup("game object edit");
-                }
-                if (editor.selectedObjectType == ObjectTypeGameObject && editor.selectedObjectIndex == objIndex && ImGui::BeginPopup("game object edit")) {
-                    if (ImGui::Selectable("delete")) {
+                if (ImGui::BeginPopupContextItem()) {
+                    if (ImGui::Button("Delete")) {
                         object.toBeDeleted = true;
                         editor.selectedObjectType = ObjectTypeNone;
+                        ImGui::CloseCurrentPopup();
                     }
                     ImGui::EndPopup();
                 }
+                ImGui::PopID();
             }
             ImGui::TreePop();
         }
@@ -3088,49 +3171,170 @@ void editorObjectPropertiesWindow() {
                 ImGui::InputFloat3("SpawnPosition", &obj.spawnPosition.x, "%.6f");
                 ImGui::TreePop();
             }
-            if (ImGui::TreeNode("Collision")) {
-                if (!obj.collision) {
-                    if (ImGui::Button("new collision")) {
-                        editor.collisionPopupTarget = &obj;
-                        editor.addCollisionPopupFlag = true;
+            bool open = ImGui::TreeNode("Collision");
+            if (ImGui::BeginPopupContextItem()) {
+                if (obj.collision) {
+                    if (ImGui::Button("delete")) {
+                        obj.collision->release();
+                        obj.collision = nullptr;
+                        ImGui::CloseCurrentPopup();
                     }
                 } else {
+                    if (ImGui::Button("new rigid static")) {
+                        obj.collision = physxPhysics->createRigidStatic(PxTransform(PxIdentity));
+                        physxScene->addActor(*obj.collision);
+                        ImGui::CloseCurrentPopup();
+                    }
+                    if (ImGui::Button("new rigid dynamic")) {
+                        obj.collision = physxPhysics->createRigidDynamic(PxTransform(PxIdentity));
+                        physxScene->addActor(*obj.collision);
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::EndPopup();
+            }
+            if (open) {
+                if (obj.collision) {
                     PxActorType::Enum actorType = obj.collision->getType();
                     if (actorType == PxActorType::eRIGID_STATIC) {
                         ImGui::Text("Type: Static");
-                        if (ImGui::TreeNode("Shapes")) {
+                        bool open = ImGui::TreeNode(std::format("Shapes ({})", obj.collision->getNbShapes()).c_str());
+                        if (ImGui::BeginPopupContextItem()) {
+                            if (ImGui::Button("new plane")) {
+                                PxRigidActorExt::createExclusiveShape(*obj.collision, PxPlaneGeometry(), *physxDefaultMaterial);
+                                ImGui::CloseCurrentPopup();
+                            }
+                            if (ImGui::Button("new box")) {
+                                PxRigidActorExt::createExclusiveShape(*obj.collision, PxBoxGeometry(0.001f, 0.001f, 0.001f), *physxDefaultMaterial);
+                                ImGui::CloseCurrentPopup();
+                            }
+                            if (ImGui::Button("new sphere")) {
+                                PxRigidActorExt::createExclusiveShape(*obj.collision, PxSphereGeometry(0.001f), *physxDefaultMaterial);
+                                ImGui::CloseCurrentPopup();
+                            }
+                            if (ImGui::Button("new capsule")) {
+                                PxRigidActorExt::createExclusiveShape(*obj.collision, PxCapsuleGeometry(0.001f, 0.001f), *physxDefaultMaterial);
+                                ImGui::CloseCurrentPopup();
+                            }
+                            ImGui::EndPopup();
+                        }
+                        if (open) {
                             static std::vector<PxShape*> shapes(256);
                             uint shapeCount = obj.collision->getShapes(shapes.data(), 256);
                             for (uint shapeIndex = 0; shapeIndex < shapeCount; shapeIndex++) {
                                 PxShape* shape = shapes[shapeIndex];
-                                PxGeometryType::Enum geometryType = shape->getGeometryType();
-                                if (geometryType == PxGeometryType::eBOX) {
-                                    if (ImGui::TreeNode("box")) {
-                                        PxBoxGeometry box;
-                                        assert(shape->getBoxGeometry(box));
-                                        PxTransform transform = shape->getLocalPose();
-                                        bool b0 = ImGui::InputFloat3("extents", &box.halfExtents.x);
-                                        bool b1 = ImGui::InputFloat3("translate", &transform.p.x);
-                                        bool b2 = ImGui::InputFloat4("rotate", &transform.q.x);
-                                        if ((b0 || b1 || b2) && (box.isValid() && transform.isValid())) {
+                                const PxGeometry& geometry = shape->getGeometry();
+                                PxGeometryType::Enum geometryType = geometry.getType();
+                                ImGui::PushID(shapeIndex);
+                                if (geometryType == PxGeometryType::ePLANE) {
+                                    bool open = ImGui::TreeNode("plane");
+                                    if (ImGui::BeginPopupContextItem()) {
+                                        if (ImGui::Button("delete")) {
                                             obj.collision->detachShape(*shape);
-                                            PxShape* newShape = PxRigidActorExt::createExclusiveShape(*obj.collision, box, *physxDefaultMaterial);
-                                            newShape->setLocalPose(transform);
+                                            shape = nullptr;
+                                            ImGui::CloseCurrentPopup();
+                                        }
+                                        ImGui::EndPopup();
+                                    }
+                                    if (open) {
+                                        if (shape) {
+                                            PxPlaneGeometry plane = (const PxPlaneGeometry&)geometry;
+                                            PxTransform transform = shape->getLocalPose();
+                                            bool b0 = ImGui::InputFloat3("translate", &transform.p.x);
+                                            bool b1 = ImGui::InputFloat4("rotate", &transform.q.x);
+                                            if ((b0 || b1) && transform.isValid()) {
+                                                obj.collision->detachShape(*shape);
+                                                PxShape* newShape = PxRigidActorExt::createExclusiveShape(*obj.collision, plane, *physxDefaultMaterial);
+                                                newShape->setLocalPose(transform);
+                                            }
+                                        }
+                                        ImGui::TreePop();
+                                    }
+                                } else if (geometryType == PxGeometryType::eBOX) {
+                                    bool open = ImGui::TreeNode("box");
+                                    if (ImGui::BeginPopupContextItem()) {
+                                        if (ImGui::Button("delete")) {
+                                            obj.collision->detachShape(*shape);
+                                            shape = nullptr;
+                                            ImGui::CloseCurrentPopup();
+                                        }
+                                        ImGui::EndPopup();
+                                    }
+                                    if (open) {
+                                        if (shape) {
+                                            PxBoxGeometry box = (const PxBoxGeometry&)geometry;
+                                            PxTransform transform = shape->getLocalPose();
+                                            bool b0 = ImGui::InputFloat3("extents", &box.halfExtents.x);
+                                            bool b1 = ImGui::InputFloat3("translate", &transform.p.x);
+                                            bool b2 = ImGui::InputFloat4("rotate", &transform.q.x);
+                                            if ((b0 || b1 || b2) && (box.isValid() && transform.isValid())) {
+                                                obj.collision->detachShape(*shape);
+                                                PxShape* newShape = PxRigidActorExt::createExclusiveShape(*obj.collision, box, *physxDefaultMaterial);
+                                                newShape->setLocalPose(transform);
+                                            }
+                                        }
+                                        ImGui::TreePop();
+                                    }
+                                } else if (geometryType == PxGeometryType::eSPHERE) {
+                                    bool open = ImGui::TreeNode("sphere");
+                                    if (ImGui::BeginPopupContextItem()) {
+                                        if (ImGui::Button("delete")) {
+                                            obj.collision->detachShape(*shape);
+                                            shape = nullptr;
+                                            ImGui::CloseCurrentPopup();
+                                        }
+                                        ImGui::EndPopup();
+                                    }
+                                    if (open) {
+                                        if (shape) {
+                                            PxSphereGeometry sphere = (const PxSphereGeometry&)geometry;
+                                            PxTransform transform = shape->getLocalPose();
+                                            bool b0 = ImGui::InputFloat("radius", &sphere.radius);
+                                            bool b1 = ImGui::InputFloat3("translate", &transform.p.x);
+                                            bool b2 = ImGui::InputFloat4("rotate", &transform.q.x);
+                                            if ((b0 || b1 || b2) && (sphere.isValid() && transform.isValid())) {
+                                                obj.collision->detachShape(*shape);
+                                                PxShape* newShape = PxRigidActorExt::createExclusiveShape(*obj.collision, sphere, *physxDefaultMaterial);
+                                                newShape->setLocalPose(transform);
+                                            }
+                                        }
+                                        ImGui::TreePop();
+                                    }
+                                } else if (geometryType == PxGeometryType::eCAPSULE) {
+                                    bool open = ImGui::TreeNode("capsule");
+                                    if (ImGui::BeginPopupContextItem()) {
+                                        if (ImGui::Button("delete")) {
+                                            obj.collision->detachShape(*shape);
+                                            shape = nullptr;
+                                            ImGui::CloseCurrentPopup();
+                                        }
+                                        ImGui::EndPopup();
+                                    }
+                                    if (open) {
+                                        if (shape) {
+                                            PxCapsuleGeometry capsule = (const PxCapsuleGeometry&)geometry;
+                                            PxTransform transform = shape->getLocalPose();
+                                            bool b0 = ImGui::InputFloat("radius", &capsule.radius);
+                                            bool b1 = ImGui::InputFloat("halfHeight", &capsule.halfHeight);
+                                            bool b2 = ImGui::InputFloat3("translate", &transform.p.x);
+                                            bool b3 = ImGui::InputFloat4("rotate", &transform.q.x);
+                                            if ((b0 || b1 || b2 || b3) && (capsule.isValid() && transform.isValid())) {
+                                                obj.collision->detachShape(*shape);
+                                                PxShape* newShape = PxRigidActorExt::createExclusiveShape(*obj.collision, capsule, *physxDefaultMaterial);
+                                                newShape->setLocalPose(transform);
+                                            }
                                         }
                                         ImGui::TreePop();
                                     }
                                 } else {
                                     assert(false);
                                 }
+                                ImGui::PopID();
                             }
                             ImGui::TreePop();
                         }
                     } else {
                         assert(false);
-                    }
-                    if (ImGui::Button("Delete")) {
-                        obj.collision->release();
-                        obj.collision = nullptr;
                     }
                 }
                 ImGui::TreePop();
@@ -3138,84 +3342,6 @@ void editorObjectPropertiesWindow() {
         }
     }
     ImGui::End();
-}
-
-void editorAddObjectPopup() {
-    if (editor.addObjectPopupFlag) {
-        ImGui::OpenPopup("add object popup");
-        editor.addObjectPopupFlag = false;
-    }
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("add object popup", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        static int objectType = 0;
-        static char objectName[32] = {};
-        static char filePath[256] = {};
-        ImGui::Combo("Object Type", &objectType, "Game Object\0");
-        if (objectType == 0) {
-            ImGui::InputText("Name", objectName, sizeof(objectName));
-            ImGui::InputText("File", filePath, sizeof(filePath)), ImGui::SameLine();
-            if (ImGui::Button("Browse")) {
-                OPENFILENAMEA openfileName = {.lStructSize = sizeof(OPENFILENAMEA), .hwndOwner = window.hwnd, .lpstrFile = filePath, .nMaxFile = sizeof(filePath)};
-                GetOpenFileNameA(&openfileName);
-            }
-        }
-        if (ImGui::Button("Ok")) {
-            if (objectName[0] == '\0') {
-                ImGui::DebugLog("error: object name is empty");
-            } else {
-                std::filesystem::path path = std::filesystem::relative(filePath, assetsDir);
-                if (objectType == 0) {
-                    GameObject gameObject = {.name = objectName, .modelInstance = modelInstanceInit(path)};
-                    gameObjects.push_back(std::move(gameObject));
-                }
-            }
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel")) {
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-}
-
-void editorAddCollisionPopup() {
-    if (editor.addCollisionPopupFlag) {
-        ImGui::OpenPopup("add collision popup");
-        editor.addCollisionPopupFlag = false;
-    }
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("add collision popup", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        const char* typeStrs = "rigid\0dynamic";
-        const char* shapeStrs = "plane\0box\0sphere\0capsule\0convex hull\0triangle mesh";
-        static int type = 0;
-        static int shape = 0;
-        ImGui::Combo("type", &type, typeStrs);
-        ImGui::Combo("shape", &shape, shapeStrs);
-        if (ImGui::Button("Ok")) {
-            if (type == 0) {
-                if (shape == 0) {
-                    editor.collisionPopupTarget->collision = physxPhysics->createRigidStatic(Transform(editor.collisionPopupTarget->transformMat).toPxTransform());
-                    PxRigidActorExt::createExclusiveShape(*editor.collisionPopupTarget->collision, PxPlaneGeometry(), *physxDefaultMaterial);
-                    physxScene->addActor(*editor.collisionPopupTarget->collision);
-                } else if (shape == 1) {
-                    editor.collisionPopupTarget->collision = physxPhysics->createRigidStatic(Transform(editor.collisionPopupTarget->transformMat).toPxTransform());
-                    PxRigidActorExt::createExclusiveShape(*editor.collisionPopupTarget->collision, PxBoxGeometry(0.001f, 0.001f, 0.001f), *physxDefaultMaterial);
-                    physxScene->addActor(*editor.collisionPopupTarget->collision);
-                } else {
-                    assert(false);
-                }
-            } else if (type == 1) {
-                assert(false);
-            }
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel")) {
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
 }
 
 void editorUpdate() {
@@ -3245,8 +3371,6 @@ void editorUpdate() {
     editorMainMenuBar();
     editorObjectsWindow();
     editorObjectPropertiesWindow();
-    editorAddObjectPopup();
-    editorAddCollisionPopup();
 
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().WantCaptureMouse) {
         mouseSelectX = (uint)mousePos.x;
@@ -3285,7 +3409,6 @@ void editorUpdate() {
         cameraViewProjectMat = XMMatrixMultiply(cameraViewMat, cameraProjectMat);
         cameraViewProjectInverseMat = XMMatrixInverse(nullptr, cameraViewProjectMat);
     }
-
     auto transformGizmo = [](XMMATRIX* transformMat) -> XMMATRIX {
         if (ImGui::IsKeyPressed(ImGuiKey_Space) && ImGui::IsKeyDown(ImGuiKey_LeftShift)) {
             ImGui::OpenPopup("gizmo properties");
@@ -3308,8 +3431,8 @@ void editorUpdate() {
                 editor.gizmoTranslateTarget = EditorGizmoTargetSpawnPosition;
                 ImGui::CloseCurrentPopup();
             }
-            if (ImGui::Selectable("collisionShapeTransform", editor.gizmoTranslateTarget == EditorGizmoTargetCollisionShapeTransform)) {
-                editor.gizmoTranslateTarget = EditorGizmoTargetCollisionShapeTransform;
+            if (ImGui::Selectable("collisionTransform", editor.gizmoTranslateTarget == EditorGizmoTargetCollisionTransform)) {
+                editor.gizmoTranslateTarget = EditorGizmoTargetCollisionTransform;
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
@@ -3323,7 +3446,7 @@ void editorUpdate() {
                 editor.gizmoOperation = ImGuizmo::SCALE;
             }
         }
-        XMMATRIX deltaTransformMat = XMMatrixIdentity();
+        XMMATRIX deltaTransformMat = matrixIdentity;
         ImGuizmo::Manipulate((const float*)&cameraViewMat, (const float*)&cameraProjectMat, editor.gizmoOperation, editor.gizmoMode, (float*)transformMat, (float*)&deltaTransformMat);
         return deltaTransformMat;
     };
@@ -3349,6 +3472,13 @@ void editorUpdate() {
             }
         }
     }
+    player.transformMat = XMMatrixAffineTransformation(XMVectorSet(1, 1, 1, 1), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 0, 0, 1), player.spawnPosition.toXMVector());
+    for (GameObject& obj : gameObjects) {
+        obj.transformMat = XMMatrixAffineTransformation(XMVectorSet(1, 1, 1, 1), XMVectorSet(0, 0, 0, 0), XMVectorSet(0, 0, 0, 1), obj.spawnPosition.toXMVector());
+        if (obj.collision) {
+            obj.collision->setGlobalPose(Transform(obj.transformMat).toPxTransform());
+        }
+    }
     {
         auto objIter = gameObjects.begin();
         while (objIter != gameObjects.end()) {
@@ -3371,22 +3501,22 @@ void editorUpdate() {
 }
 #endif
 
-//void updateGameUpdateLiveProc() {
-//    static HMODULE gameDLL = nullptr;
-//    static std::filesystem::path gameDLLPath = exeDir / "game.dll";
-//    static std::filesystem::path gameDLLCopyPath = exeDir / "game.dll";
-//    static std::filesystem::file_time_type gameDLLPrevLastWriteTime = {};
-//    std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(gameDLLPath);
-//    if (lastWriteTime > gameDLLPrevLastWriteTime) {
-//        gameDLLPrevLastWriteTime = lastWriteTime;
-//        FreeLibrary(gameDLL);
-//        CopyFileW(gameDLLPath.c_str(), gameDLLCopyPath.c_str(), false);
-//        gameDLL = LoadLibraryW(gameDLLCopyPath.c_str());
-//        assert(gameDLL);
-//        gameUpdateLive = (gameUpdateLiveProc)GetProcAddress(gameDLL, "gameUpdateLive");
-//        assert(gameUpdateLive);
-//    }
-//}
+// void updateGameUpdateLiveProc() {
+//     static HMODULE gameDLL = nullptr;
+//     static std::filesystem::path gameDLLPath = exeDir / "game.dll";
+//     static std::filesystem::path gameDLLCopyPath = exeDir / "game.dll";
+//     static std::filesystem::file_time_type gameDLLPrevLastWriteTime = {};
+//     std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(gameDLLPath);
+//     if (lastWriteTime > gameDLLPrevLastWriteTime) {
+//         gameDLLPrevLastWriteTime = lastWriteTime;
+//         FreeLibrary(gameDLL);
+//         CopyFileW(gameDLLPath.c_str(), gameDLLCopyPath.c_str(), false);
+//         gameDLL = LoadLibraryW(gameDLLCopyPath.c_str());
+//         assert(gameDLL);
+//         gameUpdateLive = (gameUpdateLiveProc)GetProcAddress(gameDLL, "gameUpdateLive");
+//         assert(gameUpdateLive);
+//     }
+// }
 
 void gameUpdate() {
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !showMenu) {
@@ -3398,29 +3528,29 @@ void gameUpdate() {
             return;
         }
     }
-    if (d3d.collisionQueriesFenceValue > 0) {
-        d3dWaitForCollisionQueries();
-        CollisionQueryResult queryResult = d3d.collisionQueryResultsBufferPtr[1];
-        // std::string str = std::format("player Movement: {}\nqueryResultDistance: {}\nqueryResultInstance: {}\n", player.movement.toString(), queryResult.distance.toString(), queryResult.instanceIndex);
-        // ImGui::DebugLog("%s", str.c_str());
-        if (queryResult.instanceIndex == UINT_MAX) {
-            // ImGui::DebugLog("null\n");
-            if (player.movement != float3(0, 0, 0)) {
-                player.position += player.movement;
-                playerCameraTranslate(player.movement);
-                float angle = acosf(player.movement.normalize().dot(float3(0, 0, -1)));
-                if (player.movement.x > 0) angle = -angle;
-                player.pitchYawRoll = float3(0, angle, 0);
-            }
-        } else {
-            TLASInstanceInfo& instanceInfo = tlasInstancesInfos[queryResult.instanceIndex];
-            if (instanceInfo.objectType == ObjectTypeGameObject) {
-                // ImGui::DebugLog("%s\n", gameObjects[instanceInfo.objectIndex].name.c_str());
-            } else {
-                // ImGui::DebugLog("wtf\n");
-            }
-        }
-    }
+    // if (d3d.collisionQueriesFenceValue > 0) {
+    //     d3dWaitForCollisionQueries();
+    //     CollisionQueryResult queryResult = d3d.collisionQueryResultsBufferPtr[1];
+    //     // std::string str = std::format("player Movement: {}\nqueryResultDistance: {}\nqueryResultInstance: {}\n", player.movement.toString(), queryResult.distance.toString(), queryResult.instanceIndex);
+    //     // ImGui::DebugLog("%s", str.c_str());
+    //     if (queryResult.instanceIndex == UINT_MAX) {
+    //         // ImGui::DebugLog("null\n");
+    //         if (player.movement != float3(0, 0, 0)) {
+    //             player.position += player.movement;
+    //             playerCameraTranslate(player.movement);
+    //             float angle = acosf(player.movement.normalize().dot(float3(0, 0, -1)));
+    //             if (player.movement.x > 0) angle = -angle;
+    //             player.pitchYawRoll = float3(0, angle, 0);
+    //         }
+    //     } else {
+    //         TLASInstanceInfo& instanceInfo = tlasInstancesInfos[queryResult.instanceIndex];
+    //         if (instanceInfo.objectType == ObjectTypeGameObject) {
+    //             // ImGui::DebugLog("%s\n", gameObjects[instanceInfo.objectIndex].name.c_str());
+    //         } else {
+    //             // ImGui::DebugLog("wtf\n");
+    //         }
+    //     }
+    // }
     {
         float pitch = (mouseDeltaRaw.y * mouseSensitivity - controller.rsY * controllerSensitivity) * (float)frameTime;
         float yaw = (mouseDeltaRaw.x * mouseSensitivity + controller.rsX * controllerSensitivity) * (float)frameTime;
@@ -3481,6 +3611,14 @@ void gameUpdate() {
         cameraProjectMat = XMMatrixPerspectiveFovLH(RADIAN(player.camera.fovVertical), (float)renderW / (float)renderH, 0.0001f, 1000.0f);
         cameraViewProjectMat = XMMatrixMultiply(cameraViewMat, cameraProjectMat);
         cameraViewProjectInverseMat = XMMatrixInverse(nullptr, cameraViewProjectMat);
+    }
+    {
+        physxAccumulatedTime += frameTime;
+        while (physxAccumulatedTime >= physxTimeStep) {
+            physxAccumulatedTime -= physxTimeStep;
+            physxScene->simulate((float)physxTimeStep);
+            physxScene->fetchResults(true);
+        }
     }
 }
 
@@ -3763,30 +3901,12 @@ void d3dRender() {
     }
     {
         PIXSetMarker(d3d.graphicsCmdList, 0, "build TLAS");
-        {
-#ifdef EDITOR
-            XMVECTOR translate = player.spawnPosition.toXMVector();
-            XMVECTOR rotate = XMQuaternionRotationRollPitchYaw(0, 0, 0);
-#else
-            XMVECTOR translate = player.position.toXMVector();
-            XMVECTOR rotate = XMQuaternionRotationRollPitchYaw(0, player.pitchYawRoll.y, 0);
-#endif
-            player.transformMat = XMMatrixAffineTransformation(XMVectorSet(1, 1, 1, 1), XMVectorSet(0, 0, 0, 0), rotate, translate);
-            addTLASInstance(&player.modelInstance, player.transformMat, ObjectTypePlayer, 0);
-        }
+        addTLASInstance(&player.modelInstance, player.transformMat, ObjectTypePlayer, 0);
         for (uint objIndex = 0; objIndex < gameObjects.size(); objIndex++) {
             GameObject& obj = gameObjects[objIndex];
-#ifdef EDITOR
-            XMVECTOR translate = obj.spawnPosition.toXMVector();
-            XMVECTOR rotate = XMQuaternionRotationRollPitchYaw(0, 0, 0);
-#else
-            XMVECTOR translate = obj.position.toXMVector();
-            XMVECTOR rotate = XMQuaternionRotationRollPitchYaw(0, 0, 0);
-#endif
-            obj.transformMat = XMMatrixAffineTransformation(XMVectorSet(1, 1, 1, 1), XMVectorSet(0, 0, 0, 0), rotate, translate);
             addTLASInstance(&obj.modelInstance, obj.transformMat, ObjectTypeGameObject, objIndex);
         }
-        addTLASInstance(&modelInstanceCylinder, XMMatrixAffineTransformation(XMVectorSet(0.05f, player.movement.length(), 0.05f, 0), XMVectorSet(0, 0, 0, 0), quaternionBetween(float3(0, 1, 0), player.movement), player.position.toXMVector()), ObjectTypeNone, 0);
+        // addTLASInstance(&modelInstanceCylinder, XMMatrixAffineTransformation(XMVectorSet(0.05f, player.movement.length(), 0.05f, 0), XMVectorSet(0, 0, 0, 0), quaternionBetween(float3(0, 1, 0), player.movement), player.position.toXMVector()), ObjectTypeNone, 0);
 
         assert(vectorSizeof(tlasInstancesBuildInfos) < d3d.tlasInstancesBuildInfosBuffer->GetSize());
         assert(vectorSizeof(tlasInstancesInfos) < d3d.tlasInstancesInfosBuffer->GetSize());
@@ -3806,6 +3926,7 @@ void d3dRender() {
         D3D12_RESOURCE_BARRIER tlasBarrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = d3d.tlasBuffer->GetResource()}};
         d3d.graphicsCmdList->ResourceBarrier(1, &tlasBarrier);
     }
+#ifdef EDITOR
     {
         if (mouseSelectX == UINT_MAX) {
             d3d.collisionQueriesBufferPtr[0] = {.rayDesc = {.origin = {0, 0, 0}, .min = 0, .dir = {0, 0, 0}, .max = 0}};
@@ -3822,8 +3943,6 @@ void d3dRender() {
             rayDesc.dir = rayDesc.dir.normalize();
             d3d.collisionQueriesBufferPtr[0] = {.rayDesc = rayDesc, .instanceInclusionMask = 0xff & ~ObjectTypeNone};
         }
-
-        d3d.collisionQueriesBufferPtr[1] = {.rayDesc = {.origin = player.position, .min = 0.0f, .dir = player.movement.normalize(), .max = player.movement.length()}, .instanceInclusionMask = 0xff & ~(ObjectTypeNone | ObjectTypePlayer)};
 
         D3D12_RESOURCE_BARRIER collisionQueryResultsBarriers[2] = {
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
@@ -3852,6 +3971,7 @@ void d3dRender() {
         assert(SUCCEEDED(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
         d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap);
     }
+#endif
     {
         void* missIDs[2] = {d3d.renderScenePrimaryRayMissID, d3d.renderSceneSecondaryRayMissID};
         void* hitGroupIDs[2] = {d3d.renderScenePrimaryRayHitGroupID, d3d.renderSceneSecondaryRayHitGroupID};
@@ -4084,7 +4204,7 @@ int appMain() {
         QueryPerformanceCounter(&perfCounterStart);
         ZoneScoped;
         d3dUpdateShaders();
-        //updateGameUpdateLiveProc();
+        // updateGameUpdateLiveProc();
         mouseDeltaRaw = {0, 0};
         mouseWheel = 0;
         controllerGetStateXInput();
