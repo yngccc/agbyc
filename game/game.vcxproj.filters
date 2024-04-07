@@ -13,50 +13,23 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
-    <Filter Include="Source Files\libs">
-      <UniqueIdentifier>{9cba738d-d6da-4ceb-9d83-63f76ae3c800}</UniqueIdentifier>
-    </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\src\game.cpp">
+    <ClCompile Include="..\src\agbyc.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\external\include\cgltf\cgltf.cpp">
-      <Filter>Source Files\libs</Filter>
+    <ClCompile Include="..\src\libs.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\external\include\d3d12MA\D3D12MemAlloc.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\imgui\imgui.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\imgui\imgui_draw.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\imgui\imgui_tables.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\imgui\imgui_widgets.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\imgui\ImGuizmo.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\rapidyaml\rapidyaml-0.5.0.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\stb\stb_image.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\tracy\TracyClient.cpp">
-      <Filter>Source Files\libs</Filter>
+    <ClCompile Include="..\src\pch.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\src\common.h">
+    <ClInclude Include="..\src\pch.h">
       <Filter>Source Files</Filter>
     </ClInclude>
   </ItemGroup>

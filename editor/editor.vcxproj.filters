@@ -13,9 +13,6 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
-    <Filter Include="Source Files\libs">
-      <UniqueIdentifier>{8d293dac-ef31-46ef-bae4-097f59b6c6b2}</UniqueIdentifier>
-    </Filter>
     <Filter Include="Source Files\hlsl">
       <UniqueIdentifier>{4558b194-3f58-4fb8-b7ba-5cbb9368c572}</UniqueIdentifier>
     </Filter>
@@ -27,38 +24,14 @@
     </None>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\src\editor.cpp">
+    <ClCompile Include="..\src\agbyc.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\external\include\cgltf\cgltf.cpp">
-      <Filter>Source Files\libs</Filter>
+    <ClCompile Include="..\src\libs.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\external\include\d3d12MA\D3D12MemAlloc.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\imgui\imgui.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\imgui\imgui_draw.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\imgui\imgui_tables.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\imgui\imgui_widgets.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\imgui\ImGuizmo.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\rapidyaml\rapidyaml-0.5.0.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\stb\stb_image.cpp">
-      <Filter>Source Files\libs</Filter>
-    </ClCompile>
-    <ClCompile Include="..\external\include\tracy\TracyClient.cpp">
-      <Filter>Source Files\libs</Filter>
+    <ClCompile Include="..\src\pch.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -85,7 +58,7 @@
     </FxCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\src\common.h">
+    <ClInclude Include="..\src\pch.h">
       <Filter>Source Files</Filter>
     </ClInclude>
   </ItemGroup>

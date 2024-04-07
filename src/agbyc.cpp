@@ -1,71 +1,22 @@
-#pragma once
-
-#include <cassert>
-#include <algorithm>
-#include <array>
-#include <filesystem>
-#include <format>
-#include <fstream>
-#include <list>
-#include <span>
-#include <stack>
-#include <streambuf>
-#include <string>
-#include <vector>
-
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#include <windowsx.h>
-#include <shellapi.h>
-#include <shellscalingapi.h>
-#include <shlobj.h>
-#include <cderr.h>
-#include <commdlg.h>
-
-#include <d3dx12.h>
-#include <dxgi1_6.h>
-#include <dxgidebug.h>
-#include <d3d11on12.h>
-#include <dwrite.h>
-#include <d2d1_3.h>
-#include <pix3.h>
-
-#define _XM_SSE4_INTRINSICS_
-#include <directxmath.h>
-#include <directxtex.h>
-#include <directxcollision.h>
-
-#include <xinput.h>
-
-#undef near
-#undef far
-
-#if !defined(NDEBUG) ^ defined(_DEBUG)
-#define NDEBUG
-#include <physx/pxphysicsapi.h>
-#undef NDEBUG
-#else
-#include <physx/pxphysicsapi.h>
-#endif
-
-#include <dlss/nvsdk_ngx.h>
-#include <dlss/nvsdk_ngx_defs.h>
-#include <dlss/nvsdk_ngx_params.h>
-#include <dlss/nvsdk_ngx_helpers.h>
+#include "pch.h"
 
 #include <rapidyaml/rapidyaml-0.5.0.hpp>
 
 #include <cgltf/cgltf.h>
 
+#include <d3d12ma/d3d12memalloc.h>
+
 #include <stb/stb_image.h>
 
-#define IMGUI_DISABLE_OBSOLETE_FUNCTIONS
+#include <imgui/imconfig.h>
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 #include <imgui/imguizmo.h>
 
-#include <d3d12ma/d3d12memalloc.h>
+#include <dlss/nvsdk_ngx.h>
+#include <dlss/nvsdk_ngx_defs.h>
+#include <dlss/nvsdk_ngx_params.h>
+#include <dlss/nvsdk_ngx_helpers.h>
 
 #include <tracy/tracy/tracy.hpp>
 
@@ -832,11 +783,6 @@ struct EditorUndo {
     };
 };
 
-enum EditorGizmoTarget {
-    EditorGizmoTargetTransform,
-    EditorGizmoTargetCollisionTransform,
-};
-
 struct Editor {
     CameraEditor camera;
     bool cameraMoving;
@@ -854,7 +800,6 @@ struct Editor {
 
     ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
     ImGuizmo::MODE gizmoMode = ImGuizmo::LOCAL;
-    EditorGizmoTarget gizmoTarget = EditorGizmoTargetTransform;
 };
 
 static bool quit = false;
@@ -910,6 +855,7 @@ static XMMATRIX cameraViewProjectMat;
 static XMMATRIX cameraViewProjectInverseMat;
 
 static bool showMenu = false;
+static bool showCollisionGeometries = true;
 
 static PxDefaultAllocator physxAllocator;
 static PxDefaultErrorCallback physxErrorCallback;
@@ -921,7 +867,7 @@ static double physxAccumulatedTime = 0.0;
 static double physxTimeStep = 1.0 / 100.0;
 static PxMaterial* physxDefaultMaterial;
 
-#ifdef EDITOR
+#if EDITOR
 static Editor editor;
 #endif
 
@@ -1026,8 +972,8 @@ void windowShow() {
     ShowWindow(window.hwnd, SW_SHOW);
 }
 
-void windowHideCursor(bool hide) {
-    if (hide) {
+void windowClipCursor(bool clip) {
+    if (clip) {
         RECT windowRect;
         assert(GetWindowRect(window.hwnd, &windowRect));
         POINT cursorP = {0, 0};
@@ -1038,9 +984,17 @@ void windowHideCursor(bool hide) {
         }
         RECT rect = {cursorP.x, cursorP.y, cursorP.x, cursorP.y};
         ClipCursor(&rect);
-        ShowCursor(false);
     } else {
         ClipCursor(nullptr);
+    }
+}
+
+void windowHideCursor(bool hide) {
+    if (hide) {
+        windowClipCursor(true);
+        ShowCursor(false);
+    } else {
+        windowClipCursor(false);
         ShowCursor(true);
     }
 }
@@ -1289,7 +1243,6 @@ void d3dWaitForCollisionQueries() {
 
 void d3dInit() {
     bool debug = commandLineContain(L"d3d_debug");
-    // debug = false;
     uint factoryFlags = 0;
     if (debug) {
         factoryFlags = factoryFlags | DXGI_CREATE_FACTORY_DEBUG;
@@ -1402,7 +1355,7 @@ void d3dInit() {
             assert(SUCCEEDED(d3d.swapChain->GetBuffer(imageIndex, IID_PPV_ARGS(image))));
             (*image)->SetName(std::format(L"swapChain{}", imageIndex).c_str());
         }
-        d3d.dxgiFactory->MakeWindowAssociation(window.hwnd, DXGI_MWA_NO_WINDOW_CHANGES); // disable alt-enter
+        // d3d.dxgiFactory->MakeWindowAssociation(window.hwnd, DXGI_MWA_NO_WINDOW_CHANGES); // disable alt-enter
     }
     {
         D3D12_DESCRIPTOR_HEAP_DESC rtvDescriptorHeapDesc = {.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV, .NumDescriptors = 16, .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE};
@@ -2511,11 +2464,8 @@ void physxInit() {
     sceneDesc.cpuDispatcher = physxDispatcher;
     sceneDesc.filterShader = PxDefaultSimulationFilterShader;
     physxScene = physxPhysics->createScene(sceneDesc);
-    bool debug = commandLineContain(L"physx_debug");
-    if (debug) {
-        physxScene->setVisualizationParameter(PxVisualizationParameter::eSCALE, 1.0f);
-        physxScene->setVisualizationParameter(PxVisualizationParameter::eCOLLISION_SHAPES, 2.0f);
-    }
+    physxScene->setVisualizationParameter(PxVisualizationParameter::eSCALE, 1.0f);
+    physxScene->setVisualizationParameter(PxVisualizationParameter::eCOLLISION_SHAPES, 2.0f);
     physxDefaultMaterial = physxPhysics->createMaterial(0.5f, 0.5f, 0.6f);
 
     // PxMaterial* physxMaterial = physxPhysics->createMaterial(0.5f, 0.5f, 0.6f);
@@ -2553,7 +2503,7 @@ void playerCameraTranslate(float3 translate) {
     player.camera.lookAt += translate;
 }
 
-#ifdef EDITOR
+#if EDITOR
 void editorCameraRotate(float2 pitchYawDelta) {
     editor.camera.pitchYaw.x += pitchYawDelta.x;
     editor.camera.pitchYaw.y += pitchYawDelta.y;
@@ -2599,7 +2549,7 @@ void worldInit(const std::filesystem::path& path) {
     d3dTransferQueueStartRecording();
     d3d.stagingBufferOffset = 0;
 
-#ifdef EDITOR
+#if EDITOR
     ryml::ConstNodeRef editorCameraYaml = yamlRoot.find_child("editorCamera");
     if (editorCameraYaml.valid()) {
         editorCameraYaml["position"] >> editor.camera.position;
@@ -2703,7 +2653,7 @@ void worldInit(const std::filesystem::path& path) {
 }
 
 void worldSave() {
-#ifdef EDITOR
+#if EDITOR
     ryml::Tree yamlTree;
     ryml::NodeRef yamlRoot = yamlTree.rootref();
     yamlRoot |= ryml::MAP;
@@ -2800,7 +2750,7 @@ void worldSave() {
 }
 
 void worldReadSave(const std::filesystem::path& path) {
-#ifndef EDITOR
+#if !EDITOR
     if (!std::filesystem::exists(path)) return;
 
     std::string yamlStr = fileReadStr(path);
@@ -2808,39 +2758,24 @@ void worldReadSave(const std::filesystem::path& path) {
     ryml::ConstNodeRef yamlRoot = yamlTree.rootref();
 
     ryml::ConstNodeRef playerYaml = yamlRoot["player"];
-    Transform transform;
-    playerYaml["transform"] >> transform;
-    player.transformMat = transform.toMat();
+    playerYaml["transform"] >> player.transform;
 #endif;
 }
 
 void worldWriteSave(const std::filesystem::path& path) {
-#ifndef EDITOR
+#if !EDITOR
     ryml::Tree yamlTree;
     ryml::NodeRef yamlRoot = yamlTree.rootref();
     yamlRoot |= ryml::MAP;
 
     ryml::NodeRef playerYaml = yamlRoot["player"];
     playerYaml |= ryml::MAP;
-    Transform transform(player.transformMat);
-    playerYaml["transform"] << transform;
+    playerYaml["transform"] << player.transform;
 
     std::string yamlStr = ryml::emitrs_yaml<std::string>(yamlTree);
     fileWriteStr(path, yamlStr);
 #endif
 }
-
-// void worldReset() {
-//     if (!editor) return;
-//     player.position = player.spawnPosition;
-//     player.pitchYawRoll = float3(0, 0, 0);
-//     player.camera.lookAt = player.spawnPosition + player.camera.lookAtOffset;
-//     playerCameraSetPitchYaw({0, 0});
-//     for (GameObject& object : gameObjects) {
-//         object.position = object.spawnPosition;
-//         object.rotation = float4(0, 0, 0, 1);
-//     }
-// }
 
 void gameObjectRelease(GameObject* obj) {
     modelInstanceRelease(&obj->modelInstance);
@@ -2899,6 +2834,7 @@ ImGuiKey toImGuiKey(WPARAM wparam) {
     case VK_LSHIFT: return ImGuiKey_LeftShift;
     case VK_CONTROL: return ImGuiKey_LeftCtrl;
     case VK_LCONTROL: return ImGuiKey_LeftCtrl;
+    case VK_MENU: return ImGuiKey_LeftAlt;
     case VK_LMENU: return ImGuiKey_LeftAlt;
     case VK_LWIN: return ImGuiKey_LeftSuper;
     case VK_RSHIFT: return ImGuiKey_RightShift;
@@ -2958,7 +2894,7 @@ ImGuiKey toImGuiKey(WPARAM wparam) {
     }
 }
 
-#ifdef EDITOR
+#if EDITOR
 void editorMainMenuBar() {
     if (ImGui::BeginMainMenuBar()) {
         editor.mainMenuBarPos = ImGui::GetWindowPos();
@@ -3019,14 +2955,15 @@ void editorMainMenuBar() {
             }
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("Editor")) {
+        if (ImGui::BeginMenu("View")) {
             if (ImGui::BeginMenu("Camera")) {
                 static float speedPercentage = 0.1f;
-                ImGui::SliderFloat("moveSpeed", &speedPercentage, 0.0f, 1.0f);
+                ImGui::SliderFloat("speed", &speedPercentage, 0.0f, 1.0f);
                 editor.camera.moveSpeed = editor.cameraMoveSpeedMax * speedPercentage;
                 ImGui::EndMenu();
             }
             ImGui::Separator();
+            ImGui::Checkbox("Collision", &showCollisionGeometries);
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -3118,9 +3055,13 @@ void editorObjectsWindow() {
 }
 
 void editorObjectPropertiesWindow() {
+    editor.objectPropertiesWindowPos = editor.objectWindowPos;
+    editor.objectPropertiesWindowPos.y += editor.objectWindowSize.y;
+    editor.objectPropertiesWindowSize = editor.objectWindowSize;
+    editor.objectPropertiesWindowSize.y *= 2;
+    ImGui::SetNextWindowPos(editor.objectPropertiesWindowPos);
+    ImGui::SetNextWindowSize(editor.objectPropertiesWindowSize);
     if (ImGui::Begin("Properties")) {
-        editor.objectPropertiesWindowPos = ImGui::GetWindowPos();
-        editor.objectPropertiesWindowSize = ImGui::GetWindowSize();
         if (editor.selectedObjectType == ObjectTypePlayer) {
             ImGui::Text("Player");
             imguiModelInstance(&player.modelInstance);
@@ -3185,7 +3126,7 @@ void editorObjectPropertiesWindow() {
                     PxActorType::Enum actorType = obj.collision->getType();
                     if (actorType == PxActorType::eRIGID_STATIC) {
                         ImGui::Text("Type: Static");
-                        bool open = ImGui::TreeNode(std::format("Shapes ({})", obj.collision->getNbShapes()).c_str());
+                        bool open = ImGui::TreeNode(std::format("Shapes ({})##Shapes", obj.collision->getNbShapes()).c_str());
                         if (ImGui::BeginPopupContextItem()) {
                             if (ImGui::Button("new plane")) {
                                 PxRigidActorExt::createExclusiveShape(*obj.collision, PxPlaneGeometry(), *physxDefaultMaterial);
@@ -3347,7 +3288,9 @@ void editorUpdate() {
     }
     {
         modelInstanceUpdateAnimation(&player.modelInstance, frameTime);
-        for (GameObject& obj : gameObjects) modelInstanceUpdateAnimation(&obj.modelInstance, frameTime);
+        for (GameObject& obj : gameObjects) {
+            modelInstanceUpdateAnimation(&obj.modelInstance, frameTime);
+        }
     }
 
     static ImVec2 mousePosPrev = ImGui::GetMousePos();
@@ -3409,15 +3352,6 @@ void editorUpdate() {
                 editor.gizmoMode = ImGuizmo::WORLD;
                 ImGui::CloseCurrentPopup();
             }
-            ImGui::Separator();
-            if (ImGui::Selectable("transform", editor.gizmoTarget == EditorGizmoTargetTransform)) {
-                editor.gizmoTarget = EditorGizmoTargetTransform;
-                ImGui::CloseCurrentPopup();
-            }
-            if (ImGui::Selectable("collisionTransform", editor.gizmoTarget == EditorGizmoTargetCollisionTransform)) {
-                editor.gizmoTarget = EditorGizmoTargetCollisionTransform;
-                ImGui::CloseCurrentPopup();
-            }
             ImGui::EndPopup();
         }
         if (!ImGui::IsAnyItemActive() && !editor.cameraMoving) {
@@ -3436,16 +3370,12 @@ void editorUpdate() {
     if (editor.selectedObjectType == ObjectTypePlayer) {
         XMMATRIX transformMat = player.transformDefault.toMat();
         XMMATRIX deltaTransformMat = transformGizmo(&transformMat);
-        if (editor.gizmoTarget == EditorGizmoTargetTransform) {
-            player.transformDefault = Transform(transformMat);
-        }
+        player.transformDefault = Transform(transformMat);
     } else if (editor.selectedObjectType == ObjectTypeGameObject && editor.selectedObjectIndex < gameObjects.size()) {
         GameObject& obj = gameObjects[editor.selectedObjectIndex];
         XMMATRIX transformMat = obj.transformDefault.toMat();
         XMMATRIX deltaTransformMat = transformGizmo(&transformMat);
-        if (editor.gizmoTarget == EditorGizmoTargetTransform) {
-            obj.transformDefault = Transform(transformMat);
-        }
+        obj.transformDefault = Transform(transformMat);
     }
     player.transform = player.transformDefault;
     for (GameObject& obj : gameObjects) {
@@ -3535,7 +3465,7 @@ void gameUpdate() {
         float3 moveDir = {0, 0, 0};
         bool jump = false;
         {
-            float3 forwardDir = player.camera.lookAt;
+            float3 forwardDir = player.camera.lookAt - player.camera.position;
             forwardDir.y = 0;
             forwardDir = forwardDir.normalize();
             float3 sideDir = forwardDir.cross(float3(0, 1, 0));
@@ -3551,9 +3481,9 @@ void gameUpdate() {
             if (jump) { ImGui::DebugLog("jump\n"); }
         }
 
-        if (moveDir == float3{0, 0, 0}) {
+        if (moveDir == float3(0, 0, 0)) {
             player.state = PlayerStateIdle;
-            player.movement = {0, 0, 0};
+            player.movement = float3(0, 0, 0);
             player.modelInstance.animation = &player.modelInstance.model->animations[player.idleAnimationIndex];
         } else {
             if (!ImGui::IsKeyDown(ImGuiKey_LeftShift) && sqrtf(controller.lsX * controller.lsX + controller.lsY * controller.lsY) < 0.8f) {
@@ -3566,13 +3496,13 @@ void gameUpdate() {
                 player.modelInstance.animation = &player.modelInstance.model->animations[player.runAnimationIndex];
             }
         }
-        // if (player.movement != float3(0, 0, 0)) {
-        //     player.position += player.movement;
-        //     playerCameraTranslate(player.movement);
-        //     float angle = acosf(player.movement.normalize().dot(float3(0, 0, -1)));
-        //     if (player.movement.x > 0) angle = -angle;
-        //     player.PitchYawRoll = float3(0, angle, 0);
-        // }
+        if (player.movement != float3(0, 0, 0)) {
+            player.transform.t += player.movement;
+            playerCameraTranslate(player.movement);
+            float angle = acosf(player.movement.normalize().dot(float3(0, 0, -1)));
+            if (player.movement.x > 0) angle = -angle;
+            player.transform.r = float4(XMQuaternionRotationRollPitchYaw(0, angle, 0));
+        }
     }
     {
         modelInstanceUpdateAnimation(&player.modelInstance, frameTime);
@@ -3603,7 +3533,10 @@ void update() {
     ImGui::NewFrame();
     ImGuizmo::SetRect(0, 0, (float)renderW, (float)renderH);
     ImGuizmo::BeginFrame();
-#ifdef EDITOR
+    if (ImGui::IsKeyDown(ImGuiKey_F4) && ImGui::IsKeyDown(ImGuiKey_LeftAlt)) {
+        quit = true;
+    }
+#if EDITOR
     editorUpdate();
 #else
     gameUpdate();
@@ -3614,7 +3547,7 @@ void update() {
         debugLines.resize(0);
         debugTriangles.resize(0);
 
-#ifdef EDITOR
+#if EDITOR
         if (editor.selectedObjectType == ObjectTypePlayer) {
             if (player.modelInstance.model->skeletonRootNode) {
                 XMMATRIX transformMat = XMMatrixMultiply(XMMatrixMultiply(player.modelInstance.model->meshNodes[0]->globalTransform, XMMatrixScaling(0.001f, 0.001f, -0.001f)), player.transform.toMat());
@@ -3628,7 +3561,7 @@ void update() {
             }
         }
 #endif
-        {
+        if (showCollisionGeometries) {
             const PxRenderBuffer& physxRenderBuffer = physxScene->getRenderBuffer();
             for (PxU32 i = 0; i < physxRenderBuffer.getNbPoints(); i++) {
                 const PxDebugPoint& pxPoint = physxRenderBuffer.getPoints()[i];
@@ -3673,7 +3606,7 @@ void update() {
 
 void addTLASInstance(ModelInstance* modelInstance, const XMMATRIX& objectTransform, ObjectType objectType, uint objectIndex) {
     TLASInstanceInfo tlasInstanceInfo = {.objectType = objectType, .objectIndex = objectIndex, .blasGeometriesOffset = (uint)blasGeometriesInfos.size()};
-#ifdef EDITOR
+#if EDITOR
     if (objectType != ObjectTypeNone && editor.selectedObjectType == objectType && editor.selectedObjectIndex == objectIndex) {
         tlasInstanceInfo.flags |= TLASInstanceFlagSelected;
     }
@@ -3900,7 +3833,7 @@ void d3dRender() {
         D3D12_RESOURCE_BARRIER tlasBarrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = d3d.tlasBuffer->GetResource()}};
         d3d.graphicsCmdList->ResourceBarrier(1, &tlasBarrier);
     }
-#ifdef EDITOR
+#if EDITOR
     {
         if (mouseSelectX == UINT_MAX) {
             d3d.collisionQueriesBufferPtr[0] = {.rayDesc = {.origin = {0, 0, 0}, .min = 0, .dir = {0, 0, 0}, .max = 0}};
@@ -4117,7 +4050,9 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
             RID_DEVICE_INFO info;
             uint infoSize = sizeof(info);
             GetRawInputDeviceInfoA((HANDLE)lParam, RIDI_DEVICEINFO, &info, &infoSize);
-            if (info.dwType == RIM_TYPEHID && info.hid.dwVendorId == 0x054c && info.hid.dwProductId == 0x0ce6) controllerDualSenseHID = (HANDLE)lParam;
+            if (info.dwType == RIM_TYPEHID && info.hid.dwVendorId == 0x054c && info.hid.dwProductId == 0x0ce6) {
+                controllerDualSenseHID = (HANDLE)lParam;
+            }
         }
     } break;
     case WM_INPUT: {
@@ -4159,11 +4094,14 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
     return result;
 }
 
-int appMain() {
+int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) {
     assert(SetCurrentDirectoryW(exeDir.c_str()));
     settingsInit(saveDir / "settings.yaml");
     windowInit();
     windowShow();
+#if !EDITOR
+    windowHideCursor(true);
+#endif
     imguiInit();
     d3dInit();
     d3dApplySettings();
