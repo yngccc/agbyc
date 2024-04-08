@@ -696,10 +696,10 @@ struct ModelInstance {
 struct CameraPlayer {
     float3 position;
     float3 lookAt;
-    float3 lookAtOffset;
     float2 pitchYaw;
-    float distance;
     float fovVertical = 50.0f;
+    float3 lookAtOffset;
+    float distance;
 };
 
 struct CameraEditor {
@@ -832,13 +832,14 @@ static NVSDK_NGX_Parameter* ngxParameter = nullptr;
 static int dlssAvaliable = false;
 
 static std::filesystem::path worldFilePath;
+static std::list<Skybox> skyboxes;
 static std::list<Model> models;
+static Skybox* skybox;
 static ModelInstance modelInstanceCube;
 static ModelInstance modelInstanceCylinder;
 static ModelInstance modelInstanceSphere;
 static Player player;
 static std::vector<GameObject> gameObjects;
-static Skybox skybox;
 static std::vector<Light> lights;
 static std::vector<D3D12_RAYTRACING_INSTANCE_DESC> tlasInstancesBuildInfos;
 static std::vector<TLASInstanceInfo> tlasInstancesInfos;
@@ -867,8 +868,11 @@ static double physxAccumulatedTime = 0.0;
 static double physxTimeStep = 1.0 / 100.0;
 static PxMaterial* physxDefaultMaterial;
 
+#define EDITOR 1
+
 #if EDITOR
 static Editor editor;
+static bool inEditor = true;
 #endif
 
 static std::filesystem::path exeDir = [] {
@@ -1834,6 +1838,383 @@ bool projectCameraSpaceTriangleToScreen(float3 p0, float3 p1, float3 p2, float2*
     return false;
 }
 
+Model* modelLoad(const std::filesystem::path& filePath) {
+    for (Model& m : models) {
+        if (m.filePath == filePath) return &m;
+    }
+    const std::filesystem::path gltfFilePath = assetsDir / filePath;
+    const std::filesystem::path gltfFileFolderPath = gltfFilePath.parent_path();
+    cgltf_options gltfOptions = {};
+    cgltf_data* gltfData = nullptr;
+    cgltf_result gltfParseFileResult = cgltf_parse_file(&gltfOptions, gltfFilePath.string().c_str(), &gltfData);
+    assert(gltfParseFileResult == cgltf_result_success);
+    cgltf_result gltfLoadBuffersResult = cgltf_load_buffers(&gltfOptions, gltfData, gltfFilePath.string().c_str());
+    assert(gltfLoadBuffersResult == cgltf_result_success);
+    assert(gltfData->scenes_count == 1);
+
+    Model* model = &models.emplace_back();
+    model->filePath = filePath;
+    model->gltfData = gltfData;
+
+    d3dTransferQueueStartRecording();
+    d3d.stagingBufferOffset = 0;
+
+    model->nodes.resize(gltfData->nodes_count);
+    model->meshes.resize(gltfData->meshes_count);
+    model->skins.resize(gltfData->skins_count);
+    model->animations.resize(gltfData->animations_count);
+    model->materials.resize(gltfData->materials_count);
+    model->textures.resize(gltfData->textures_count);
+    model->images.resize(gltfData->images_count);
+
+    for (uint nodeIndex = 0; nodeIndex < gltfData->nodes_count; nodeIndex++) {
+        cgltf_node& gltfNode = gltfData->nodes[nodeIndex];
+        ModelNode& node = model->nodes[nodeIndex];
+        if (gltfNode.name) node.name = gltfNode.name;
+        if (gltfNode.parent) {
+            uint parentNodeIndex = (uint)(gltfNode.parent - gltfData->nodes);
+            assert(parentNodeIndex >= 0 && parentNodeIndex < gltfData->nodes_count);
+            node.parent = &model->nodes[parentNodeIndex];
+        } else {
+            node.parent = nullptr;
+        }
+        for (cgltf_node* child : std::span(gltfNode.children, gltfNode.children_count)) {
+            uint childNodeIndex = (uint)(child - gltfData->nodes);
+            assert(childNodeIndex >= 0 && childNodeIndex < gltfData->nodes_count);
+            node.children.push_back(&model->nodes[childNodeIndex]);
+        }
+        float nodeTransform[16];
+        cgltf_node_transform_world(&gltfNode, nodeTransform);
+        node.globalTransform = XMMATRIX(nodeTransform);
+        if (gltfNode.has_matrix) {
+            node.localTransform = XMMATRIX(gltfNode.matrix);
+        } else {
+            Transform localTransform = {};
+            if (gltfNode.has_scale) localTransform.s = float3(gltfNode.scale);
+            if (gltfNode.has_rotation) localTransform.r = float4(gltfNode.rotation);
+            if (gltfNode.has_translation) localTransform.t = float3(gltfNode.translation);
+            node.localTransform = localTransform.toMat();
+        }
+        if (gltfNode.mesh) {
+            uint meshIndex = (uint)(gltfNode.mesh - gltfData->meshes);
+            assert(meshIndex >= 0 && meshIndex < gltfData->meshes_count);
+            node.mesh = &model->meshes[meshIndex];
+        } else {
+            node.mesh = nullptr;
+        }
+        if (gltfNode.skin) {
+            uint skinIndex = (uint)(gltfNode.skin - gltfData->skins);
+            assert(skinIndex >= 0 && skinIndex < gltfData->skins_count);
+            node.skin = &model->skins[skinIndex];
+        } else {
+            node.skin = nullptr;
+        }
+    }
+    for (cgltf_node* gltfNode : std::span(gltfData->scenes[0].nodes, gltfData->scenes[0].nodes_count)) {
+        model->rootNodes.push_back(&model->nodes[gltfNode - gltfData->nodes]);
+    }
+    for (ModelNode& node : model->nodes) {
+        if (node.mesh) model->meshNodes.push_back(&node);
+    }
+    for (uint meshIndex = 0; meshIndex < gltfData->meshes_count; meshIndex++) {
+        cgltf_mesh& gltfMesh = gltfData->meshes[meshIndex];
+        ModelMesh& mesh = model->meshes[meshIndex];
+        if (gltfMesh.name) mesh.name = gltfMesh.name;
+        mesh.primitives.reserve(gltfMesh.primitives_count);
+        for (cgltf_primitive& gltfPrimitive : std::span(gltfMesh.primitives, gltfMesh.primitives_count)) {
+            cgltf_accessor* indices = gltfPrimitive.indices;
+            cgltf_accessor* positions = nullptr;
+            cgltf_accessor* normals = nullptr;
+            cgltf_accessor* tangents = nullptr;
+            cgltf_accessor* uvs = nullptr;
+            cgltf_accessor* jointIndices = nullptr;
+            cgltf_accessor* jointWeights = nullptr;
+            for (cgltf_attribute& attribute : std::span(gltfPrimitive.attributes, gltfPrimitive.attributes_count)) {
+                if (attribute.type == cgltf_attribute_type_position) {
+                    positions = attribute.data;
+                } else if (attribute.type == cgltf_attribute_type_normal) {
+                    normals = attribute.data;
+                } else if (attribute.type == cgltf_attribute_type_tangent) {
+                    tangents = attribute.data;
+                } else if (attribute.type == cgltf_attribute_type_texcoord) {
+                    uvs = attribute.data;
+                } else if (attribute.type == cgltf_attribute_type_joints) {
+                    jointIndices = attribute.data;
+                } else if (attribute.type == cgltf_attribute_type_weights) {
+                    jointWeights = attribute.data;
+                }
+            }
+
+            assert(gltfPrimitive.type == cgltf_primitive_type_triangles);
+            assert(indices && positions && normals && uvs && tangents);
+            assert(indices->count % 3 == 0 && indices->type == cgltf_type_scalar && (indices->component_type == cgltf_component_type_r_16u || indices->component_type == cgltf_component_type_r_32u));
+            assert(positions->type == cgltf_type_vec3 && positions->component_type == cgltf_component_type_r_32f);
+            assert(normals->count == positions->count && normals->type == cgltf_type_vec3 && normals->component_type == cgltf_component_type_r_32f);
+            assert(uvs->count == positions->count && uvs->type == cgltf_type_vec2 && uvs->component_type == cgltf_component_type_r_32f);
+            assert(tangents->count == positions->count && tangents->type == cgltf_type_vec4 && tangents->component_type == cgltf_component_type_r_32f);
+            if (jointIndices) assert(jointIndices->count == positions->count && (jointIndices->component_type == cgltf_component_type_r_16u || jointIndices->component_type == cgltf_component_type_r_8u) && jointIndices->type == cgltf_type_vec4 && (jointIndices->stride == 8 || jointIndices->stride == 4));
+            if (jointWeights) assert(jointWeights->count == positions->count && jointWeights->component_type == cgltf_component_type_r_32f && jointWeights->type == cgltf_type_vec4 && jointWeights->stride == 16);
+            void* indicesBuffer = (uint8*)(indices->buffer_view->buffer->data) + indices->offset + indices->buffer_view->offset;
+            float3* positionsBuffer = (float3*)((uint8*)(positions->buffer_view->buffer->data) + positions->offset + positions->buffer_view->offset);
+            float3* normalsBuffer = (float3*)((uint8*)(normals->buffer_view->buffer->data) + normals->offset + normals->buffer_view->offset);
+            float4* tangentsBuffer = (float4*)((uint8*)(tangents->buffer_view->buffer->data) + tangents->offset + tangents->buffer_view->offset);
+            float2* uvsBuffer = (float2*)((uint8*)(uvs->buffer_view->buffer->data) + uvs->offset + uvs->buffer_view->offset);
+            void* jointIndicesBuffer = jointIndices ? (uint8*)(jointIndices->buffer_view->buffer->data) + jointIndices->offset + jointIndices->buffer_view->offset : nullptr;
+            float4* jointWeightsBuffer = jointWeights ? (float4*)((uint8*)(jointWeights->buffer_view->buffer->data) + jointWeights->offset + jointWeights->buffer_view->offset) : nullptr;
+
+            ModelPrimitive& primitive = mesh.primitives.emplace_back();
+            primitive.verticesBufferOffset = (uint)mesh.vertices.size();
+            primitive.verticesCount = (uint)positions->count;
+            primitive.indicesBufferOffset = (uint)mesh.indices.size();
+            primitive.indicesCount = (uint)indices->count;
+            for (uint vertexIndex = 0; vertexIndex < positions->count; vertexIndex++) {
+                Vertex vertex = {.position = positionsBuffer[vertexIndex], .normal = normalsBuffer[vertexIndex], .tangent = tangentsBuffer[vertexIndex], .uv = uvsBuffer[vertexIndex]};
+                if (jointIndicesBuffer) {
+                    if (jointIndices->component_type == cgltf_component_type_r_16u) {
+                        vertex.joints = ((uint16_4*)jointIndicesBuffer)[vertexIndex];
+                    } else {
+                        vertex.joints = ((uint8_4*)jointIndicesBuffer)[vertexIndex];
+                    }
+                }
+                if (jointWeightsBuffer) {
+                    vertex.jointWeights = jointWeightsBuffer[vertexIndex];
+                }
+                mesh.vertices.push_back(vertex);
+            }
+            if (indices->component_type == cgltf_component_type_r_16u) {
+                std::copy_n((uint16*)indicesBuffer, indices->count, std::back_inserter(mesh.indices));
+            } else {
+                std::copy_n((uint*)indicesBuffer, indices->count, std::back_inserter(mesh.indices));
+            }
+            if (gltfPrimitive.material) {
+                primitive.material = &model->materials[gltfPrimitive.material - gltfData->materials];
+                if (gltfPrimitive.material->normal_texture.texture) assert(tangentsBuffer);
+            }
+        }
+
+        D3D12MA::ALLOCATION_DESC verticeIndicesBuffersAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+        D3D12_RESOURCE_DESC verticeIndicesBuffersDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
+        verticeIndicesBuffersDesc.Width = vectorSizeof(mesh.vertices);
+        assert(SUCCEEDED(d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.verticesBuffer, {}, nullptr)));
+        mesh.verticesBuffer->GetResource()->SetName(std::format(L"{}Mesh{}VerticesBuffer", filePath.stem().wstring(), meshIndex).c_str());
+        verticeIndicesBuffersDesc.Width = vectorSizeof(mesh.indices);
+        assert(SUCCEEDED(d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.indicesBuffer, {}, nullptr)));
+        mesh.verticesBuffer->GetResource()->SetName(std::format(L"{}Mesh{}IndicesBuffer", filePath.stem().wstring(), meshIndex).c_str());
+
+        memcpy(d3d.stagingBufferPtr + d3d.stagingBufferOffset, mesh.vertices.data(), vectorSizeof(mesh.vertices));
+        d3d.transferCmdList->CopyBufferRegion(mesh.verticesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(mesh.vertices));
+        d3d.stagingBufferOffset += vectorSizeof(mesh.vertices);
+        assert(d3d.stagingBufferOffset < d3d.stagingBuffer->GetSize());
+        memcpy(d3d.stagingBufferPtr + d3d.stagingBufferOffset, mesh.indices.data(), vectorSizeof(mesh.indices));
+        d3d.transferCmdList->CopyBufferRegion(mesh.indicesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(mesh.indices));
+        d3d.stagingBufferOffset += vectorSizeof(mesh.indices);
+        assert(d3d.stagingBufferOffset < d3d.stagingBuffer->GetSize());
+        D3D12_RESOURCE_BARRIER bufferBarriers[2] = {
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = mesh.verticesBuffer->GetResource(), .Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = mesh.indicesBuffer->GetResource(), .Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
+        };
+        d3d.transferCmdList->ResourceBarrier(countof(bufferBarriers), bufferBarriers);
+
+        std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
+        for (ModelPrimitive& primitive : mesh.primitives) {
+            geometryDescs.push_back(D3D12_RAYTRACING_GEOMETRY_DESC{
+                .Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
+                .Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE,
+                .Triangles = {
+                    .Transform3x4 = 0,
+                    .IndexFormat = DXGI_FORMAT_R32_UINT,
+                    .VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
+                    .IndexCount = (uint)primitive.indicesCount,
+                    .VertexCount = (uint)primitive.verticesCount,
+                    .IndexBuffer = mesh.indicesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.indicesBufferOffset * sizeof(uint),
+                    .VertexBuffer = {mesh.verticesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.verticesBufferOffset * sizeof(struct Vertex), sizeof(Vertex)},
+                },
+            });
+        }
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL, .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE, .NumDescs = (uint)geometryDescs.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .pGeometryDescs = geometryDescs.data()};
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
+        d3d.device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
+
+        D3D12MA::ALLOCATION_DESC blasAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
+        D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+        blasDesc.Width = prebuildInfo.ResultDataMaxSizeInBytes;
+        assert(SUCCEEDED(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &mesh.blas, {}, nullptr)));
+        mesh.blas->GetResource()->SetName(std::format(L"{}Mesh{}Blas", filePath.stem().wstring(), meshIndex).c_str());
+        blasDesc.Width = prebuildInfo.ScratchDataSizeInBytes;
+        assert(SUCCEEDED(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &mesh.blasScratch, {}, nullptr)));
+        mesh.blasScratch->GetResource()->SetName(std::format(L"{}Mesh{}BlasScratch", filePath.stem().wstring(), meshIndex).c_str());
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = mesh.blas->GetResource()->GetGPUVirtualAddress(), .Inputs = inputs, .ScratchAccelerationStructureData = mesh.blasScratch->GetResource()->GetGPUVirtualAddress()};
+        d3d.transferCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+    }
+    for (uint skinIndex = 0; skinIndex < gltfData->skins_count; skinIndex++) {
+        cgltf_skin& gltfSkin = gltfData->skins[skinIndex];
+        ModelSkin& skin = model->skins[skinIndex];
+        assert(gltfSkin.inverse_bind_matrices->type == cgltf_type_mat4);
+        assert(gltfSkin.inverse_bind_matrices->count == gltfSkin.joints_count);
+        assert(gltfSkin.inverse_bind_matrices->stride == 16 * sizeof(float));
+        assert(gltfSkin.inverse_bind_matrices->buffer_view->size == 64 * gltfSkin.joints_count);
+        skin.joints.reserve(gltfSkin.joints_count);
+        for (uint jointIndex = 0; jointIndex < gltfSkin.joints_count; jointIndex++) {
+            cgltf_node* jointNode = gltfSkin.joints[jointIndex];
+            ModelNode* node = &model->nodes[jointNode - gltfData->nodes];
+            float* matsData = (float*)((uint8*)(gltfSkin.inverse_bind_matrices->buffer_view->buffer->data) + gltfSkin.inverse_bind_matrices->offset + gltfSkin.inverse_bind_matrices->buffer_view->offset);
+            matsData += jointIndex * 16;
+            skin.joints.push_back(ModelJoint{.node = node, .inverseBindMat = XMMATRIX(matsData)});
+        }
+    }
+    uint minParentCount = UINT_MAX;
+    for (ModelSkin& skin : model->skins) {
+        for (ModelJoint& joint : skin.joints) {
+            ModelNode* jointNode = joint.node;
+            ModelNode* parentNode = jointNode->parent;
+            uint parentCount = 0;
+            while (parentNode) {
+                parentNode = parentNode->parent;
+                parentCount++;
+            }
+            if (parentCount < minParentCount) {
+                minParentCount = parentCount;
+                model->skeletonRootNode = jointNode;
+            }
+        }
+    }
+    for (uint animationIndex = 0; animationIndex < gltfData->animations_count; animationIndex++) {
+        cgltf_animation& gltfAnimation = gltfData->animations[animationIndex];
+        ModelAnimation& animation = model->animations[animationIndex];
+        if (gltfAnimation.name) animation.name = gltfAnimation.name;
+        {
+            cgltf_accessor* input = gltfAnimation.samplers[0].input;
+            cgltf_size inputSize = gltfAnimation.samplers[0].input->count;
+            float* keyFrameTimes = (float*)((uint8*)(input->buffer_view->buffer->data) + input->offset + input->buffer_view->offset);
+            animation.timeLength = keyFrameTimes[inputSize - 1];
+        }
+        animation.samplers.reserve(gltfAnimation.samplers_count);
+        for (cgltf_animation_sampler& gltfSampler : std::span(gltfAnimation.samplers, gltfAnimation.samplers_count)) {
+            ModelAnimationSampler& sampler = animation.samplers.emplace_back();
+            if (gltfSampler.interpolation == cgltf_interpolation_type_linear) {
+                sampler.interpolation = AnimationSamplerInterpolationLinear;
+            } else if (gltfSampler.interpolation == cgltf_interpolation_type_step) {
+                sampler.interpolation = AnimationSamplerInterpolationStep;
+            } else if (gltfSampler.interpolation == cgltf_interpolation_type_cubic_spline) {
+                sampler.interpolation = AnimationSamplerInterpolationCubicSpline;
+                assert(false);
+            } else {
+                assert(false);
+            }
+            assert(gltfSampler.input->component_type == cgltf_component_type_r_32f && gltfSampler.input->type == cgltf_type_scalar);
+            assert(gltfSampler.output->component_type == cgltf_component_type_r_32f);
+            assert((gltfSampler.output->type == cgltf_type_vec3 && gltfSampler.output->stride == sizeof(float3)) || (gltfSampler.output->type == cgltf_type_vec4 && gltfSampler.output->stride == sizeof(float4)));
+            assert(gltfSampler.input->count >= 2 && gltfSampler.input->count == gltfSampler.output->count);
+            float* inputs = (float*)((uint8*)(gltfSampler.input->buffer_view->buffer->data) + gltfSampler.input->offset + gltfSampler.input->buffer_view->offset);
+            void* outputs = (uint8*)(gltfSampler.output->buffer_view->buffer->data) + gltfSampler.output->offset + gltfSampler.output->buffer_view->offset;
+            assert(inputs[0] == 0.0f);
+            assert(inputs[gltfSampler.input->count - 1] == animation.timeLength);
+            sampler.keyFrames.reserve(gltfSampler.input->count);
+            for (uint frameIndex = 0; frameIndex < gltfSampler.input->count; frameIndex++) {
+                ModelAnimationSamplerKeyFrame& keyFrame = sampler.keyFrames.emplace_back();
+                keyFrame.time = inputs[frameIndex];
+                if (gltfSampler.output->type == cgltf_type_vec3) {
+                    keyFrame.xyzw = ((float3*)outputs)[frameIndex];
+                } else {
+                    keyFrame.xyzw = ((float4*)outputs)[frameIndex];
+                }
+            }
+        }
+        animation.channels.reserve(gltfAnimation.channels_count);
+        for (cgltf_animation_channel& gltfChannel : std::span(gltfAnimation.channels, gltfAnimation.channels_count)) {
+            ModelAnimationChannel& channel = animation.channels.emplace_back();
+            uint nodeIndex = (uint)(gltfChannel.target_node - gltfData->nodes);
+            uint samplerIndex = (uint)(gltfChannel.sampler - gltfAnimation.samplers);
+            assert(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
+            assert(samplerIndex >= 0 && samplerIndex < gltfAnimation.samplers_count);
+            channel.node = &model->nodes[nodeIndex];
+            channel.sampler = &animation.samplers[samplerIndex];
+            if (gltfChannel.target_path == cgltf_animation_path_type_translation) {
+                assert(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec3);
+                channel.type = AnimationChannelTypeTranslate;
+            } else if (gltfChannel.target_path == cgltf_animation_path_type_rotation) {
+                assert(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec4);
+                channel.type = AnimationChannelTypeRotate;
+            } else if (gltfChannel.target_path == cgltf_animation_path_type_scale) {
+                assert(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec3);
+                channel.type = AnimationChannelTypeScale;
+            } else {
+                assert(false);
+            }
+        }
+    }
+    for (uint imageIndex = 0; imageIndex < gltfData->images_count; imageIndex++) {
+        cgltf_image& gltfImage = gltfData->images[imageIndex];
+        ModelImage& image = model->images[imageIndex];
+        std::filesystem::path imageFilePath = gltfFileFolderPath / gltfImage.uri;
+        std::filesystem::path imageDDSFilePath = imageFilePath;
+        imageDDSFilePath.replace_extension(".dds");
+        if (std::filesystem::exists(imageDDSFilePath)) {
+            image.gpuData = d3dCreateImageDDS(imageDDSFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str());
+        } else if (std::filesystem::exists(imageFilePath)) {
+            image.gpuData = d3dCreateImageSTB(imageFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str());
+        } else {
+            assert(false);
+        }
+        D3D12_RESOURCE_DESC imageDesc = image.gpuData->GetResource()->GetDesc();
+        image.srvDesc = {.Format = imageDesc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = imageDesc.MipLevels}};
+        D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = image.gpuData->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
+        d3d.transferCmdList->ResourceBarrier(1, &barrier);
+    }
+    for (uint textureIndex = 0; textureIndex < gltfData->textures_count; textureIndex++) {
+        cgltf_texture& gltfTexture = gltfData->textures[textureIndex];
+        ModelTexture& texture = model->textures[textureIndex];
+        assert(gltfTexture.image);
+        texture.image = &model->images[gltfTexture.image - &gltfData->images[0]];
+        if (gltfTexture.sampler) {
+            if (gltfTexture.sampler->wrap_s == 33071) {
+                texture.wrapU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            } else if (gltfTexture.sampler->wrap_s == 33648) {
+                texture.wrapU = D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
+            }
+            if (gltfTexture.sampler->wrap_t == 33071) {
+                texture.wrapV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            } else if (gltfTexture.sampler->wrap_t == 33648) {
+                texture.wrapV = D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
+            }
+        }
+    }
+    for (uint materialIndex = 0; materialIndex < gltfData->materials_count; materialIndex++) {
+        cgltf_material& gltfMaterial = gltfData->materials[materialIndex];
+        ModelMaterial& material = model->materials[materialIndex];
+        if (gltfMaterial.name) material.name = gltfMaterial.name;
+        material.emissive = float3(gltfMaterial.emissive_factor);
+        if (gltfMaterial.emissive_texture.texture) {
+            assert(gltfMaterial.emissive_texture.texcoord == 0);
+            assert(!gltfMaterial.emissive_texture.has_transform);
+            material.emissiveTexture = &model->textures[gltfMaterial.emissive_texture.texture - &gltfData->textures[0]];
+        }
+        assert(gltfMaterial.has_pbr_metallic_roughness);
+        material.baseColor = float4(gltfMaterial.pbr_metallic_roughness.base_color_factor);
+        material.metallic = gltfMaterial.pbr_metallic_roughness.metallic_factor;
+        material.roughness = gltfMaterial.pbr_metallic_roughness.roughness_factor;
+        if (gltfMaterial.pbr_metallic_roughness.base_color_texture.texture) {
+            assert(gltfMaterial.pbr_metallic_roughness.base_color_texture.texcoord == 0);
+            assert(!gltfMaterial.pbr_metallic_roughness.base_color_texture.has_transform);
+            material.baseColorTexture = &model->textures[gltfMaterial.pbr_metallic_roughness.base_color_texture.texture - &gltfData->textures[0]];
+        }
+        if (gltfMaterial.pbr_metallic_roughness.metallic_roughness_texture.texture) {
+            assert(gltfMaterial.pbr_metallic_roughness.metallic_roughness_texture.texcoord == 0);
+            assert(!gltfMaterial.pbr_metallic_roughness.metallic_roughness_texture.has_transform);
+            material.metallicRoughnessTexture = &model->textures[gltfMaterial.pbr_metallic_roughness.metallic_roughness_texture.texture - &gltfData->textures[0]];
+        }
+        if (gltfMaterial.normal_texture.texture) {
+            assert(gltfMaterial.normal_texture.texcoord == 0);
+            assert(!gltfMaterial.normal_texture.has_transform);
+            material.normalTexture = &model->textures[gltfMaterial.normal_texture.texture - &gltfData->textures[0]];
+        }
+    }
+    d3dTransferQueueSubmitRecording();
+    d3dTransferQueueWait();
+
+    return model;
+}
+
 void modelTraverseNodesImGui(ModelNode* node) {
     if (ImGui::TreeNode(node->name.c_str())) {
         for (ModelNode* childNode : node->children) {
@@ -1859,377 +2240,8 @@ ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
         if (m.filePath == filePath) model = &m;
     }
     if (!model) {
-        model = &models.emplace_back();
-
-        const std::filesystem::path gltfFilePath = assetsDir / filePath;
-        const std::filesystem::path gltfFileFolderPath = gltfFilePath.parent_path();
-        cgltf_options gltfOptions = {};
-        cgltf_data* gltfData = nullptr;
-        cgltf_result gltfParseFileResult = cgltf_parse_file(&gltfOptions, gltfFilePath.string().c_str(), &gltfData);
-        assert(gltfParseFileResult == cgltf_result_success);
-        cgltf_result gltfLoadBuffersResult = cgltf_load_buffers(&gltfOptions, gltfData, gltfFilePath.string().c_str());
-        assert(gltfLoadBuffersResult == cgltf_result_success);
-        assert(gltfData->scenes_count == 1);
-        model->filePath = filePath;
-        model->gltfData = gltfData;
-
-        d3dTransferQueueStartRecording();
-        d3d.stagingBufferOffset = 0;
-
-        model->nodes.resize(gltfData->nodes_count);
-        model->meshes.resize(gltfData->meshes_count);
-        model->skins.resize(gltfData->skins_count);
-        model->animations.resize(gltfData->animations_count);
-        model->materials.resize(gltfData->materials_count);
-        model->textures.resize(gltfData->textures_count);
-        model->images.resize(gltfData->images_count);
-
-        for (uint nodeIndex = 0; nodeIndex < gltfData->nodes_count; nodeIndex++) {
-            cgltf_node& gltfNode = gltfData->nodes[nodeIndex];
-            ModelNode& node = model->nodes[nodeIndex];
-            if (gltfNode.name) node.name = gltfNode.name;
-            if (gltfNode.parent) {
-                uint parentNodeIndex = (uint)(gltfNode.parent - gltfData->nodes);
-                assert(parentNodeIndex >= 0 && parentNodeIndex < gltfData->nodes_count);
-                node.parent = &model->nodes[parentNodeIndex];
-            } else {
-                node.parent = nullptr;
-            }
-            for (cgltf_node* child : std::span(gltfNode.children, gltfNode.children_count)) {
-                uint childNodeIndex = (uint)(child - gltfData->nodes);
-                assert(childNodeIndex >= 0 && childNodeIndex < gltfData->nodes_count);
-                node.children.push_back(&model->nodes[childNodeIndex]);
-            }
-            float nodeTransform[16];
-            cgltf_node_transform_world(&gltfNode, nodeTransform);
-            node.globalTransform = XMMATRIX(nodeTransform);
-            if (gltfNode.has_matrix) {
-                node.localTransform = XMMATRIX(gltfNode.matrix);
-            } else {
-                Transform localTransform = {};
-                if (gltfNode.has_scale) localTransform.s = float3(gltfNode.scale);
-                if (gltfNode.has_rotation) localTransform.r = float4(gltfNode.rotation);
-                if (gltfNode.has_translation) localTransform.t = float3(gltfNode.translation);
-                node.localTransform = localTransform.toMat();
-            }
-            if (gltfNode.mesh) {
-                uint meshIndex = (uint)(gltfNode.mesh - gltfData->meshes);
-                assert(meshIndex >= 0 && meshIndex < gltfData->meshes_count);
-                node.mesh = &model->meshes[meshIndex];
-            } else {
-                node.mesh = nullptr;
-            }
-            if (gltfNode.skin) {
-                uint skinIndex = (uint)(gltfNode.skin - gltfData->skins);
-                assert(skinIndex >= 0 && skinIndex < gltfData->skins_count);
-                node.skin = &model->skins[skinIndex];
-            } else {
-                node.skin = nullptr;
-            }
-        }
-        for (cgltf_node* gltfNode : std::span(gltfData->scenes[0].nodes, gltfData->scenes[0].nodes_count)) {
-            model->rootNodes.push_back(&model->nodes[gltfNode - gltfData->nodes]);
-        }
-        for (ModelNode& node : model->nodes) {
-            if (node.mesh) model->meshNodes.push_back(&node);
-        }
-        for (uint meshIndex = 0; meshIndex < gltfData->meshes_count; meshIndex++) {
-            cgltf_mesh& gltfMesh = gltfData->meshes[meshIndex];
-            ModelMesh& mesh = model->meshes[meshIndex];
-            if (gltfMesh.name) mesh.name = gltfMesh.name;
-            mesh.primitives.reserve(gltfMesh.primitives_count);
-            for (cgltf_primitive& gltfPrimitive : std::span(gltfMesh.primitives, gltfMesh.primitives_count)) {
-                cgltf_accessor* indices = gltfPrimitive.indices;
-                cgltf_accessor* positions = nullptr;
-                cgltf_accessor* normals = nullptr;
-                cgltf_accessor* tangents = nullptr;
-                cgltf_accessor* uvs = nullptr;
-                cgltf_accessor* jointIndices = nullptr;
-                cgltf_accessor* jointWeights = nullptr;
-                for (cgltf_attribute& attribute : std::span(gltfPrimitive.attributes, gltfPrimitive.attributes_count)) {
-                    if (attribute.type == cgltf_attribute_type_position) {
-                        positions = attribute.data;
-                    } else if (attribute.type == cgltf_attribute_type_normal) {
-                        normals = attribute.data;
-                    } else if (attribute.type == cgltf_attribute_type_tangent) {
-                        tangents = attribute.data;
-                    } else if (attribute.type == cgltf_attribute_type_texcoord) {
-                        uvs = attribute.data;
-                    } else if (attribute.type == cgltf_attribute_type_joints) {
-                        jointIndices = attribute.data;
-                    } else if (attribute.type == cgltf_attribute_type_weights) {
-                        jointWeights = attribute.data;
-                    }
-                }
-
-                assert(gltfPrimitive.type == cgltf_primitive_type_triangles);
-                assert(indices && positions && normals && uvs && tangents);
-                assert(indices->count % 3 == 0 && indices->type == cgltf_type_scalar && (indices->component_type == cgltf_component_type_r_16u || indices->component_type == cgltf_component_type_r_32u));
-                assert(positions->type == cgltf_type_vec3 && positions->component_type == cgltf_component_type_r_32f);
-                assert(normals->count == positions->count && normals->type == cgltf_type_vec3 && normals->component_type == cgltf_component_type_r_32f);
-                assert(uvs->count == positions->count && uvs->type == cgltf_type_vec2 && uvs->component_type == cgltf_component_type_r_32f);
-                assert(tangents->count == positions->count && tangents->type == cgltf_type_vec4 && tangents->component_type == cgltf_component_type_r_32f);
-                if (jointIndices) assert(jointIndices->count == positions->count && (jointIndices->component_type == cgltf_component_type_r_16u || jointIndices->component_type == cgltf_component_type_r_8u) && jointIndices->type == cgltf_type_vec4 && (jointIndices->stride == 8 || jointIndices->stride == 4));
-                if (jointWeights) assert(jointWeights->count == positions->count && jointWeights->component_type == cgltf_component_type_r_32f && jointWeights->type == cgltf_type_vec4 && jointWeights->stride == 16);
-                void* indicesBuffer = (uint8*)(indices->buffer_view->buffer->data) + indices->offset + indices->buffer_view->offset;
-                float3* positionsBuffer = (float3*)((uint8*)(positions->buffer_view->buffer->data) + positions->offset + positions->buffer_view->offset);
-                float3* normalsBuffer = (float3*)((uint8*)(normals->buffer_view->buffer->data) + normals->offset + normals->buffer_view->offset);
-                float4* tangentsBuffer = (float4*)((uint8*)(tangents->buffer_view->buffer->data) + tangents->offset + tangents->buffer_view->offset);
-                float2* uvsBuffer = (float2*)((uint8*)(uvs->buffer_view->buffer->data) + uvs->offset + uvs->buffer_view->offset);
-                void* jointIndicesBuffer = jointIndices ? (uint8*)(jointIndices->buffer_view->buffer->data) + jointIndices->offset + jointIndices->buffer_view->offset : nullptr;
-                float4* jointWeightsBuffer = jointWeights ? (float4*)((uint8*)(jointWeights->buffer_view->buffer->data) + jointWeights->offset + jointWeights->buffer_view->offset) : nullptr;
-
-                ModelPrimitive& primitive = mesh.primitives.emplace_back();
-                primitive.verticesBufferOffset = (uint)mesh.vertices.size();
-                primitive.verticesCount = (uint)positions->count;
-                primitive.indicesBufferOffset = (uint)mesh.indices.size();
-                primitive.indicesCount = (uint)indices->count;
-                for (uint vertexIndex = 0; vertexIndex < positions->count; vertexIndex++) {
-                    Vertex vertex = {.position = positionsBuffer[vertexIndex], .normal = normalsBuffer[vertexIndex], .tangent = tangentsBuffer[vertexIndex], .uv = uvsBuffer[vertexIndex]};
-                    if (jointIndicesBuffer) {
-                        if (jointIndices->component_type == cgltf_component_type_r_16u) {
-                            vertex.joints = ((uint16_4*)jointIndicesBuffer)[vertexIndex];
-                        } else {
-                            vertex.joints = ((uint8_4*)jointIndicesBuffer)[vertexIndex];
-                        }
-                    }
-                    if (jointWeightsBuffer) {
-                        vertex.jointWeights = jointWeightsBuffer[vertexIndex];
-                    }
-                    mesh.vertices.push_back(vertex);
-                }
-                if (indices->component_type == cgltf_component_type_r_16u) {
-                    std::copy_n((uint16*)indicesBuffer, indices->count, std::back_inserter(mesh.indices));
-                } else {
-                    std::copy_n((uint*)indicesBuffer, indices->count, std::back_inserter(mesh.indices));
-                }
-                if (gltfPrimitive.material) {
-                    primitive.material = &model->materials[gltfPrimitive.material - gltfData->materials];
-                    if (gltfPrimitive.material->normal_texture.texture) assert(tangentsBuffer);
-                }
-            }
-
-            D3D12MA::ALLOCATION_DESC verticeIndicesBuffersAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-            D3D12_RESOURCE_DESC verticeIndicesBuffersDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
-            verticeIndicesBuffersDesc.Width = vectorSizeof(mesh.vertices);
-            assert(SUCCEEDED(d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.verticesBuffer, {}, nullptr)));
-            mesh.verticesBuffer->GetResource()->SetName(std::format(L"{}Mesh{}VerticesBuffer", filePath.stem().wstring(), meshIndex).c_str());
-            verticeIndicesBuffersDesc.Width = vectorSizeof(mesh.indices);
-            assert(SUCCEEDED(d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.indicesBuffer, {}, nullptr)));
-            mesh.verticesBuffer->GetResource()->SetName(std::format(L"{}Mesh{}IndicesBuffer", filePath.stem().wstring(), meshIndex).c_str());
-
-            memcpy(d3d.stagingBufferPtr + d3d.stagingBufferOffset, mesh.vertices.data(), vectorSizeof(mesh.vertices));
-            d3d.transferCmdList->CopyBufferRegion(mesh.verticesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(mesh.vertices));
-            d3d.stagingBufferOffset += vectorSizeof(mesh.vertices);
-            assert(d3d.stagingBufferOffset < d3d.stagingBuffer->GetSize());
-            memcpy(d3d.stagingBufferPtr + d3d.stagingBufferOffset, mesh.indices.data(), vectorSizeof(mesh.indices));
-            d3d.transferCmdList->CopyBufferRegion(mesh.indicesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(mesh.indices));
-            d3d.stagingBufferOffset += vectorSizeof(mesh.indices);
-            assert(d3d.stagingBufferOffset < d3d.stagingBuffer->GetSize());
-            D3D12_RESOURCE_BARRIER bufferBarriers[2] = {
-                {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = mesh.verticesBuffer->GetResource(), .Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
-                {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = mesh.indicesBuffer->GetResource(), .Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
-            };
-            d3d.transferCmdList->ResourceBarrier(countof(bufferBarriers), bufferBarriers);
-
-            std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
-            for (ModelPrimitive& primitive : mesh.primitives) {
-                geometryDescs.push_back(D3D12_RAYTRACING_GEOMETRY_DESC{
-                    .Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
-                    .Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE,
-                    .Triangles = {
-                        .Transform3x4 = 0,
-                        .IndexFormat = DXGI_FORMAT_R32_UINT,
-                        .VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
-                        .IndexCount = (uint)primitive.indicesCount,
-                        .VertexCount = (uint)primitive.verticesCount,
-                        .IndexBuffer = mesh.indicesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.indicesBufferOffset * sizeof(uint),
-                        .VertexBuffer = {mesh.verticesBuffer->GetResource()->GetGPUVirtualAddress() + primitive.verticesBufferOffset * sizeof(struct Vertex), sizeof(Vertex)},
-                    },
-                });
-            }
-            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL, .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE, .NumDescs = (uint)geometryDescs.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .pGeometryDescs = geometryDescs.data()};
-            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
-            d3d.device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
-
-            D3D12MA::ALLOCATION_DESC blasAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-            D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
-            blasDesc.Width = prebuildInfo.ResultDataMaxSizeInBytes;
-            assert(SUCCEEDED(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &mesh.blas, {}, nullptr)));
-            mesh.blas->GetResource()->SetName(std::format(L"{}Mesh{}Blas", filePath.stem().wstring(), meshIndex).c_str());
-            blasDesc.Width = prebuildInfo.ScratchDataSizeInBytes;
-            assert(SUCCEEDED(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &mesh.blasScratch, {}, nullptr)));
-            mesh.blasScratch->GetResource()->SetName(std::format(L"{}Mesh{}BlasScratch", filePath.stem().wstring(), meshIndex).c_str());
-            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = mesh.blas->GetResource()->GetGPUVirtualAddress(), .Inputs = inputs, .ScratchAccelerationStructureData = mesh.blasScratch->GetResource()->GetGPUVirtualAddress()};
-            d3d.transferCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
-        }
-        for (uint skinIndex = 0; skinIndex < gltfData->skins_count; skinIndex++) {
-            cgltf_skin& gltfSkin = gltfData->skins[skinIndex];
-            ModelSkin& skin = model->skins[skinIndex];
-            assert(gltfSkin.inverse_bind_matrices->type == cgltf_type_mat4);
-            assert(gltfSkin.inverse_bind_matrices->count == gltfSkin.joints_count);
-            assert(gltfSkin.inverse_bind_matrices->stride == 16 * sizeof(float));
-            assert(gltfSkin.inverse_bind_matrices->buffer_view->size == 64 * gltfSkin.joints_count);
-            skin.joints.reserve(gltfSkin.joints_count);
-            for (uint jointIndex = 0; jointIndex < gltfSkin.joints_count; jointIndex++) {
-                cgltf_node* jointNode = gltfSkin.joints[jointIndex];
-                ModelNode* node = &model->nodes[jointNode - gltfData->nodes];
-                float* matsData = (float*)((uint8*)(gltfSkin.inverse_bind_matrices->buffer_view->buffer->data) + gltfSkin.inverse_bind_matrices->offset + gltfSkin.inverse_bind_matrices->buffer_view->offset);
-                matsData += jointIndex * 16;
-                skin.joints.push_back(ModelJoint{.node = node, .inverseBindMat = XMMATRIX(matsData)});
-            }
-        }
-        uint minParentCount = UINT_MAX;
-        for (ModelSkin& skin : model->skins) {
-            for (ModelJoint& joint : skin.joints) {
-                ModelNode* jointNode = joint.node;
-                ModelNode* parentNode = jointNode->parent;
-                uint parentCount = 0;
-                while (parentNode) {
-                    parentNode = parentNode->parent;
-                    parentCount++;
-                }
-                if (parentCount < minParentCount) {
-                    minParentCount = parentCount;
-                    model->skeletonRootNode = jointNode;
-                }
-            }
-        }
-        for (uint animationIndex = 0; animationIndex < gltfData->animations_count; animationIndex++) {
-            cgltf_animation& gltfAnimation = gltfData->animations[animationIndex];
-            ModelAnimation& animation = model->animations[animationIndex];
-            if (gltfAnimation.name) animation.name = gltfAnimation.name;
-            {
-                cgltf_accessor* input = gltfAnimation.samplers[0].input;
-                cgltf_size inputSize = gltfAnimation.samplers[0].input->count;
-                float* keyFrameTimes = (float*)((uint8*)(input->buffer_view->buffer->data) + input->offset + input->buffer_view->offset);
-                animation.timeLength = keyFrameTimes[inputSize - 1];
-            }
-            animation.samplers.reserve(gltfAnimation.samplers_count);
-            for (cgltf_animation_sampler& gltfSampler : std::span(gltfAnimation.samplers, gltfAnimation.samplers_count)) {
-                ModelAnimationSampler& sampler = animation.samplers.emplace_back();
-                if (gltfSampler.interpolation == cgltf_interpolation_type_linear) {
-                    sampler.interpolation = AnimationSamplerInterpolationLinear;
-                } else if (gltfSampler.interpolation == cgltf_interpolation_type_step) {
-                    sampler.interpolation = AnimationSamplerInterpolationStep;
-                } else if (gltfSampler.interpolation == cgltf_interpolation_type_cubic_spline) {
-                    sampler.interpolation = AnimationSamplerInterpolationCubicSpline;
-                    assert(false);
-                } else {
-                    assert(false);
-                }
-                assert(gltfSampler.input->component_type == cgltf_component_type_r_32f && gltfSampler.input->type == cgltf_type_scalar);
-                assert(gltfSampler.output->component_type == cgltf_component_type_r_32f);
-                assert((gltfSampler.output->type == cgltf_type_vec3 && gltfSampler.output->stride == sizeof(float3)) || (gltfSampler.output->type == cgltf_type_vec4 && gltfSampler.output->stride == sizeof(float4)));
-                assert(gltfSampler.input->count >= 2 && gltfSampler.input->count == gltfSampler.output->count);
-                float* inputs = (float*)((uint8*)(gltfSampler.input->buffer_view->buffer->data) + gltfSampler.input->offset + gltfSampler.input->buffer_view->offset);
-                void* outputs = (uint8*)(gltfSampler.output->buffer_view->buffer->data) + gltfSampler.output->offset + gltfSampler.output->buffer_view->offset;
-                assert(inputs[0] == 0.0f);
-                assert(inputs[gltfSampler.input->count - 1] == animation.timeLength);
-                sampler.keyFrames.reserve(gltfSampler.input->count);
-                for (uint frameIndex = 0; frameIndex < gltfSampler.input->count; frameIndex++) {
-                    ModelAnimationSamplerKeyFrame& keyFrame = sampler.keyFrames.emplace_back();
-                    keyFrame.time = inputs[frameIndex];
-                    if (gltfSampler.output->type == cgltf_type_vec3) {
-                        keyFrame.xyzw = ((float3*)outputs)[frameIndex];
-                    } else {
-                        keyFrame.xyzw = ((float4*)outputs)[frameIndex];
-                    }
-                }
-            }
-            animation.channels.reserve(gltfAnimation.channels_count);
-            for (cgltf_animation_channel& gltfChannel : std::span(gltfAnimation.channels, gltfAnimation.channels_count)) {
-                ModelAnimationChannel& channel = animation.channels.emplace_back();
-                uint nodeIndex = (uint)(gltfChannel.target_node - gltfData->nodes);
-                uint samplerIndex = (uint)(gltfChannel.sampler - gltfAnimation.samplers);
-                assert(nodeIndex >= 0 && nodeIndex < gltfData->nodes_count);
-                assert(samplerIndex >= 0 && samplerIndex < gltfAnimation.samplers_count);
-                channel.node = &model->nodes[nodeIndex];
-                channel.sampler = &animation.samplers[samplerIndex];
-                if (gltfChannel.target_path == cgltf_animation_path_type_translation) {
-                    assert(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec3);
-                    channel.type = AnimationChannelTypeTranslate;
-                } else if (gltfChannel.target_path == cgltf_animation_path_type_rotation) {
-                    assert(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec4);
-                    channel.type = AnimationChannelTypeRotate;
-                } else if (gltfChannel.target_path == cgltf_animation_path_type_scale) {
-                    assert(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec3);
-                    channel.type = AnimationChannelTypeScale;
-                } else {
-                    assert(false);
-                }
-            }
-        }
-        for (uint imageIndex = 0; imageIndex < gltfData->images_count; imageIndex++) {
-            cgltf_image& gltfImage = gltfData->images[imageIndex];
-            ModelImage& image = model->images[imageIndex];
-            std::filesystem::path imageFilePath = gltfFileFolderPath / gltfImage.uri;
-            std::filesystem::path imageDDSFilePath = imageFilePath;
-            imageDDSFilePath.replace_extension(".dds");
-            if (std::filesystem::exists(imageDDSFilePath)) {
-                image.gpuData = d3dCreateImageDDS(imageDDSFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str());
-            } else if (std::filesystem::exists(imageFilePath)) {
-                image.gpuData = d3dCreateImageSTB(imageFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str());
-            } else {
-                assert(false);
-            }
-            D3D12_RESOURCE_DESC imageDesc = image.gpuData->GetResource()->GetDesc();
-            image.srvDesc = {.Format = imageDesc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = imageDesc.MipLevels}};
-            D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = image.gpuData->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
-            d3d.transferCmdList->ResourceBarrier(1, &barrier);
-        }
-        for (uint textureIndex = 0; textureIndex < gltfData->textures_count; textureIndex++) {
-            cgltf_texture& gltfTexture = gltfData->textures[textureIndex];
-            ModelTexture& texture = model->textures[textureIndex];
-            assert(gltfTexture.image);
-            texture.image = &model->images[gltfTexture.image - &gltfData->images[0]];
-            if (gltfTexture.sampler) {
-                if (gltfTexture.sampler->wrap_s == 33071) {
-                    texture.wrapU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-                } else if (gltfTexture.sampler->wrap_s == 33648) {
-                    texture.wrapU = D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
-                }
-                if (gltfTexture.sampler->wrap_t == 33071) {
-                    texture.wrapV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-                } else if (gltfTexture.sampler->wrap_t == 33648) {
-                    texture.wrapV = D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
-                }
-            }
-        }
-        for (uint materialIndex = 0; materialIndex < gltfData->materials_count; materialIndex++) {
-            cgltf_material& gltfMaterial = gltfData->materials[materialIndex];
-            ModelMaterial& material = model->materials[materialIndex];
-            if (gltfMaterial.name) material.name = gltfMaterial.name;
-            material.emissive = float3(gltfMaterial.emissive_factor);
-            if (gltfMaterial.emissive_texture.texture) {
-                assert(gltfMaterial.emissive_texture.texcoord == 0);
-                assert(!gltfMaterial.emissive_texture.has_transform);
-                material.emissiveTexture = &model->textures[gltfMaterial.emissive_texture.texture - &gltfData->textures[0]];
-            }
-            assert(gltfMaterial.has_pbr_metallic_roughness);
-            material.baseColor = float4(gltfMaterial.pbr_metallic_roughness.base_color_factor);
-            material.metallic = gltfMaterial.pbr_metallic_roughness.metallic_factor;
-            material.roughness = gltfMaterial.pbr_metallic_roughness.roughness_factor;
-            if (gltfMaterial.pbr_metallic_roughness.base_color_texture.texture) {
-                assert(gltfMaterial.pbr_metallic_roughness.base_color_texture.texcoord == 0);
-                assert(!gltfMaterial.pbr_metallic_roughness.base_color_texture.has_transform);
-                material.baseColorTexture = &model->textures[gltfMaterial.pbr_metallic_roughness.base_color_texture.texture - &gltfData->textures[0]];
-            }
-            if (gltfMaterial.pbr_metallic_roughness.metallic_roughness_texture.texture) {
-                assert(gltfMaterial.pbr_metallic_roughness.metallic_roughness_texture.texcoord == 0);
-                assert(!gltfMaterial.pbr_metallic_roughness.metallic_roughness_texture.has_transform);
-                material.metallicRoughnessTexture = &model->textures[gltfMaterial.pbr_metallic_roughness.metallic_roughness_texture.texture - &gltfData->textures[0]];
-            }
-            if (gltfMaterial.normal_texture.texture) {
-                assert(gltfMaterial.normal_texture.texcoord == 0);
-                assert(!gltfMaterial.normal_texture.has_transform);
-                material.normalTexture = &model->textures[gltfMaterial.normal_texture.texture - &gltfData->textures[0]];
-            }
-        }
-        d3dTransferQueueSubmitRecording();
-        d3dTransferQueueWait();
+        model = modelLoad(filePath);
     }
-
     ModelInstance modelInstance = {};
     modelInstance.model = model;
     modelInstance.meshNodes.resize(model->meshNodes.size());
@@ -2490,11 +2502,17 @@ void physxInit() {
     // }
 }
 
+void playerCameraReset() {
+    player.camera.lookAt = player.transform.t + player.camera.lookAtOffset;
+    player.camera.position = player.camera.lookAt + (float3(0, 0, 1) * player.camera.distance);
+    player.camera.pitchYaw = float2(0, 0);
+}
+
 void playerCameraSetPitchYaw(float2 pitchYawNew) {
-    player.camera.pitchYaw.x = std::clamp(pitchYawNew.x, -pi * 0.1f, pi * 0.4f);
+    player.camera.pitchYaw.x = std::clamp(pitchYawNew.x, -pi * 0.4f, pi * 0.09f);
     player.camera.pitchYaw.y = std::remainderf(pitchYawNew.y, pi * 2.0f);
     XMVECTOR quaternion = XMQuaternionRotationRollPitchYaw(player.camera.pitchYaw.x, player.camera.pitchYaw.y, 0);
-    float3 dir = float3(XMVector3Rotate(XMVectorSet(0, 0, -1, 0), quaternion)).normalize();
+    float3 dir = float3(XMVector3Rotate(XMVectorSet(0, 0, 1, 0), quaternion)).normalize();
     player.camera.position = player.camera.lookAt + (dir * player.camera.distance);
 }
 
@@ -2546,9 +2564,6 @@ void worldInit(const std::filesystem::path& path) {
     ryml::ConstNodeRef yamlRoot = yamlTree.rootref();
     worldFilePath = path;
 
-    d3dTransferQueueStartRecording();
-    d3d.stagingBufferOffset = 0;
-
 #if EDITOR
     ryml::ConstNodeRef editorCameraYaml = yamlRoot.find_child("editorCamera");
     if (editorCameraYaml.valid()) {
@@ -2562,20 +2577,47 @@ void worldInit(const std::filesystem::path& path) {
     }
 #endif
     {
-        ryml::ConstNodeRef skyboxYaml = yamlRoot["skybox"];
-        std::string file;
-        skyboxYaml["file"] >> file;
-        skybox.hdriTextureFilePath = file;
-        skybox.hdriTexture = d3dCreateImageDDS(assetsDir / skybox.hdriTextureFilePath);
-        D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = skybox.hdriTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
-        d3d.transferCmdList->ResourceBarrier(1, &barrier);
+        ryml::ConstNodeRef assetsYaml = yamlRoot["assets"];
+
+        ryml::ConstNodeRef skyboxesYaml = assetsYaml["skyboxes"];
+        d3dTransferQueueStartRecording();
+        d3d.stagingBufferOffset = 0;
+        for (ryml::ConstNodeRef skyboxYaml : skyboxesYaml) {
+            std::string file;
+            skyboxYaml >> file;
+            Skybox skybox;
+            skybox.hdriTextureFilePath = file;
+            skybox.hdriTexture = d3dCreateImageDDS(assetsDir / skybox.hdriTextureFilePath);
+            D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = skybox.hdriTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
+            d3d.transferCmdList->ResourceBarrier(1, &barrier);
+            skyboxes.push_back(skybox);
+        }
         d3dTransferQueueSubmitRecording();
         d3dTransferQueueWait();
+
+        ryml::ConstNodeRef modelsYaml = assetsYaml["models"];
+        for (ryml::ConstNodeRef modelYaml : modelsYaml) {
+            std::string modelFile;
+            modelYaml >> modelFile;
+            modelLoad(modelFile);
+        }
+    }
+    {
+        ryml::ConstNodeRef skyboxYaml = yamlRoot["skybox"];
+        std::string assetPath;
+        skyboxYaml["asset"] >> assetPath;
+        for (Skybox& sb : skyboxes) {
+            if (sb.hdriTextureFilePath == assetPath) {
+                skybox = &sb;
+                break;
+            }
+        }
+        assert(skybox);
     }
     {
         ryml::ConstNodeRef playerYaml = yamlRoot["player"];
         std::string file;
-        playerYaml["file"] >> file;
+        playerYaml["asset"] >> file;
         player.modelInstance = modelInstanceInit(file);
         playerYaml["transform"] >> player.transformDefault;
         player.transform = player.transformDefault;
@@ -2589,15 +2631,14 @@ void worldInit(const std::filesystem::path& path) {
         player.modelInstance.animation = &player.modelInstance.model->animations[player.idleAnimationIndex];
         playerYaml["cameraLookAtOffset"] >> player.camera.lookAtOffset;
         playerYaml["cameraDistance"] >> player.camera.distance;
-        player.camera.lookAt = player.transform.t + player.camera.lookAtOffset;
-        playerCameraSetPitchYaw(float2(0, 0));
+        playerCameraReset();
     }
     ryml::ConstNodeRef gameObjectsYaml = yamlRoot["gameObjects"];
     for (ryml::ConstNodeRef objYaml : gameObjectsYaml) {
         GameObject& obj = gameObjects.emplace_back();
         objYaml["name"] >> obj.name;
         std::string file;
-        objYaml["file"] >> file;
+        objYaml["asset"] >> file;
         obj.modelInstance = modelInstanceInit(file);
         objYaml["transform"] >> obj.transformDefault;
         obj.transform = obj.transformDefault;
@@ -2664,13 +2705,26 @@ void worldSave() {
     cameraYaml["pitchYaw"] << editor.camera.pitchYaw;
     cameraYaml["moveSpeed"] << editor.camera.moveSpeed;
 
+    ryml::NodeRef assetsYaml = yamlRoot["assets"];
+    assetsYaml |= ryml::MAP;
+    ryml::NodeRef skyboxesYaml = assetsYaml["skyboxes"];
+    skyboxesYaml |= ryml::SEQ;
+    for (Skybox& skybox : skyboxes) {
+        skyboxesYaml.append_child() << skybox.hdriTextureFilePath.string();
+    }
+    ryml::NodeRef modelsYaml = assetsYaml["models"];
+    modelsYaml |= ryml::SEQ;
+    for (Model& model : models) {
+        modelsYaml.append_child() << model.filePath.string();
+    }
+
     ryml::NodeRef skyboxYaml = yamlRoot["skybox"];
     skyboxYaml |= ryml::MAP;
-    skyboxYaml["file"] << skybox.hdriTextureFilePath.string();
+    skyboxYaml["asset"] << skybox->hdriTextureFilePath.string();
 
     ryml::NodeRef playerYaml = yamlRoot["player"];
     playerYaml |= ryml::MAP;
-    playerYaml["file"] << player.modelInstance.model->filePath.string();
+    playerYaml["asset"] << player.modelInstance.model->filePath.string();
     playerYaml["transform"] << player.transformDefault;
     playerYaml["walkSpeed"] << player.walkSpeed;
     playerYaml["runSpeed"] << player.runSpeed;
@@ -2687,7 +2741,7 @@ void worldSave() {
         ryml::NodeRef gameObjectYaml = gameObjectsYaml.append_child();
         gameObjectYaml |= ryml::MAP;
         gameObjectYaml["name"] << obj.name;
-        gameObjectYaml["file"] << obj.modelInstance.model->filePath.string();
+        gameObjectYaml["asset"] << obj.modelInstance.model->filePath.string();
         gameObjectYaml["transform"] << Transform(obj.transformDefault);
         if (obj.collision) {
             ryml::NodeRef collisionYaml = gameObjectYaml["collision"];
@@ -2781,116 +2835,13 @@ void gameObjectRelease(GameObject* obj) {
     modelInstanceRelease(&obj->modelInstance);
 }
 
-ImGuiKey toImGuiKey(WPARAM wparam) {
-    switch (wparam) {
-    case VK_TAB: return ImGuiKey_Tab;
-    case VK_LEFT: return ImGuiKey_LeftArrow;
-    case VK_RIGHT: return ImGuiKey_RightArrow;
-    case VK_UP: return ImGuiKey_UpArrow;
-    case VK_DOWN: return ImGuiKey_DownArrow;
-    case VK_PRIOR: return ImGuiKey_PageUp;
-    case VK_NEXT: return ImGuiKey_PageDown;
-    case VK_HOME: return ImGuiKey_Home;
-    case VK_END: return ImGuiKey_End;
-    case VK_INSERT: return ImGuiKey_Insert;
-    case VK_DELETE: return ImGuiKey_Delete;
-    case VK_BACK: return ImGuiKey_Backspace;
-    case VK_SPACE: return ImGuiKey_Space;
-    case VK_RETURN: return ImGuiKey_Enter;
-    case VK_ESCAPE: return ImGuiKey_Escape;
-    case VK_OEM_7: return ImGuiKey_Apostrophe;
-    case VK_OEM_COMMA: return ImGuiKey_Comma;
-    case VK_OEM_MINUS: return ImGuiKey_Minus;
-    case VK_OEM_PERIOD: return ImGuiKey_Period;
-    case VK_OEM_2: return ImGuiKey_Slash;
-    case VK_OEM_1: return ImGuiKey_Semicolon;
-    case VK_OEM_PLUS: return ImGuiKey_Equal;
-    case VK_OEM_4: return ImGuiKey_LeftBracket;
-    case VK_OEM_5: return ImGuiKey_Backslash;
-    case VK_OEM_6: return ImGuiKey_RightBracket;
-    case VK_OEM_3: return ImGuiKey_GraveAccent;
-    case VK_CAPITAL: return ImGuiKey_CapsLock;
-    case VK_SCROLL: return ImGuiKey_ScrollLock;
-    case VK_NUMLOCK: return ImGuiKey_NumLock;
-    case VK_SNAPSHOT: return ImGuiKey_PrintScreen;
-    case VK_PAUSE: return ImGuiKey_Pause;
-    case VK_NUMPAD0: return ImGuiKey_Keypad0;
-    case VK_NUMPAD1: return ImGuiKey_Keypad1;
-    case VK_NUMPAD2: return ImGuiKey_Keypad2;
-    case VK_NUMPAD3: return ImGuiKey_Keypad3;
-    case VK_NUMPAD4: return ImGuiKey_Keypad4;
-    case VK_NUMPAD5: return ImGuiKey_Keypad5;
-    case VK_NUMPAD6: return ImGuiKey_Keypad6;
-    case VK_NUMPAD7: return ImGuiKey_Keypad7;
-    case VK_NUMPAD8: return ImGuiKey_Keypad8;
-    case VK_NUMPAD9: return ImGuiKey_Keypad9;
-    case VK_DECIMAL: return ImGuiKey_KeypadDecimal;
-    case VK_DIVIDE: return ImGuiKey_KeypadDivide;
-    case VK_MULTIPLY: return ImGuiKey_KeypadMultiply;
-    case VK_SUBTRACT: return ImGuiKey_KeypadSubtract;
-    case VK_ADD: return ImGuiKey_KeypadAdd;
-    case (VK_RETURN + 256): return ImGuiKey_KeypadEnter;
-    case VK_SHIFT: return ImGuiKey_LeftShift;
-    case VK_LSHIFT: return ImGuiKey_LeftShift;
-    case VK_CONTROL: return ImGuiKey_LeftCtrl;
-    case VK_LCONTROL: return ImGuiKey_LeftCtrl;
-    case VK_MENU: return ImGuiKey_LeftAlt;
-    case VK_LMENU: return ImGuiKey_LeftAlt;
-    case VK_LWIN: return ImGuiKey_LeftSuper;
-    case VK_RSHIFT: return ImGuiKey_RightShift;
-    case VK_RCONTROL: return ImGuiKey_RightCtrl;
-    case VK_RMENU: return ImGuiKey_RightAlt;
-    case VK_RWIN: return ImGuiKey_RightSuper;
-    case VK_APPS: return ImGuiKey_Menu;
-    case '0': return ImGuiKey_0;
-    case '1': return ImGuiKey_1;
-    case '2': return ImGuiKey_2;
-    case '3': return ImGuiKey_3;
-    case '4': return ImGuiKey_4;
-    case '5': return ImGuiKey_5;
-    case '6': return ImGuiKey_6;
-    case '7': return ImGuiKey_7;
-    case '8': return ImGuiKey_8;
-    case '9': return ImGuiKey_9;
-    case 'A': return ImGuiKey_A;
-    case 'B': return ImGuiKey_B;
-    case 'C': return ImGuiKey_C;
-    case 'D': return ImGuiKey_D;
-    case 'E': return ImGuiKey_E;
-    case 'F': return ImGuiKey_F;
-    case 'G': return ImGuiKey_G;
-    case 'H': return ImGuiKey_H;
-    case 'I': return ImGuiKey_I;
-    case 'J': return ImGuiKey_J;
-    case 'K': return ImGuiKey_K;
-    case 'L': return ImGuiKey_L;
-    case 'M': return ImGuiKey_M;
-    case 'N': return ImGuiKey_N;
-    case 'O': return ImGuiKey_O;
-    case 'P': return ImGuiKey_P;
-    case 'Q': return ImGuiKey_Q;
-    case 'R': return ImGuiKey_R;
-    case 'S': return ImGuiKey_S;
-    case 'T': return ImGuiKey_T;
-    case 'U': return ImGuiKey_U;
-    case 'V': return ImGuiKey_V;
-    case 'W': return ImGuiKey_W;
-    case 'X': return ImGuiKey_X;
-    case 'Y': return ImGuiKey_Y;
-    case 'Z': return ImGuiKey_Z;
-    case VK_F1: return ImGuiKey_F1;
-    case VK_F2: return ImGuiKey_F2;
-    case VK_F3: return ImGuiKey_F3;
-    case VK_F4: return ImGuiKey_F4;
-    case VK_F5: return ImGuiKey_F5;
-    case VK_F6: return ImGuiKey_F6;
-    case VK_F7: return ImGuiKey_F7;
-    case VK_F8: return ImGuiKey_F8;
-    case VK_F9: return ImGuiKey_F9;
-    case VK_F10: return ImGuiKey_F10;
-    case VK_F11: return ImGuiKey_F11;
-    case VK_F12: return ImGuiKey_F12;
-    default: return ImGuiKey_None;
+void toggleBetweenEditorPlay() {
+    inEditor = !inEditor;
+
+    player.transform = player.transformDefault;
+    playerCameraReset();
+    for (GameObject& obj : gameObjects) {
+        obj.transform = obj.transformDefault;
     }
 }
 
@@ -2922,6 +2873,13 @@ void editorMainMenuBar() {
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Quit")) { quit = true; }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Edit")) {
+            if (ImGui::MenuItem("Play")) {
+                toggleBetweenEditorPlay();
+            }
+            ImGui::SetItemTooltip("ctrl-p");
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Display")) {
@@ -3457,7 +3415,7 @@ void gameUpdate() {
     //     }
     // }
     {
-        float pitch = (mouseDeltaRaw.y * mouseSensitivity - controller.rsY * controllerSensitivity) * (float)frameTime;
+        float pitch = (-mouseDeltaRaw.y * mouseSensitivity + controller.rsY * controllerSensitivity) * (float)frameTime;
         float yaw = (mouseDeltaRaw.x * mouseSensitivity + controller.rsX * controllerSensitivity) * (float)frameTime;
         playerCameraSetPitchYaw(player.camera.pitchYaw + float2(pitch, yaw));
     }
@@ -3537,7 +3495,14 @@ void update() {
         quit = true;
     }
 #if EDITOR
-    editorUpdate();
+    if (ImGui::IsKeyPressed(ImGuiKey_P) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
+        toggleBetweenEditorPlay();
+    }
+    if (inEditor) {
+        editorUpdate();
+    } else {
+        gameUpdate();
+    }
 #else
     gameUpdate();
 #endif
@@ -3719,7 +3684,7 @@ void d3dRender() {
         D3DDescriptor tlasDescriptor = d3dAppendSRVDescriptor(&tlasViewDesc, nullptr);
         D3DDescriptor tlasInstancesInfosDescriptor = d3dAppendSRVDescriptor(&tlasInstancesInfosDesc, d3d.tlasInstancesInfosBuffer->GetResource());
         D3DDescriptor blasGeometriesInfosDescriptor = d3dAppendSRVDescriptor(&blasGeometriesInfosDesc, d3d.blasGeometriesInfosBuffer->GetResource());
-        D3DDescriptor skyboxTextureDescriptor = d3dAppendSRVDescriptor(nullptr, skybox.hdriTexture->GetResource());
+        D3DDescriptor skyboxTextureDescriptor = d3dAppendSRVDescriptor(nullptr, skybox->hdriTexture->GetResource());
         D3DDescriptor imguiImageDescriptor = d3dAppendSRVDescriptor(nullptr, d3d.imguiTexture->GetResource());
         D3DDescriptor directWriteImageDescriptor = d3dAppendSRVDescriptor(nullptr, d3d.directWriteTexture->GetResource());
         D3DDescriptor collisionQueriesDescriptor = d3dAppendSRVDescriptor(&collisionQueriesDesc, d3d.collisionQueriesBuffer->GetResource());
@@ -3986,6 +3951,119 @@ void d3dRender() {
     std::swap(d3d.renderTexture, d3d.renderTexturePrevFrame);
 }
 
+ImGuiKey virtualKeytoImGuiKey(WPARAM wparam) {
+    switch (wparam) {
+    case VK_TAB: return ImGuiKey_Tab;
+    case VK_LEFT: return ImGuiKey_LeftArrow;
+    case VK_RIGHT: return ImGuiKey_RightArrow;
+    case VK_UP: return ImGuiKey_UpArrow;
+    case VK_DOWN: return ImGuiKey_DownArrow;
+    case VK_PRIOR: return ImGuiKey_PageUp;
+    case VK_NEXT: return ImGuiKey_PageDown;
+    case VK_HOME: return ImGuiKey_Home;
+    case VK_END: return ImGuiKey_End;
+    case VK_INSERT: return ImGuiKey_Insert;
+    case VK_DELETE: return ImGuiKey_Delete;
+    case VK_BACK: return ImGuiKey_Backspace;
+    case VK_SPACE: return ImGuiKey_Space;
+    case VK_RETURN: return ImGuiKey_Enter;
+    case VK_ESCAPE: return ImGuiKey_Escape;
+    case VK_OEM_7: return ImGuiKey_Apostrophe;
+    case VK_OEM_COMMA: return ImGuiKey_Comma;
+    case VK_OEM_MINUS: return ImGuiKey_Minus;
+    case VK_OEM_PERIOD: return ImGuiKey_Period;
+    case VK_OEM_2: return ImGuiKey_Slash;
+    case VK_OEM_1: return ImGuiKey_Semicolon;
+    case VK_OEM_PLUS: return ImGuiKey_Equal;
+    case VK_OEM_4: return ImGuiKey_LeftBracket;
+    case VK_OEM_5: return ImGuiKey_Backslash;
+    case VK_OEM_6: return ImGuiKey_RightBracket;
+    case VK_OEM_3: return ImGuiKey_GraveAccent;
+    case VK_CAPITAL: return ImGuiKey_CapsLock;
+    case VK_SCROLL: return ImGuiKey_ScrollLock;
+    case VK_NUMLOCK: return ImGuiKey_NumLock;
+    case VK_SNAPSHOT: return ImGuiKey_PrintScreen;
+    case VK_PAUSE: return ImGuiKey_Pause;
+    case VK_NUMPAD0: return ImGuiKey_Keypad0;
+    case VK_NUMPAD1: return ImGuiKey_Keypad1;
+    case VK_NUMPAD2: return ImGuiKey_Keypad2;
+    case VK_NUMPAD3: return ImGuiKey_Keypad3;
+    case VK_NUMPAD4: return ImGuiKey_Keypad4;
+    case VK_NUMPAD5: return ImGuiKey_Keypad5;
+    case VK_NUMPAD6: return ImGuiKey_Keypad6;
+    case VK_NUMPAD7: return ImGuiKey_Keypad7;
+    case VK_NUMPAD8: return ImGuiKey_Keypad8;
+    case VK_NUMPAD9: return ImGuiKey_Keypad9;
+    case VK_DECIMAL: return ImGuiKey_KeypadDecimal;
+    case VK_DIVIDE: return ImGuiKey_KeypadDivide;
+    case VK_MULTIPLY: return ImGuiKey_KeypadMultiply;
+    case VK_SUBTRACT: return ImGuiKey_KeypadSubtract;
+    case VK_ADD: return ImGuiKey_KeypadAdd;
+    case (VK_RETURN + 256): return ImGuiKey_KeypadEnter;
+    case VK_SHIFT: return ImGuiKey_LeftShift;
+    case VK_LSHIFT: return ImGuiKey_LeftShift;
+    case VK_CONTROL: return ImGuiKey_LeftCtrl;
+    case VK_LCONTROL: return ImGuiKey_LeftCtrl;
+    case VK_MENU: return ImGuiKey_LeftAlt;
+    case VK_LMENU: return ImGuiKey_LeftAlt;
+    case VK_LWIN: return ImGuiKey_LeftSuper;
+    case VK_RSHIFT: return ImGuiKey_RightShift;
+    case VK_RCONTROL: return ImGuiKey_RightCtrl;
+    case VK_RMENU: return ImGuiKey_RightAlt;
+    case VK_RWIN: return ImGuiKey_RightSuper;
+    case VK_APPS: return ImGuiKey_Menu;
+    case '0': return ImGuiKey_0;
+    case '1': return ImGuiKey_1;
+    case '2': return ImGuiKey_2;
+    case '3': return ImGuiKey_3;
+    case '4': return ImGuiKey_4;
+    case '5': return ImGuiKey_5;
+    case '6': return ImGuiKey_6;
+    case '7': return ImGuiKey_7;
+    case '8': return ImGuiKey_8;
+    case '9': return ImGuiKey_9;
+    case 'A': return ImGuiKey_A;
+    case 'B': return ImGuiKey_B;
+    case 'C': return ImGuiKey_C;
+    case 'D': return ImGuiKey_D;
+    case 'E': return ImGuiKey_E;
+    case 'F': return ImGuiKey_F;
+    case 'G': return ImGuiKey_G;
+    case 'H': return ImGuiKey_H;
+    case 'I': return ImGuiKey_I;
+    case 'J': return ImGuiKey_J;
+    case 'K': return ImGuiKey_K;
+    case 'L': return ImGuiKey_L;
+    case 'M': return ImGuiKey_M;
+    case 'N': return ImGuiKey_N;
+    case 'O': return ImGuiKey_O;
+    case 'P': return ImGuiKey_P;
+    case 'Q': return ImGuiKey_Q;
+    case 'R': return ImGuiKey_R;
+    case 'S': return ImGuiKey_S;
+    case 'T': return ImGuiKey_T;
+    case 'U': return ImGuiKey_U;
+    case 'V': return ImGuiKey_V;
+    case 'W': return ImGuiKey_W;
+    case 'X': return ImGuiKey_X;
+    case 'Y': return ImGuiKey_Y;
+    case 'Z': return ImGuiKey_Z;
+    case VK_F1: return ImGuiKey_F1;
+    case VK_F2: return ImGuiKey_F2;
+    case VK_F3: return ImGuiKey_F3;
+    case VK_F4: return ImGuiKey_F4;
+    case VK_F5: return ImGuiKey_F5;
+    case VK_F6: return ImGuiKey_F6;
+    case VK_F7: return ImGuiKey_F7;
+    case VK_F8: return ImGuiKey_F8;
+    case VK_F9: return ImGuiKey_F9;
+    case VK_F10: return ImGuiKey_F10;
+    case VK_F11: return ImGuiKey_F11;
+    case VK_F12: return ImGuiKey_F12;
+    default: return ImGuiKey_None;
+    }
+}
+
 LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lParam) {
     LRESULT result = 0;
     switch (eventType) {
@@ -4036,11 +4114,11 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
     } break;
     case WM_KEYDOWN:
     case WM_KEYUP: {
-        ImGui::GetIO().AddKeyEvent(toImGuiKey(wParam), eventType == WM_KEYDOWN);
+        ImGui::GetIO().AddKeyEvent(virtualKeytoImGuiKey(wParam), eventType == WM_KEYDOWN);
     } break;
     case WM_SYSKEYDOWN:
     case WM_SYSKEYUP: {
-        ImGui::GetIO().AddKeyEvent(toImGuiKey(wParam), eventType == WM_SYSKEYDOWN);
+        ImGui::GetIO().AddKeyEvent(virtualKeytoImGuiKey(wParam), eventType == WM_SYSKEYDOWN);
     } break;
     case WM_CHAR: {
         ImGui::GetIO().AddInputCharacter(LOWORD(wParam));

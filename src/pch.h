@@ -38,11 +38,11 @@
 
 #include <xinput.h>
 
-#if !defined(NDEBUG) ^ defined(_DEBUG)
+#ifdef _DEBUG
+#include <physx/pxphysicsapi.h>
+#else
 #define NDEBUG
 #include <physx/pxphysicsapi.h>
 #undef NDEBUG
-#else
-#include <physx/pxphysicsapi.h>
 #endif
 
