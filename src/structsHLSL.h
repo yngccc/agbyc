@@ -4,7 +4,7 @@ struct Vertex {
 #ifdef __cplusplus
     float3 position;
     float3 normal;
-    float4 tangent;  // bitangent = cross(normal, tangent.xyz) * tangent.w
+    float4 tangent; // bitangent = cross(normal, tangent.xyz) * tangent.w
     float2 uv;
     uint16_4 joints;
     float4 jointWeights;
@@ -92,14 +92,14 @@ struct RenderInfo {
     XMMATRIX cameraViewMat;
     XMMATRIX cameraViewMatInverseTranspose;
     XMMATRIX cameraProjectMat;
-    // XMMATRIX cameraViewProjectMat;
-    // XMMATRIX cameraProjectViewInverseMat;
+    XMMATRIX cameraViewProjectMat;
+    XMMATRIX cameraViewProjectMatInverse;
 #else
     float4x4 cameraViewMat;
     float4x4 cameraViewMatInverseTranspose;
     float4x4 cameraProjectMat;
-    // float4x4 cameraViewProjectMat;
-    // float4x4 cameraViewProjectInverseMat;
+    float4x4 cameraViewProjectMat;
+    float4x4 cameraViewProjectMatInverse;
 #endif
 };
 
@@ -110,22 +110,26 @@ enum ObjectType : uint {
     ObjectTypeGameObject = 0x01 << 3,
 };
 
-enum TLASInstanceFlag : uint {
-    TLASInstanceFlagSelected = 0x01,
-    TLASInstanceFlagReferencePlane = 0x01 << 1,
+enum BLASInstanceFlag : uint {
+    BLASInstanceFlagHighlightTriangleEdges = 0x01,
+    BLASInstanceFlagForcedColor = 0x01 << 1,
 };
 
-struct TLASInstanceInfo {
+struct BLASInstanceInfo {
 #ifdef __cplusplus
+    uint32 descriptorsHeapOffset;
+    uint32 blasGeometriesOffset;
+    uint32 flags;
+    uint32 color;
     ObjectType objectType;
     uint32 objectIndex;
-    uint32 flags;
-    uint32 blasGeometriesOffset;
 #else
+    uint descriptorsHeapOffset;
+    uint blasGeometriesOffset;
+    uint flags;
+    uint color;
     ObjectType objectType;
     uint objectIndex;
-    uint flags;
-    uint blasGeometriesOffset;
 #endif
 };
 

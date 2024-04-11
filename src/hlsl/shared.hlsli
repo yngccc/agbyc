@@ -12,7 +12,7 @@
 #define MOTION_VECTOR_TEXTURE_UAV_DESCRIPTOR(name) RWTexture2D<float2> name = ResourceDescriptorHeap[3];
 #define RENDER_INFO_DESCRIPTOR(name) ConstantBuffer<RenderInfo> name = ResourceDescriptorHeap[4];
 #define BVH_DESCRIPTOR(name) RaytracingAccelerationStructure name = ResourceDescriptorHeap[5];
-#define TLAS_INSTANCES_INFOS_DESCRIPTOR(name) StructuredBuffer<TLASInstanceInfo> name = ResourceDescriptorHeap[6];
+#define BLAS_INSTANCES_INFOS_DESCRIPTOR(name) StructuredBuffer<BLASInstanceInfo> name = ResourceDescriptorHeap[6];
 #define BLAS_GEOMETRIES_INFOS_DESCRIPTOR(name) StructuredBuffer<BLASGeometryInfo> name = ResourceDescriptorHeap[7];
 #define SKYBOX_TEXTURE_DESCRIPTOR(name) Texture2D<float3> name = ResourceDescriptorHeap[8];
 #define IMGUI_IMAGE_DESCRIPTOR(name) Texture2D<float4> name = ResourceDescriptorHeap[9];

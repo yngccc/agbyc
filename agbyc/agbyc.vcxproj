@@ -261,6 +261,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\pch.h" />
+    <ClInclude Include="..\src\structsHLSL.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

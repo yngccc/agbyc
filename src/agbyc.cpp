@@ -20,9 +20,6 @@
 
 #include <tracy/tracy/tracy.hpp>
 
-using namespace DirectX;
-using namespace physx;
-
 typedef int8_t int8;
 typedef int16_t int16;
 typedef int64_t int64;
@@ -35,13 +32,25 @@ typedef uint32_t uint;
 static const float euler = 2.71828182845904523536f;
 static const float pi = 3.14159265358979323846f;
 static const float sqrt2 = 1.41421356237309504880f;
-static const XMMATRIX matrixIdentity = XMMatrixIdentity();
 
-#define KILOBYTES(n) (1024ll * (n))
-#define MEGABYTES(n) (1024ll * 1024ll * (n))
-#define GIGABYTES(n) (1024ll * 1024ll * 1024ll * (n))
-#define RADIAN(d) (d * (pi / 180.0f))
-#define DEGREE(r) (r * (180.0f / pi))
+static const XMMATRIX xmMatrixIdentity = XMMatrixIdentity();
+static const XMVECTOR xmVectorZero = XMVectorSet(0, 0, 0, 0);
+static const XMVECTOR xmVectorOne = XMVectorSet(1, 1, 1, 1);
+static const XMVECTOR xmQuatIdentity = XMVectorSet(0, 0, 0, 1);
+
+static const float scaleFactor = 0.001f;
+
+constexpr float meters(float n) { return n * scaleFactor; };
+constexpr float decimeters(float n) { return n * 0.1f * scaleFactor; };
+constexpr float centimeters(float n) { return n * 0.01f * scaleFactor; };
+constexpr float millimeters(float n) { return n * 0.001f * scaleFactor; };
+
+constexpr float radian(float d) { return d * (pi / 180.0f); }
+constexpr float degree(float r) { return r * (180.0f / pi); }
+
+constexpr uint64 kilobytes(uint64 n) { return n * 1024ll; }
+constexpr uint64 megabytes(uint64 n) { return n * 1024ll * 1024ll; }
+constexpr uint64 gigabytes(uint64 n) { return n * 1024ll * 1024ll * 1024ll; }
 
 template <typename T, uint32 N>
 constexpr uint32 countof(const T (&)[N]) { return N; }
@@ -202,7 +211,7 @@ struct Transform {
         s = scaling, r = rotation, t = translation;
     }
     XMMATRIX toMat() const {
-        return XMMatrixAffineTransformation(s.toXMVector(), XMVectorSet(0, 0, 0, 0), r.toXMVector(), t.toXMVector());
+        return XMMatrixAffineTransformation(s.toXMVector(), xmVectorZero, r.toXMVector(), t.toXMVector());
     }
     PxTransform toPxTransform() const {
         return PxTransform(t.x, t.y, t.z, PxQuat(r.x, r.y, r.z, r.w));
@@ -311,11 +320,6 @@ std::string getLastErrorStr() {
     return message;
 }
 
-bool fileExists(const std::filesystem::path& path) {
-    DWORD dwAttrib = GetFileAttributesW(path.c_str());
-    return (dwAttrib != INVALID_FILE_ATTRIBUTES && !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
-}
-
 std::string fileReadStr(const std::filesystem::path& path) {
     std::ifstream file(path);
     std::string str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
@@ -360,6 +364,52 @@ void showConsole() {
         assert(SetConsoleMode(hStdin, ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT));
     }
 }
+
+template <typename T>
+struct Handle {
+    uint index;
+    uint generation;
+};
+
+template <typename T>
+struct ArrayElem {
+    T elem;
+    uint generation;
+};
+
+template <typename T>
+struct Array {
+    std::vector<ArrayElem<T>> elems;
+    std::stack<uint> freeSlots;
+
+    Handle<T> add(const T& newElem) {
+        if (freeSlots.empty()) {
+            elems.push_back(ArrayElem{newElem, 1});
+            return Handle<T>{elems.size() - 1, 1};
+        } else {
+            uint index = freeSlots.top();
+            freeSlots.pop();
+            elems[index].elem = newElem;
+            return Handle<T>{index, elems[index].generation};
+        }
+    }
+    void remove(uint index) {
+        for (uint freeSlotIndex : freeSlots) {
+            if (freeSlotIndex == index) {
+                return;
+            }
+        }
+        elems[index].generation += 1;
+        freeSlots.push(index);
+    }
+    T* get(Handle<T> handle) {
+        if (elems[handle.index].generation == handle.generation) {
+            return &elems[handle.index].elem;
+        } else {
+            return nullptr;
+        }
+    }
+};
 
 #include "structsHLSL.h"
 
@@ -472,11 +522,11 @@ struct D3D {
     D3D12_SHADER_RESOURCE_VIEW_DESC defaultMetallicRoughnessTextureSRVDesc;
     D3D12_SHADER_RESOURCE_VIEW_DESC defaultNormalTextureSRVDesc;
 
-    D3D12MA::Allocation* tlasInstancesBuildInfosBuffer;
-    D3D12MA::Allocation* tlasInstancesInfosBuffer;
+    D3D12MA::Allocation* blasInstancesBuildInfosBuffer;
+    D3D12MA::Allocation* blasInstancesInfosBuffer;
     D3D12MA::Allocation* blasGeometriesInfosBuffer;
-    D3D12_RAYTRACING_INSTANCE_DESC* tlasInstancesBuildInfosBufferPtr;
-    TLASInstanceInfo* tlasInstancesInfosBufferPtr;
+    D3D12_RAYTRACING_INSTANCE_DESC* blasInstancesBuildInfosBufferPtr;
+    BLASInstanceInfo* blasInstancesInfosBufferPtr;
     BLASGeometryInfo* blasGeometriesInfosBufferPtr;
 
     D3D12MA::Allocation* tlasBuffer;
@@ -534,6 +584,23 @@ struct DirectWrite {
 
     // ID2D1HwndRenderTarget* d2dRenderTarget;
     // ID2D1SolidColorBrush* d2dBrush;
+};
+
+struct Sphere {
+    float3 center;
+    float radius;
+    uint32 color;
+};
+
+struct Cylinder {
+    float3 p0, p1;
+    float radius;
+    uint32 color;
+};
+
+struct Triangle {
+    float3 p0, p1, p2;
+    uint32 color;
 };
 
 struct CircleScreenSpace {
@@ -786,20 +853,14 @@ struct EditorUndo {
 struct Editor {
     CameraEditor camera;
     bool cameraMoving;
+    float cameraMoveSpeedMax = 0.1f;
     ObjectType selectedObjectType;
     uint32 selectedObjectIndex;
-    std::stack<EditorUndo> undos;
-
-    float cameraMoveSpeedMax = 0.1f;
-    ImVec2 mainMenuBarPos;
-    ImVec2 mainMenuBarSize;
-    ImVec2 objectWindowPos;
-    ImVec2 objectWindowSize;
-    ImVec2 objectPropertiesWindowPos;
-    ImVec2 objectPropertiesWindowSize;
-
+    bool selectedObjectXRay = true;
+    PxShape* selectedObjectCollisionShape;
     ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
     ImGuizmo::MODE gizmoMode = ImGuizmo::LOCAL;
+    std::stack<EditorUndo> undos;
 };
 
 static bool quit = false;
@@ -832,28 +893,33 @@ static NVSDK_NGX_Parameter* ngxParameter = nullptr;
 static int dlssAvaliable = false;
 
 static std::filesystem::path worldFilePath;
-static std::list<Skybox> skyboxes;
-static std::list<Model> models;
+static std::vector<Skybox> skyboxes = [] { std::vector<Skybox> skyboxes; skyboxes.reserve(16); return skyboxes; }();
+static std::vector<Model> models = [] { std::vector<Model> models; models.reserve(1024); return models; }();
 static Skybox* skybox;
-static ModelInstance modelInstanceCube;
-static ModelInstance modelInstanceCylinder;
-static ModelInstance modelInstanceSphere;
+static ModelInstance modelInstanceSphere;   /* diameter 1 meter */
+static ModelInstance modelInstanceCube;     /* 1 meter w/h/d */
+static ModelInstance modelInstanceCylinder; /* length 1 meter, diameter 1 meter */
 static Player player;
 static std::vector<GameObject> gameObjects;
 static std::vector<Light> lights;
-static std::vector<D3D12_RAYTRACING_INSTANCE_DESC> tlasInstancesBuildInfos;
-static std::vector<TLASInstanceInfo> tlasInstancesInfos;
+
+static std::vector<D3D12_RAYTRACING_INSTANCE_DESC> blasInstancesBuildInfos;
+static std::vector<BLASInstanceInfo> blasInstancesInfos;
 static std::vector<BLASGeometryInfo> blasGeometriesInfos;
 
-static std::vector<CircleScreenSpace> debugCircles;
-static std::vector<LineScreenSpace> debugLines;
-static std::vector<TriangleScreenSpace> debugTriangles;
+static std::vector<Sphere> debugSpheres;
+static std::vector<Cylinder> debugCylinders;
+static std::vector<Triangle> debugTriangles;
+
+// static std::vector<CircleScreenSpace> debugCircles;
+// static std::vector<LineScreenSpace> debugLines;
+// static std::vector<TriangleScreenSpace> debugTriangles;
 
 static XMMATRIX cameraViewMat;
 static XMMATRIX cameraViewMatInverseTranspose;
 static XMMATRIX cameraProjectMat;
 static XMMATRIX cameraViewProjectMat;
-static XMMATRIX cameraViewProjectInverseMat;
+static XMMATRIX cameraViewProjectMatInverse;
 
 static bool showMenu = false;
 static bool showCollisionGeometries = true;
@@ -906,7 +972,7 @@ static std::filesystem::path saveDir = [] {
 }();
 
 void settingsInit(const std::filesystem::path& settingsPath) {
-    if (fileExists(settingsPath)) {
+    if (std::filesystem::is_regular_file(settingsPath)) {
         std::string yamlStr = fileReadStr(settingsPath);
         ryml::Tree yamlTree = ryml::parse_in_arena(ryml::to_csubstr(yamlStr));
         ryml::ConstNodeRef yamlRoot = yamlTree.rootref();
@@ -1012,6 +1078,7 @@ void imguiInit() {
     io.IniFilename = _strdup((exeDir / "imgui.ini").string().c_str());
     io.FontGlobalScale = (float)renderH / 800.0f;
     assert(io.Fonts->AddFontDefault());
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 }
 
 void controllerApplyDeadZone(Controller* c) {
@@ -1391,18 +1458,18 @@ void d3dInit() {
             D3D12_RESOURCE_STATES initState;
             const wchar_t* name;
         } descs[] = {
-            {&d3d.stagingBuffer, (void**)&d3d.stagingBufferPtr, GIGABYTES(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_SOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"stagingBuffer"},
-            {&d3d.constantsBuffer, (void**)&d3d.constantsBufferPtr, MEGABYTES(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer"},
-            {&d3d.tlasInstancesBuildInfosBuffer, (void**)&d3d.tlasInstancesBuildInfosBufferPtr, MEGABYTES(32), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesBuildInfosBuffer"},
-            {&d3d.tlasInstancesInfosBuffer, (void**)&d3d.tlasInstancesInfosBufferPtr, MEGABYTES(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesInfosBuffer"},
-            {&d3d.blasGeometriesInfosBuffer, (void**)&d3d.blasGeometriesInfosBufferPtr, MEGABYTES(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"blasGeometriesInfosBuffer"},
-            {&d3d.tlasBuffer, nullptr, MEGABYTES(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"tlasBuffer"},
-            {&d3d.tlasScratchBuffer, nullptr, MEGABYTES(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"tlasScratchBuffer"},
-            {&d3d.imguiVertexBuffer, (void**)&d3d.imguiVertexBufferPtr, MEGABYTES(10), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiVertexBuffer"},
-            {&d3d.imguiIndexBuffer, (void**)&d3d.imguiIndexBufferPtr, MEGABYTES(10), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiIndexBuffer"},
-            {&d3d.collisionQueriesBuffer, (void**)&d3d.collisionQueriesBufferPtr, MEGABYTES(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, L"collisionQueriesBuffer"},
-            {&d3d.collisionQueryResultsUAVBuffer, nullptr, MEGABYTES(1), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"collisionQueryResultsUAVBuffer"},
-            {&d3d.collisionQueryResultsBuffer, (void**)&d3d.collisionQueryResultsBufferPtr, MEGABYTES(1), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"collisionQueryResultsBuffer"},
+            {&d3d.stagingBuffer, (void**)&d3d.stagingBufferPtr, gigabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_SOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"stagingBuffer"},
+            {&d3d.constantsBuffer, (void**)&d3d.constantsBufferPtr, megabytes(2), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer"},
+            {&d3d.blasInstancesBuildInfosBuffer, (void**)&d3d.blasInstancesBuildInfosBufferPtr, megabytes(32), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesBuildInfosBuffer"},
+            {&d3d.blasInstancesInfosBuffer, (void**)&d3d.blasInstancesInfosBufferPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"tlasInstancesInfosBuffer"},
+            {&d3d.blasGeometriesInfosBuffer, (void**)&d3d.blasGeometriesInfosBufferPtr, megabytes(16), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"blasGeometriesInfosBuffer"},
+            {&d3d.tlasBuffer, nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"tlasBuffer"},
+            {&d3d.tlasScratchBuffer, nullptr, megabytes(32), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"tlasScratchBuffer"},
+            {&d3d.imguiVertexBuffer, (void**)&d3d.imguiVertexBufferPtr, megabytes(10), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiVertexBuffer"},
+            {&d3d.imguiIndexBuffer, (void**)&d3d.imguiIndexBufferPtr, megabytes(10), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiIndexBuffer"},
+            {&d3d.collisionQueriesBuffer, (void**)&d3d.collisionQueriesBufferPtr, megabytes(1), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, L"collisionQueriesBuffer"},
+            {&d3d.collisionQueryResultsUAVBuffer, nullptr, megabytes(1), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE, L"collisionQueryResultsUAVBuffer"},
+            {&d3d.collisionQueryResultsBuffer, (void**)&d3d.collisionQueryResultsBufferPtr, megabytes(1), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, L"collisionQueryResultsBuffer"},
         };
         for (BufferDesc& desc : descs) {
             D3D12_RESOURCE_DESC bufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = desc.size, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = desc.flags};
@@ -1421,14 +1488,13 @@ void d3dInit() {
             .Height = renderH,
             .DepthOrArraySize = 1,
             .MipLevels = 1,
-            .Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
             .SampleDesc = {.Count = 1},
             .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN,
-            .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
         };
-
         D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
 
+        textureDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
+        textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         d3d.renderTextureFormat = textureDesc.Format;
         assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr)));
         assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexturePrevFrame, {}, nullptr)));
@@ -1436,11 +1502,13 @@ void d3dInit() {
         d3d.renderTexturePrevFrame->GetResource()->SetName(L"renderTexturePrevFrame");
 
         textureDesc.Format = DXGI_FORMAT_R32_FLOAT;
+        textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         d3d.depthTextureFormat = textureDesc.Format;
         assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.depthTexture, {}, nullptr)));
         d3d.depthTexture->GetResource()->SetName(L"depthTexture");
 
         textureDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
+        textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         d3d.motionVectorTextureFormat = textureDesc.Format;
         assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.motionVectorTexture, {}, nullptr)));
         d3d.motionVectorTexture->GetResource()->SetName(L"motionVectorTexture");
@@ -1503,7 +1571,7 @@ void d3dInit() {
     }
 }
 
-void d3dUpdateShaders() {
+void d3dCompileShaders() {
     {
         static std::filesystem::path shaderPath = exeDir / "renderScene.cso";
         static std::filesystem::file_time_type prevLastWriteTime = {};
@@ -1515,7 +1583,7 @@ void d3dUpdateShaders() {
             if (d3d.renderScenePSOProps) d3d.renderScenePSOProps->Release();
             if (d3d.renderSceneRootSig) d3d.renderSceneRootSig->Release();
             std::vector<uint8> rtByteCode = fileReadBytes(shaderPath);
-            D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"primaryRayMiss"}, {L"primaryRayHitGroup"}, {L"primaryRayClosestHit"}, {L"secondaryRayMiss"}, {L"secondaryRayHitGroup"}, {L"secondaryRayClosestHit"}};
+            D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"primaryRayMiss"}, {L"primaryRayHitGroup"}, {L"primaryRayAnyHit"}, {L"primaryRayClosestHit"}, {L"secondaryRayMiss"}, {L"secondaryRayHitGroup"}, {L"secondaryRayClosestHit"}};
             D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
             D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
             D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
@@ -1745,8 +1813,9 @@ bool projectCameraSpacePointToScreen(float3 p, float2* pScreen) {
         pNDCSpace /= pNDCSpace.w;
         *pScreen = ndcToScreen(pNDCSpace.xy(), float2((float)renderW, (float)renderH));
         return true;
+    } else {
+        return false;
     }
-    return false;
 }
 
 bool projectCameraSpaceLineToScreen(float3 p0, float3 p1, float2* p0Screen, float2* p1Screen) {
@@ -2293,72 +2362,84 @@ void modelInstanceRelease(ModelInstance* modelInstance) {
     }
 }
 
+// void modelInstanceGetSkeletonVisualization(ModelInstance* modelInstance, ModelNode* node, const XMMATRIX& transformMat) {
+//     int64 nodeIndex = node - &modelInstance->model->nodes[0];
+//     XMVECTOR nodePosition = XMVector3Transform(XMVector3Transform(XMVectorSet(0, 0, 0, 1), modelInstance->globalTransformMats[nodeIndex]), transformMat);
+//     XMVECTOR nodePositionViewSpace = XMVector4Transform(nodePosition, cameraViewMat);
+//     XMVECTOR nodePositionClipSpace = XMVector4Transform(nodePositionViewSpace, cameraProjectMat);
+//     float4 nodePositionNDCSpace = nodePositionClipSpace;
+//     nodePositionNDCSpace /= nodePositionNDCSpace.w;
+//     BoundingFrustum frustum(cameraProjectMat);
+//     ContainmentType frustumContainsNode = frustum.Contains(nodePositionViewSpace);
+//     float2 screenSize((float)renderW, (float)renderH);
+//     if (frustumContainsNode == CONTAINS) {
+//         debugCircles.push_back(CircleScreenSpace{.center = ndcToScreen(nodePositionNDCSpace.xy(), screenSize), .radius = 0.005f * screenSize.y, .thickness = 0.001f * screenSize.y});
+//     }
+//     for (ModelNode* childNode : node->children) {
+//         int64 childNodeIndex = childNode - &modelInstance->model->nodes[0];
+//         XMVECTOR childNodePosition = XMVector3Transform(XMVector3Transform(XMVectorSet(0, 0, 0, 1), modelInstance->globalTransformMats[childNodeIndex]), transformMat);
+//         XMVECTOR childNodePositionViewSpace = XMVector4Transform(childNodePosition, cameraViewMat);
+//         XMVECTOR childNodePositionClipSpace = XMVector4Transform(childNodePositionViewSpace, cameraProjectMat);
+//         float4 childNodePositionNDCSpace = childNodePositionClipSpace;
+//         childNodePositionNDCSpace /= childNodePositionNDCSpace.w;
+//         ContainmentType frustumContainsChildNode = frustum.Contains(childNodePositionViewSpace);
+//         if (frustumContainsNode && frustumContainsChildNode) {
+//             debugLines.push_back(LineScreenSpace{.p0 = ndcToScreen(nodePositionNDCSpace.xy(), screenSize), .p1 = ndcToScreen(childNodePositionNDCSpace.xy(), screenSize), .thickness = 0.001f * screenSize.y});
+//         } else if (!frustumContainsNode && !frustumContainsChildNode) {
+//             float t;
+//             XMVECTOR dir = XMVector3Normalize(XMVectorSubtract(nodePositionViewSpace, childNodePositionViewSpace));
+//             if (frustum.Intersects(childNodePositionViewSpace, dir, t)) {
+//                 XMVECTOR intersection0ViewSpace = XMVectorAdd(childNodePositionViewSpace, XMVectorMultiply(dir, XMVectorSet(t, t, t, 0)));
+//                 XMVECTOR intersection0ClipSpace = XMVector4Transform(intersection0ViewSpace, cameraProjectMat);
+//                 float4 intersection0NDCSpace = intersection0ClipSpace;
+//                 intersection0NDCSpace /= intersection0NDCSpace.w;
+//                 dir = XMVectorNegate(dir);
+//                 if (frustum.Intersects(nodePositionViewSpace, dir, t)) {
+//                     XMVECTOR intersection1ViewSpace = XMVectorAdd(nodePositionViewSpace, XMVectorMultiply(dir, XMVectorSet(t, t, t, 0)));
+//                     XMVECTOR intersection1ClipSpace = XMVector4Transform(intersection1ViewSpace, cameraProjectMat);
+//                     float4 intersection1NDCSpace = intersection1ClipSpace;
+//                     intersection1NDCSpace /= intersection1NDCSpace.w;
+//                     debugLines.push_back(LineScreenSpace{.p0 = ndcToScreen(intersection0NDCSpace.xy(), screenSize), .p1 = ndcToScreen(intersection1NDCSpace.xy(), screenSize), .thickness = 0.001f * screenSize.y});
+//                 }
+//             }
+//         } else if (frustumContainsNode) {
+//             float t;
+//             XMVECTOR dir = XMVector3Normalize(XMVectorSubtract(nodePositionViewSpace, childNodePositionViewSpace));
+//             if (frustum.Intersects(childNodePositionViewSpace, dir, t)) {
+//                 XMVECTOR intersectionViewSpace = XMVectorAdd(childNodePositionViewSpace, XMVectorMultiply(dir, XMVectorSet(t, t, t, 0)));
+//                 XMVECTOR intersectionClipSpace = XMVector4Transform(intersectionViewSpace, cameraProjectMat);
+//                 float4 intersectionNDCSpace = intersectionClipSpace;
+//                 intersectionNDCSpace /= intersectionNDCSpace.w;
+//                 debugLines.push_back(LineScreenSpace{.p0 = ndcToScreen(nodePositionNDCSpace.xy(), screenSize), .p1 = ndcToScreen(intersectionNDCSpace.xy(), screenSize), .thickness = 0.001f * screenSize.y});
+//             }
+//         } else if (frustumContainsChildNode) {
+//             float t;
+//             XMVECTOR dir = XMVector3Normalize(XMVectorSubtract(childNodePositionViewSpace, nodePositionViewSpace));
+//             if (frustum.Intersects(nodePositionViewSpace, dir, t)) {
+//                 XMVECTOR intersectionViewSpace = XMVectorAdd(nodePositionViewSpace, XMVectorMultiply(dir, XMVectorSet(t, t, t, 0)));
+//                 XMVECTOR intersectionClipSpace = XMVector4Transform(intersectionViewSpace, cameraProjectMat);
+//                 float4 intersectionNDCSpace = intersectionClipSpace;
+//                 intersectionNDCSpace /= intersectionNDCSpace.w;
+//                 debugLines.push_back(LineScreenSpace{.p0 = ndcToScreen(intersectionNDCSpace.xy(), screenSize), .p1 = ndcToScreen(childNodePositionNDCSpace.xy(), screenSize), .thickness = 0.001f * screenSize.y});
+//             }
+//         }
+//         modelInstanceGetSkeletonVisualization(modelInstance, childNode, transformMat);
+//     }
+// }
+
 void modelInstanceGetSkeletonVisualization(ModelInstance* modelInstance, ModelNode* node, const XMMATRIX& transformMat) {
     int64 nodeIndex = node - &modelInstance->model->nodes[0];
-    XMVECTOR nodePosition = XMVector3Transform(XMVector3Transform(XMVectorSet(0, 0, 0, 1), modelInstance->globalTransformMats[nodeIndex]), transformMat);
-    XMVECTOR nodePositionViewSpace = XMVector4Transform(nodePosition, cameraViewMat);
-    XMVECTOR nodePositionClipSpace = XMVector4Transform(nodePositionViewSpace, cameraProjectMat);
-    float4 nodePositionNDCSpace = nodePositionClipSpace;
-    nodePositionNDCSpace /= nodePositionNDCSpace.w;
-    BoundingFrustum frustum(cameraProjectMat);
-    ContainmentType frustumContainsNode = frustum.Contains(nodePositionViewSpace);
-    float2 screenSize((float)renderW, (float)renderH);
-    if (frustumContainsNode == CONTAINS) {
-        debugCircles.push_back(CircleScreenSpace{.center = ndcToScreen(nodePositionNDCSpace.xy(), screenSize), .radius = 0.005f * screenSize.y, .thickness = 0.001f * screenSize.y});
-    }
+    XMVECTOR nodePosition = XMVector3Transform(XMVector3Transform(xmVectorZero, modelInstance->globalTransformMats[nodeIndex]), transformMat);
+    debugSpheres.push_back(Sphere{.center = float3(nodePosition), .radius = meters(0.03f), .color = 0xffffffff});
     for (ModelNode* childNode : node->children) {
         int64 childNodeIndex = childNode - &modelInstance->model->nodes[0];
-        XMVECTOR childNodePosition = XMVector3Transform(XMVector3Transform(XMVectorSet(0, 0, 0, 1), modelInstance->globalTransformMats[childNodeIndex]), transformMat);
-        XMVECTOR childNodePositionViewSpace = XMVector4Transform(childNodePosition, cameraViewMat);
-        XMVECTOR childNodePositionClipSpace = XMVector4Transform(childNodePositionViewSpace, cameraProjectMat);
-        float4 childNodePositionNDCSpace = childNodePositionClipSpace;
-        childNodePositionNDCSpace /= childNodePositionNDCSpace.w;
-        ContainmentType frustumContainsChildNode = frustum.Contains(childNodePositionViewSpace);
-        if (frustumContainsNode && frustumContainsChildNode) {
-            debugLines.push_back(LineScreenSpace{.p0 = ndcToScreen(nodePositionNDCSpace.xy(), screenSize), .p1 = ndcToScreen(childNodePositionNDCSpace.xy(), screenSize), .thickness = 0.001f * screenSize.y});
-        } else if (!frustumContainsNode && !frustumContainsChildNode) {
-            float t;
-            XMVECTOR dir = XMVector3Normalize(XMVectorSubtract(nodePositionViewSpace, childNodePositionViewSpace));
-            if (frustum.Intersects(childNodePositionViewSpace, dir, t)) {
-                XMVECTOR intersection0ViewSpace = XMVectorAdd(childNodePositionViewSpace, XMVectorMultiply(dir, XMVectorSet(t, t, t, 0)));
-                XMVECTOR intersection0ClipSpace = XMVector4Transform(intersection0ViewSpace, cameraProjectMat);
-                float4 intersection0NDCSpace = intersection0ClipSpace;
-                intersection0NDCSpace /= intersection0NDCSpace.w;
-                dir = XMVectorNegate(dir);
-                if (frustum.Intersects(nodePositionViewSpace, dir, t)) {
-                    XMVECTOR intersection1ViewSpace = XMVectorAdd(nodePositionViewSpace, XMVectorMultiply(dir, XMVectorSet(t, t, t, 0)));
-                    XMVECTOR intersection1ClipSpace = XMVector4Transform(intersection1ViewSpace, cameraProjectMat);
-                    float4 intersection1NDCSpace = intersection1ClipSpace;
-                    intersection1NDCSpace /= intersection1NDCSpace.w;
-                    debugLines.push_back(LineScreenSpace{.p0 = ndcToScreen(intersection0NDCSpace.xy(), screenSize), .p1 = ndcToScreen(intersection1NDCSpace.xy(), screenSize), .thickness = 0.001f * screenSize.y});
-                }
-            }
-        } else if (frustumContainsNode) {
-            float t;
-            XMVECTOR dir = XMVector3Normalize(XMVectorSubtract(nodePositionViewSpace, childNodePositionViewSpace));
-            if (frustum.Intersects(childNodePositionViewSpace, dir, t)) {
-                XMVECTOR intersectionViewSpace = XMVectorAdd(childNodePositionViewSpace, XMVectorMultiply(dir, XMVectorSet(t, t, t, 0)));
-                XMVECTOR intersectionClipSpace = XMVector4Transform(intersectionViewSpace, cameraProjectMat);
-                float4 intersectionNDCSpace = intersectionClipSpace;
-                intersectionNDCSpace /= intersectionNDCSpace.w;
-                debugLines.push_back(LineScreenSpace{.p0 = ndcToScreen(nodePositionNDCSpace.xy(), screenSize), .p1 = ndcToScreen(intersectionNDCSpace.xy(), screenSize), .thickness = 0.001f * screenSize.y});
-            }
-        } else if (frustumContainsChildNode) {
-            float t;
-            XMVECTOR dir = XMVector3Normalize(XMVectorSubtract(childNodePositionViewSpace, nodePositionViewSpace));
-            if (frustum.Intersects(nodePositionViewSpace, dir, t)) {
-                XMVECTOR intersectionViewSpace = XMVectorAdd(nodePositionViewSpace, XMVectorMultiply(dir, XMVectorSet(t, t, t, 0)));
-                XMVECTOR intersectionClipSpace = XMVector4Transform(intersectionViewSpace, cameraProjectMat);
-                float4 intersectionNDCSpace = intersectionClipSpace;
-                intersectionNDCSpace /= intersectionNDCSpace.w;
-                debugLines.push_back(LineScreenSpace{.p0 = ndcToScreen(intersectionNDCSpace.xy(), screenSize), .p1 = ndcToScreen(childNodePositionNDCSpace.xy(), screenSize), .thickness = 0.001f * screenSize.y});
-            }
-        }
+        XMVECTOR childNodePosition = XMVector3Transform(XMVector3Transform(xmVectorZero, modelInstance->globalTransformMats[childNodeIndex]), transformMat);
+        debugCylinders.push_back(Cylinder{.p0 = float3(nodePosition), .p1 = float3(childNodePosition), .radius = meters(0.01f), .color = 0xffffffff});
         modelInstanceGetSkeletonVisualization(modelInstance, childNode, transformMat);
     }
 }
 
-bool imguiTransform(const char* label, Transform* transform) {
+bool transformImGui(const char* label, Transform* transform) {
     bool b = false;
     if (ImGui::TreeNode(label)) {
         if (ImGui::InputFloat3("S", &transform->s.x, "%.6f")) b = true;
@@ -2375,7 +2456,7 @@ bool imguiTransform(const char* label, Transform* transform) {
     return b;
 }
 
-void imguiModelInstance(ModelInstance* modelInstance) {
+void modelInstanceImGui(ModelInstance* modelInstance) {
     if (ImGui::TreeNode("Model")) {
         ImGui::Text(std::format("File: {}", modelInstance->model->filePath.string()).c_str());
         if (ImGui::TreeNode("Animations")) {
@@ -2448,7 +2529,7 @@ void modelInstanceUpdateAnimation(ModelInstance* modelInstance, double time) {
         }
     }
     for (ModelNode* rootNode : modelInstance->model->rootNodes) {
-        modelTraverseNodesAndGetGlobalTransforms(modelInstance->model, rootNode, matrixIdentity, modelInstance->localTransforms, modelInstance->globalTransformMats);
+        modelTraverseNodesAndGetGlobalTransforms(modelInstance->model, rootNode, xmMatrixIdentity, modelInstance->localTransforms, modelInstance->globalTransformMats);
     }
     for (uint skinIndex = 0; skinIndex < modelInstance->model->skins.size(); skinIndex++) {
         ModelSkin& skin = modelInstance->model->skins[skinIndex];
@@ -2461,10 +2542,72 @@ void modelInstanceUpdateAnimation(ModelInstance* modelInstance, double time) {
     }
 }
 
+void modelInstanceAddBLASInstancesToTLAS(ModelInstance& modelInstance, const XMMATRIX& objectTransform, ObjectType objectType, uint objectIndex, uint instanceFlags, uint color) {
+    for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance.meshNodes.size(); meshNodeIndex++) {
+        ModelNode* meshNode = modelInstance.model->meshNodes[meshNodeIndex];
+        ModelInstanceMeshNode* instanceMeshNode = &modelInstance.meshNodes[meshNodeIndex];
+        XMMATRIX transform = meshNode->globalTransform;
+        if (modelInstance.globalTransformMats.size() > 0) {
+            transform = XMMatrixMultiply(transform, modelInstance.globalTransformMats[meshNode - &modelInstance.model->nodes[0]]);
+        }
+        transform = XMMatrixMultiply(transform, XMMatrixScaling(scaleFactor, scaleFactor, -scaleFactor)); // convert RH to LH && scaling down by 1000
+        transform = XMMatrixMultiply(transform, objectTransform);
+        transform = XMMatrixTranspose(transform);
+        D3D12_RAYTRACING_INSTANCE_DESC blasInstanceBuildInfo = {.InstanceMask = objectType, .AccelerationStructure = instanceMeshNode->blas->GetResource()->GetGPUVirtualAddress()};
+        BLASInstanceInfo blasInstanceInfo = {.descriptorsHeapOffset = d3d.cbvSrvUavDescriptorCount, .blasGeometriesOffset = (uint)blasGeometriesInfos.size(), .flags = instanceFlags, .color = color, .objectType = objectType, .objectIndex = objectIndex};
+#if EDITOR
+        if (objectType != ObjectTypeNone && editor.selectedObjectType == objectType && editor.selectedObjectIndex == objectIndex) {
+            if (editor.selectedObjectXRay) {
+                blasInstanceBuildInfo.Flags |= D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE;
+            }
+        }
+#endif
+        memcpy(blasInstanceBuildInfo.Transform, &transform, sizeof(blasInstanceBuildInfo.Transform));
+        blasInstancesBuildInfos.push_back(blasInstanceBuildInfo);
+        blasInstancesInfos.push_back(blasInstanceInfo);
+        for (uint primitiveIndex = 0; primitiveIndex < meshNode->mesh->primitives.size(); primitiveIndex++) {
+            ModelPrimitive& primitive = meshNode->mesh->primitives[primitiveIndex];
+            D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.verticesBufferOffset, .NumElements = primitive.verticesCount, .StructureByteStride = sizeof(struct Vertex)}};
+            D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.indicesBufferOffset, .NumElements = primitive.indicesCount, .StructureByteStride = sizeof(uint)}};
+            d3dAppendSRVDescriptor(&vertexBufferDesc, instanceMeshNode->verticesBuffer->GetResource());
+            d3dAppendSRVDescriptor(&indexBufferDesc, meshNode->mesh->indicesBuffer->GetResource());
+            if (primitive.material) {
+                blasGeometriesInfos.push_back(BLASGeometryInfo{.emissive = primitive.material->emissive, .metallic = primitive.material->metallic, .baseColor = primitive.material->baseColor.xyz(), .roughness = primitive.material->roughness});
+                if (primitive.material->emissiveTexture) {
+                    d3dAppendSRVDescriptor(&primitive.material->emissiveTexture->image->srvDesc, primitive.material->emissiveTexture->image->gpuData->GetResource());
+                } else {
+                    d3dAppendSRVDescriptor(&d3d.defaultEmissiveTextureSRVDesc, d3d.defaultEmissiveTexture->GetResource());
+                }
+                if (primitive.material->baseColorTexture) {
+                    d3dAppendSRVDescriptor(&primitive.material->baseColorTexture->image->srvDesc, primitive.material->baseColorTexture->image->gpuData->GetResource());
+                } else {
+                    d3dAppendSRVDescriptor(&d3d.defaultBaseColorTextureSRVDesc, d3d.defaultBaseColorTexture->GetResource());
+                }
+                if (primitive.material->metallicRoughnessTexture) {
+                    d3dAppendSRVDescriptor(&primitive.material->metallicRoughnessTexture->image->srvDesc, primitive.material->metallicRoughnessTexture->image->gpuData->GetResource());
+                } else {
+                    d3dAppendSRVDescriptor(&d3d.defaultMetallicRoughnessTextureSRVDesc, d3d.defaultMetallicRoughnessTexture->GetResource());
+                }
+                if (primitive.material->normalTexture) {
+                    d3dAppendSRVDescriptor(&primitive.material->normalTexture->image->srvDesc, primitive.material->normalTexture->image->gpuData->GetResource());
+                } else {
+                    d3dAppendSRVDescriptor(&d3d.defaultNormalTextureSRVDesc, d3d.defaultNormalTexture->GetResource());
+                }
+            } else {
+                blasGeometriesInfos.push_back(BLASGeometryInfo{.emissive = {0.0f, 0.0f, 0.0f}, .metallic = 0.0f, .baseColor = {0.7f, 0.7f, 0.7f}, .roughness = 0.7f});
+                d3dAppendSRVDescriptor(&d3d.defaultEmissiveTextureSRVDesc, d3d.defaultEmissiveTexture->GetResource());
+                d3dAppendSRVDescriptor(&d3d.defaultBaseColorTextureSRVDesc, d3d.defaultBaseColorTexture->GetResource());
+                d3dAppendSRVDescriptor(&d3d.defaultMetallicRoughnessTextureSRVDesc, d3d.defaultMetallicRoughnessTexture->GetResource());
+                d3dAppendSRVDescriptor(&d3d.defaultNormalTextureSRVDesc, d3d.defaultNormalTexture->GetResource());
+            }
+        }
+    }
+}
+
 void loadSimpleAssets() {
+    modelInstanceSphere = modelInstanceInit("models/sphere/gltf/sphere.gltf");
     modelInstanceCube = modelInstanceInit("models/cube/gltf/cube.gltf");
     modelInstanceCylinder = modelInstanceInit("models/cylinder/gltf/cylinder.gltf");
-    modelInstanceSphere = modelInstanceInit("models/sphere/gltf/sphere.gltf");
 }
 
 void physxInit() {
@@ -2837,19 +2980,17 @@ void gameObjectRelease(GameObject* obj) {
 
 void toggleBetweenEditorPlay() {
     inEditor = !inEditor;
-
     player.transform = player.transformDefault;
     playerCameraReset();
     for (GameObject& obj : gameObjects) {
         obj.transform = obj.transformDefault;
     }
+    windowHideCursor(!inEditor);
 }
 
 #if EDITOR
 void editorMainMenuBar() {
     if (ImGui::BeginMainMenuBar()) {
-        editor.mainMenuBarPos = ImGui::GetWindowPos();
-        editor.mainMenuBarSize = ImGui::GetWindowSize();
         if (ImGui::BeginMenu("File")) {
             if (ImGui::BeginMenu("New")) {
                 if (ImGui::MenuItem("World")) {
@@ -2929,10 +3070,6 @@ void editorMainMenuBar() {
 }
 
 void editorObjectsWindow() {
-    editor.objectWindowPos = ImVec2(renderW * 0.85f, editor.mainMenuBarSize.y);
-    editor.objectWindowSize = ImVec2(renderW * 0.15f, renderH * 0.3f);
-    ImGui::SetNextWindowPos(editor.objectWindowPos);
-    ImGui::SetNextWindowSize(editor.objectWindowSize);
     if (ImGui::Begin("Objects")) {
         if (ImGui::Selectable("Player", editor.selectedObjectType == ObjectTypePlayer)) {
             editor.selectedObjectType = ObjectTypePlayer;
@@ -3013,18 +3150,12 @@ void editorObjectsWindow() {
 }
 
 void editorObjectPropertiesWindow() {
-    editor.objectPropertiesWindowPos = editor.objectWindowPos;
-    editor.objectPropertiesWindowPos.y += editor.objectWindowSize.y;
-    editor.objectPropertiesWindowSize = editor.objectWindowSize;
-    editor.objectPropertiesWindowSize.y *= 2;
-    ImGui::SetNextWindowPos(editor.objectPropertiesWindowPos);
-    ImGui::SetNextWindowSize(editor.objectPropertiesWindowSize);
     if (ImGui::Begin("Properties")) {
         if (editor.selectedObjectType == ObjectTypePlayer) {
             ImGui::Text("Player");
-            imguiModelInstance(&player.modelInstance);
+            modelInstanceImGui(&player.modelInstance);
             if (ImGui::TreeNode("Locomotion")) {
-                imguiTransform("Transform", &player.transformDefault);
+                transformImGui("Transform", &player.transformDefault);
                 ImGui::InputFloat3("Velocity", &player.velocity.x, "%.6f");
                 ImGui::InputFloat3("Acceleration", &player.acceleration.x, "%.6f");
                 ImGui::TreePop();
@@ -3052,9 +3183,9 @@ void editorObjectPropertiesWindow() {
         } else if (editor.selectedObjectType == ObjectTypeGameObject) {
             GameObject& obj = gameObjects[editor.selectedObjectIndex];
             ImGui::Text("Name \"%s\"", obj.name.c_str());
-            imguiModelInstance(&obj.modelInstance);
+            modelInstanceImGui(&obj.modelInstance);
             if (ImGui::TreeNode("Locomotion")) {
-                imguiTransform("Transform", &obj.transformDefault);
+                transformImGui("Transform", &obj.transformDefault);
                 ImGui::TreePop();
             }
             bool open = ImGui::TreeNode("Collision");
@@ -3091,15 +3222,15 @@ void editorObjectPropertiesWindow() {
                                 ImGui::CloseCurrentPopup();
                             }
                             if (ImGui::Button("new box")) {
-                                PxRigidActorExt::createExclusiveShape(*obj.collision, PxBoxGeometry(0.001f, 0.001f, 0.001f), *physxDefaultMaterial);
+                                PxRigidActorExt::createExclusiveShape(*obj.collision, PxBoxGeometry(scaleFactor, scaleFactor, scaleFactor), *physxDefaultMaterial);
                                 ImGui::CloseCurrentPopup();
                             }
                             if (ImGui::Button("new sphere")) {
-                                PxRigidActorExt::createExclusiveShape(*obj.collision, PxSphereGeometry(0.001f), *physxDefaultMaterial);
+                                PxRigidActorExt::createExclusiveShape(*obj.collision, PxSphereGeometry(scaleFactor), *physxDefaultMaterial);
                                 ImGui::CloseCurrentPopup();
                             }
                             if (ImGui::Button("new capsule")) {
-                                PxRigidActorExt::createExclusiveShape(*obj.collision, PxCapsuleGeometry(0.001f, 0.001f), *physxDefaultMaterial);
+                                PxRigidActorExt::createExclusiveShape(*obj.collision, PxCapsuleGeometry(scaleFactor, scaleFactor), *physxDefaultMaterial);
                                 ImGui::CloseCurrentPopup();
                             }
                             ImGui::EndPopup();
@@ -3230,6 +3361,24 @@ void editorObjectPropertiesWindow() {
     ImGui::End();
 }
 
+void editorAssetsWindow() {
+    if (ImGui::Begin("Assets")) {
+        if (ImGui::TreeNode("Models")) {
+            for (Model& model : models) {
+                ImGui::Text("%s\n", model.filePath.string().c_str());
+            }
+            ImGui::TreePop();
+        }
+        if (ImGui::TreeNode("Skyboxes")) {
+            for (Skybox& skybox : skyboxes) {
+                ImGui::Text("%s\n", skybox.hdriTextureFilePath.string().c_str());
+            }
+            ImGui::TreePop();
+        }
+    }
+    ImGui::End();
+}
+
 void editorUpdate() {
     if (d3d.collisionQueriesFenceValue > 0) {
         d3dWaitForCollisionQueries();
@@ -3238,7 +3387,7 @@ void editorUpdate() {
             if (mouseSelectInstanceIndex == UINT_MAX) {
                 editor.selectedObjectType = ObjectTypeNone;
             } else {
-                TLASInstanceInfo& info = tlasInstancesInfos[mouseSelectInstanceIndex];
+                BLASInstanceInfo& info = blasInstancesInfos[mouseSelectInstanceIndex];
                 editor.selectedObjectType = info.objectType;
                 editor.selectedObjectIndex = info.objectIndex;
             }
@@ -3257,8 +3406,10 @@ void editorUpdate() {
     mousePosPrev = mousePos;
 
     editorMainMenuBar();
+    ImGui::DockSpaceOverViewport(ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
     editorObjectsWindow();
     editorObjectPropertiesWindow();
+    editorAssetsWindow();
 
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().WantCaptureMouse) {
         mouseSelectX = (uint)mousePos.x;
@@ -3293,10 +3444,13 @@ void editorUpdate() {
     {
         cameraViewMat = XMMatrixLookAtLH(editor.camera.position.toXMVector(), editor.camera.lookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
         cameraViewMatInverseTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, cameraViewMat));
-        cameraProjectMat = XMMatrixPerspectiveFovLH(RADIAN(editor.camera.fovVertical), (float)renderW / (float)renderH, 0.0001f, 1000.0f);
+        cameraProjectMat = XMMatrixPerspectiveFovLH(radian(editor.camera.fovVertical), (float)renderW / (float)renderH, 0.0001f, 10.0f);
         cameraViewProjectMat = XMMatrixMultiply(cameraViewMat, cameraProjectMat);
-        cameraViewProjectInverseMat = XMMatrixInverse(nullptr, cameraViewProjectMat);
+        cameraViewProjectMatInverse = XMMatrixInverse(nullptr, cameraViewProjectMat);
     }
+
+    ImGuizmo::SetRect(0, 0, (float)renderW, (float)renderH);
+    ImGuizmo::BeginFrame();
     auto transformGizmo = [](XMMATRIX* transformMat) -> XMMATRIX {
         if (ImGui::IsKeyPressed(ImGuiKey_Space) && ImGui::IsKeyDown(ImGuiKey_LeftShift)) {
             ImGui::OpenPopup("gizmo properties");
@@ -3321,7 +3475,7 @@ void editorUpdate() {
                 editor.gizmoOperation = ImGuizmo::SCALE;
             }
         }
-        XMMATRIX deltaTransformMat = matrixIdentity;
+        XMMATRIX deltaTransformMat;
         ImGuizmo::Manipulate((const float*)&cameraViewMat, (const float*)&cameraProjectMat, editor.gizmoOperation, editor.gizmoMode, (float*)transformMat, (float*)&deltaTransformMat);
         return deltaTransformMat;
     };
@@ -3471,9 +3625,9 @@ void gameUpdate() {
     {
         cameraViewMat = XMMatrixLookAtLH(player.camera.position.toXMVector(), player.camera.lookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
         cameraViewMatInverseTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, cameraViewMat));
-        cameraProjectMat = XMMatrixPerspectiveFovLH(RADIAN(player.camera.fovVertical), (float)renderW / (float)renderH, 0.0001f, 1000.0f);
+        cameraProjectMat = XMMatrixPerspectiveFovLH(radian(player.camera.fovVertical), (float)renderW / (float)renderH, 0.0001f, 10.0f);
         cameraViewProjectMat = XMMatrixMultiply(cameraViewMat, cameraProjectMat);
-        cameraViewProjectInverseMat = XMMatrixInverse(nullptr, cameraViewProjectMat);
+        cameraViewProjectMatInverse = XMMatrixInverse(nullptr, cameraViewProjectMat);
     }
     {
         physxAccumulatedTime += frameTime;
@@ -3489,8 +3643,6 @@ void update() {
     ImGui::GetIO().DeltaTime = (float)frameTime;
     ImGui::GetIO().DisplaySize = ImVec2((float)renderW, (float)renderH);
     ImGui::NewFrame();
-    ImGuizmo::SetRect(0, 0, (float)renderW, (float)renderH);
-    ImGuizmo::BeginFrame();
     if (ImGui::IsKeyDown(ImGuiKey_F4) && ImGui::IsKeyDown(ImGuiKey_LeftAlt)) {
         quit = true;
     }
@@ -3506,22 +3658,21 @@ void update() {
 #else
     gameUpdate();
 #endif
-    ImGui::ShowDebugLogWindow();
     {
-        debugCircles.resize(0);
-        debugLines.resize(0);
+        debugSpheres.resize(0);
+        debugCylinders.resize(0);
         debugTriangles.resize(0);
 
 #if EDITOR
         if (editor.selectedObjectType == ObjectTypePlayer) {
             if (player.modelInstance.model->skeletonRootNode) {
-                XMMATRIX transformMat = XMMatrixMultiply(XMMatrixMultiply(player.modelInstance.model->meshNodes[0]->globalTransform, XMMatrixScaling(0.001f, 0.001f, -0.001f)), player.transform.toMat());
+                XMMATRIX transformMat = XMMatrixMultiply(XMMatrixMultiply(player.modelInstance.model->meshNodes[0]->globalTransform, XMMatrixScaling(scaleFactor, scaleFactor, -scaleFactor)), player.transform.toMat());
                 modelInstanceGetSkeletonVisualization(&player.modelInstance, player.modelInstance.model->skeletonRootNode, transformMat);
             }
         } else if (editor.selectedObjectType == ObjectTypeGameObject) {
             GameObject& gameObject = gameObjects[editor.selectedObjectIndex];
             if (gameObject.modelInstance.model->skeletonRootNode) {
-                XMMATRIX transformMat = XMMatrixMultiply(XMMatrixMultiply(gameObject.modelInstance.model->meshNodes[0]->globalTransform, XMMatrixScaling(0.001f, 0.001f, -0.001f)), gameObject.transform.toMat());
+                XMMATRIX transformMat = XMMatrixMultiply(XMMatrixMultiply(gameObject.modelInstance.model->meshNodes[0]->globalTransform, XMMatrixScaling(scaleFactor, scaleFactor, -scaleFactor)), gameObject.transform.toMat());
                 modelInstanceGetSkeletonVisualization(&gameObject.modelInstance, gameObject.modelInstance.model->skeletonRootNode, transformMat);
             }
         }
@@ -3530,103 +3681,45 @@ void update() {
             const PxRenderBuffer& physxRenderBuffer = physxScene->getRenderBuffer();
             for (PxU32 i = 0; i < physxRenderBuffer.getNbPoints(); i++) {
                 const PxDebugPoint& pxPoint = physxRenderBuffer.getPoints()[i];
-                float3 p = float3(pxPoint.pos);
-                CircleScreenSpace circle = {.radius = 0.005f * renderH, .color = pxPoint.color, .thickness = 0.001f * renderH};
-                if (projectCameraSpacePointToScreen(p, &circle.center)) {
-                    debugCircles.push_back(circle);
-                }
+                debugSpheres.push_back(Sphere{.center = float3(pxPoint.pos), .radius = centimeters(2), .color = 0xffffffff});
+                // float3 p = float3(pxPoint.pos);
+                // CircleScreenSpace circle = {.radius = 0.005f * renderH, .color = pxPoint.color, .thickness = 0.001f * renderH};
+                // if (projectCameraSpacePointToScreen(p, &circle.center)) {
+                //     debugCircles.push_back(circle);
+                // }
             }
             for (PxU32 i = 0; i < physxRenderBuffer.getNbLines(); i++) {
                 const PxDebugLine& pxLine = physxRenderBuffer.getLines()[i];
-                float3 p0 = float3(pxLine.pos0), p1 = float3(pxLine.pos1);
-                LineScreenSpace line = {.color = pxLine.color0, .thickness = 0.001f * renderH};
-                if (projectCameraSpaceLineToScreen(p0, p1, &line.p0, &line.p1)) {
-                    debugLines.push_back(line);
-                }
+                debugCylinders.push_back(Cylinder{.p0 = float3(pxLine.pos0), .p1 = float3(pxLine.pos1), .radius = centimeters(1), .color = 0xffffffff});
+                // float3 p0 = float3(pxLine.pos0), p1 = float3(pxLine.pos1);
+                // LineScreenSpace line = {.color = pxLine.color0, .thickness = 0.001f * renderH};
+                // if (projectCameraSpaceLineToScreen(p0, p1, &line.p0, &line.p1)) {
+                //     debugLines.push_back(line);
+                // }
             }
             for (PxU32 i = 0; i < physxRenderBuffer.getNbTriangles(); i++) {
                 const PxDebugTriangle& pxTriangle = physxRenderBuffer.getTriangles()[i];
-                float3 p0 = float3(pxTriangle.pos0), p1 = float3(pxTriangle.pos1), p2 = float3(pxTriangle.pos2);
-                TriangleScreenSpace triangle = {.color = pxTriangle.color0, .thickness = 0.001f * renderH};
-                if (projectCameraSpaceTriangleToScreen(p0, p1, p2, &triangle.p0, &triangle.p1, &triangle.p2)) {
-                    debugTriangles.push_back(triangle);
-                }
+                debugTriangles.push_back(Triangle{.p0 = float3(pxTriangle.pos0), .p1 = float3(pxTriangle.pos1), .p2 = float3(pxTriangle.pos2), .color = 0xffffffff});
+                // float3 p0 = float3(pxTriangle.pos0), p1 = float3(pxTriangle.pos1), p2 = float3(pxTriangle.pos2);
+                // TriangleScreenSpace triangle = {.color = pxTriangle.color0, .thickness = 0.001f * renderH};
+                // if (projectCameraSpaceTriangleToScreen(p0, p1, p2, &triangle.p0, &triangle.p1, &triangle.p2)) {
+                //     debugTriangles.push_back(triangle);
+                // }
             }
         }
-
-        ImDrawList* backGroudDrawList = ImGui::GetBackgroundDrawList();
-        for (CircleScreenSpace& circle : debugCircles) {
-            backGroudDrawList->AddCircle(ImVec2(circle.center.x, circle.center.y), circle.radius, ARGBToABGR(circle.color), 0, circle.thickness);
-        }
-        for (LineScreenSpace& line : debugLines) {
-            backGroudDrawList->AddLine(ImVec2(line.p0.x, line.p0.y), ImVec2(line.p1.x, line.p1.y), ARGBToABGR(line.color), line.thickness);
-        }
-        for (TriangleScreenSpace& triangle : debugTriangles) {
-            uint color = ARGBToABGR(triangle.color);
-            backGroudDrawList->AddTriangle(ImVec2(triangle.p0.x, triangle.p0.y), ImVec2(triangle.p1.x, triangle.p1.y), ImVec2(triangle.p2.x, triangle.p2.y), ARGBToABGR(triangle.color), triangle.thickness);
-        }
+        // ImDrawList* backGroudDrawList = ImGui::GetBackgroundDrawList();
+        // for (CircleScreenSpace& circle : debugCircles) {
+        //     backGroudDrawList->AddCircle(ImVec2(circle.center.x, circle.center.y), circle.radius, ARGBToABGR(circle.color), 0, circle.thickness);
+        // }
+        // for (LineScreenSpace& line : debugLines) {
+        //     backGroudDrawList->AddLine(ImVec2(line.p0.x, line.p0.y), ImVec2(line.p1.x, line.p1.y), ARGBToABGR(line.color), line.thickness);
+        // }
+        // for (TriangleScreenSpace& triangle : debugTriangles) {
+        //     uint color = ARGBToABGR(triangle.color);
+        //     backGroudDrawList->AddTriangle(ImVec2(triangle.p0.x, triangle.p0.y), ImVec2(triangle.p1.x, triangle.p1.y), ImVec2(triangle.p2.x, triangle.p2.y), ARGBToABGR(triangle.color), triangle.thickness);
+        // }
     }
     ImGui::Render();
-}
-
-void addTLASInstance(ModelInstance* modelInstance, const XMMATRIX& objectTransform, ObjectType objectType, uint objectIndex) {
-    TLASInstanceInfo tlasInstanceInfo = {.objectType = objectType, .objectIndex = objectIndex, .blasGeometriesOffset = (uint)blasGeometriesInfos.size()};
-#if EDITOR
-    if (objectType != ObjectTypeNone && editor.selectedObjectType == objectType && editor.selectedObjectIndex == objectIndex) {
-        tlasInstanceInfo.flags |= TLASInstanceFlagSelected;
-    }
-#endif
-    for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance->meshNodes.size(); meshNodeIndex++) {
-        ModelNode* meshNode = modelInstance->model->meshNodes[meshNodeIndex];
-        ModelInstanceMeshNode* instanceMeshNode = &modelInstance->meshNodes[meshNodeIndex];
-        XMMATRIX transform = meshNode->globalTransform;
-        if (modelInstance->globalTransformMats.size() > 0) {
-            transform = XMMatrixMultiply(transform, modelInstance->globalTransformMats[meshNode - &modelInstance->model->nodes[0]]);
-        }
-        transform = XMMatrixMultiply(transform, XMMatrixScaling(0.001f, 0.001f, -0.001f)); // convert RH to LH && scaling down by 1000
-        transform = XMMatrixMultiply(transform, objectTransform);
-        transform = XMMatrixTranspose(transform);
-        D3D12_RAYTRACING_INSTANCE_DESC tlasInstanceBuildInfo = {.InstanceID = d3d.cbvSrvUavDescriptorCount, .InstanceMask = objectType, .AccelerationStructure = instanceMeshNode->blas->GetResource()->GetGPUVirtualAddress()};
-        memcpy(tlasInstanceBuildInfo.Transform, &transform, sizeof(tlasInstanceBuildInfo.Transform));
-        tlasInstancesBuildInfos.push_back(tlasInstanceBuildInfo);
-        tlasInstancesInfos.push_back(tlasInstanceInfo);
-        for (uint primitiveIndex = 0; primitiveIndex < meshNode->mesh->primitives.size(); primitiveIndex++) {
-            ModelPrimitive& primitive = meshNode->mesh->primitives[primitiveIndex];
-            D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.verticesBufferOffset, .NumElements = primitive.verticesCount, .StructureByteStride = sizeof(struct Vertex)}};
-            D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.indicesBufferOffset, .NumElements = primitive.indicesCount, .StructureByteStride = sizeof(uint)}};
-            d3dAppendSRVDescriptor(&vertexBufferDesc, instanceMeshNode->verticesBuffer->GetResource());
-            d3dAppendSRVDescriptor(&indexBufferDesc, meshNode->mesh->indicesBuffer->GetResource());
-            if (primitive.material) {
-                blasGeometriesInfos.push_back(BLASGeometryInfo{.emissive = primitive.material->emissive, .metallic = primitive.material->metallic, .baseColor = primitive.material->baseColor.xyz(), .roughness = primitive.material->roughness});
-                if (primitive.material->emissiveTexture) {
-                    d3dAppendSRVDescriptor(&primitive.material->emissiveTexture->image->srvDesc, primitive.material->emissiveTexture->image->gpuData->GetResource());
-                } else {
-                    d3dAppendSRVDescriptor(&d3d.defaultEmissiveTextureSRVDesc, d3d.defaultEmissiveTexture->GetResource());
-                }
-                if (primitive.material->baseColorTexture) {
-                    d3dAppendSRVDescriptor(&primitive.material->baseColorTexture->image->srvDesc, primitive.material->baseColorTexture->image->gpuData->GetResource());
-                } else {
-                    d3dAppendSRVDescriptor(&d3d.defaultBaseColorTextureSRVDesc, d3d.defaultBaseColorTexture->GetResource());
-                }
-                if (primitive.material->metallicRoughnessTexture) {
-                    d3dAppendSRVDescriptor(&primitive.material->metallicRoughnessTexture->image->srvDesc, primitive.material->metallicRoughnessTexture->image->gpuData->GetResource());
-                } else {
-                    d3dAppendSRVDescriptor(&d3d.defaultMetallicRoughnessTextureSRVDesc, d3d.defaultMetallicRoughnessTexture->GetResource());
-                }
-                if (primitive.material->normalTexture) {
-                    d3dAppendSRVDescriptor(&primitive.material->normalTexture->image->srvDesc, primitive.material->normalTexture->image->gpuData->GetResource());
-                } else {
-                    d3dAppendSRVDescriptor(&d3d.defaultNormalTextureSRVDesc, d3d.defaultNormalTexture->GetResource());
-                }
-            } else {
-                blasGeometriesInfos.push_back(BLASGeometryInfo{.emissive = {0.0f, 0.0f, 0.0f}, .metallic = 0.0f, .baseColor = {0.7f, 0.7f, 0.7f}, .roughness = 0.7f});
-                d3dAppendSRVDescriptor(&d3d.defaultEmissiveTextureSRVDesc, d3d.defaultEmissiveTexture->GetResource());
-                d3dAppendSRVDescriptor(&d3d.defaultBaseColorTextureSRVDesc, d3d.defaultBaseColorTexture->GetResource());
-                d3dAppendSRVDescriptor(&d3d.defaultMetallicRoughnessTextureSRVDesc, d3d.defaultMetallicRoughnessTexture->GetResource());
-                d3dAppendSRVDescriptor(&d3d.defaultNormalTextureSRVDesc, d3d.defaultNormalTexture->GetResource());
-            }
-        }
-    }
 }
 
 D3D12_DISPATCH_RAYS_DESC fillRayTracingShaderTable(ID3D12Resource* buffer, uint8* bufferPtr, uint* bufferOffset, void* rayGenID, std::span<void*> missIDs, std::span<void*> hitGroupIDs) {
@@ -3650,8 +3743,8 @@ D3D12_DISPATCH_RAYS_DESC fillRayTracingShaderTable(ID3D12Resource* buffer, uint8
 }
 
 void d3dRender() {
-    tlasInstancesBuildInfos.resize(0);
-    tlasInstancesInfos.resize(0);
+    blasInstancesBuildInfos.resize(0);
+    blasInstancesInfos.resize(0);
     blasGeometriesInfos.resize(0);
 
     d3d.stagingBufferOffset = 0;
@@ -3671,7 +3764,7 @@ void d3dRender() {
         D3D12_UNORDERED_ACCESS_VIEW_DESC motionVectorTextureUAVDesc = {.Format = d3d.motionVectorTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
         D3D12_CONSTANT_BUFFER_VIEW_DESC renderInfoCBVDesc = {.BufferLocation = d3d.constantsBuffer->GetResource()->GetGPUVirtualAddress(), .SizeInBytes = align((uint)sizeof(struct RenderInfo), D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT)};
         D3D12_SHADER_RESOURCE_VIEW_DESC tlasViewDesc = {.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .RaytracingAccelerationStructure = {.Location = d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress()}};
-        D3D12_SHADER_RESOURCE_VIEW_DESC tlasInstancesInfosDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.tlasInstancesInfosBuffer->GetSize() / sizeof(struct TLASInstanceInfo)), .StructureByteStride = sizeof(struct TLASInstanceInfo)}};
+        D3D12_SHADER_RESOURCE_VIEW_DESC tlasInstancesInfosDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.blasInstancesInfosBuffer->GetSize() / sizeof(struct BLASInstanceInfo)), .StructureByteStride = sizeof(struct BLASInstanceInfo)}};
         D3D12_SHADER_RESOURCE_VIEW_DESC blasGeometriesInfosDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.blasGeometriesInfosBuffer->GetSize() / sizeof(struct BLASGeometryInfo)), .StructureByteStride = sizeof(struct BLASGeometryInfo)}};
         D3D12_SHADER_RESOURCE_VIEW_DESC collisionQueriesDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.collisionQueriesBuffer->GetSize() / sizeof(struct CollisionQuery)), .StructureByteStride = sizeof(struct CollisionQuery)}};
         D3D12_UNORDERED_ACCESS_VIEW_DESC collisionQueryResultsDesc = {.ViewDimension = D3D12_UAV_DIMENSION_BUFFER, .Buffer = {.NumElements = (uint)(d3d.collisionQueryResultsBuffer->GetSize() / sizeof(struct CollisionQueryResult)), .StructureByteStride = sizeof(struct CollisionQueryResult)}};
@@ -3682,7 +3775,7 @@ void d3dRender() {
         D3DDescriptor motionVectorTextureUAVDescriptor = d3dAppendUAVDescriptor(&motionVectorTextureUAVDesc, d3d.motionVectorTexture->GetResource());
         D3DDescriptor renderInfoDescriptor = d3dAppendCBVDescriptor(&renderInfoCBVDesc);
         D3DDescriptor tlasDescriptor = d3dAppendSRVDescriptor(&tlasViewDesc, nullptr);
-        D3DDescriptor tlasInstancesInfosDescriptor = d3dAppendSRVDescriptor(&tlasInstancesInfosDesc, d3d.tlasInstancesInfosBuffer->GetResource());
+        D3DDescriptor tlasInstancesInfosDescriptor = d3dAppendSRVDescriptor(&tlasInstancesInfosDesc, d3d.blasInstancesInfosBuffer->GetResource());
         D3DDescriptor blasGeometriesInfosDescriptor = d3dAppendSRVDescriptor(&blasGeometriesInfosDesc, d3d.blasGeometriesInfosBuffer->GetResource());
         D3DDescriptor skyboxTextureDescriptor = d3dAppendSRVDescriptor(nullptr, skybox->hdriTexture->GetResource());
         D3DDescriptor imguiImageDescriptor = d3dAppendSRVDescriptor(nullptr, d3d.imguiTexture->GetResource());
@@ -3695,6 +3788,8 @@ void d3dRender() {
             .cameraViewMat = cameraViewMat,
             .cameraViewMatInverseTranspose = cameraViewMatInverseTranspose,
             .cameraProjectMat = cameraProjectMat,
+            .cameraViewProjectMat = cameraViewProjectMat,
+            .cameraViewProjectMatInverse = cameraViewProjectMatInverse,
         };
         assert(d3d.constantsBufferOffset == 0);
         memcpy(d3d.constantsBufferPtr + d3d.constantsBufferOffset, &renderInfo, sizeof(renderInfo));
@@ -3773,21 +3868,34 @@ void d3dRender() {
     }
     {
         PIXSetMarker(d3d.graphicsCmdList, 0, "build TLAS");
-        addTLASInstance(&player.modelInstance, player.transform.toMat(), ObjectTypePlayer, 0);
+        modelInstanceAddBLASInstancesToTLAS(player.modelInstance, player.transform.toMat(), ObjectTypePlayer, 0, 0, 0);
         for (uint objIndex = 0; objIndex < gameObjects.size(); objIndex++) {
             GameObject& obj = gameObjects[objIndex];
-            addTLASInstance(&obj.modelInstance, obj.transform.toMat(), ObjectTypeGameObject, objIndex);
+            modelInstanceAddBLASInstancesToTLAS(obj.modelInstance, obj.transform.toMat(), ObjectTypeGameObject, objIndex, 0, 0);
         }
-        // addTLASInstance(&modelInstanceCylinder, XMMatrixAffineTransformation(XMVectorSet(0.05f, player.movement.length(), 0.05f, 0), XMVectorSet(0, 0, 0, 0), quaternionBetween(float3(0, 1, 0), player.movement), player.position.toXMVector()), ObjectTypeNone, 0);
+        // modelInstanceAddTLASInstances(&modelInstanceCylinder, XMMatrixAffineTransformation(XMVectorSet(0.05f, player.movement.length(), 0.05f, 0), XMVectorSet(0, 0, 0, 0), quaternionBetween(float3(0, 1, 0), player.movement), player.position.toXMVector()), ObjectTypeNone, 0);
+        for (Sphere& sphere : debugSpheres) {
+            float s =  sphere.radius / scaleFactor;
+            XMMATRIX transformMat = XMMatrixAffineTransformation(XMVectorSet(s, s, s, 0), xmVectorZero, xmQuatIdentity, sphere.center.toXMVector());
+            modelInstanceAddBLASInstancesToTLAS(modelInstanceSphere, transformMat, ObjectTypeNone, 0, BLASInstanceFlagForcedColor, 0xff000000);
+        }
+        for (Cylinder& cylinder : debugCylinders) {
+            float3 dir = cylinder.p1 - cylinder.p0;
+            float s = cylinder.radius / scaleFactor;
+            float sY = dir.length() / scaleFactor;
+            float4 r = quaternionBetween(float3(0, 0.001f, 0), dir);
+            XMMATRIX transformMat = XMMatrixAffineTransformation(XMVectorSet(s, sY, s, 0), xmVectorZero, r.toXMVector(), cylinder.p0.toXMVector());
+            modelInstanceAddBLASInstancesToTLAS(modelInstanceCylinder, transformMat, ObjectTypeNone, 0, BLASInstanceFlagForcedColor, 0xff000000);
+        }
 
-        assert(vectorSizeof(tlasInstancesBuildInfos) < d3d.tlasInstancesBuildInfosBuffer->GetSize());
-        assert(vectorSizeof(tlasInstancesInfos) < d3d.tlasInstancesInfosBuffer->GetSize());
+        assert(vectorSizeof(blasInstancesBuildInfos) < d3d.blasInstancesBuildInfosBuffer->GetSize());
+        assert(vectorSizeof(blasInstancesInfos) < d3d.blasInstancesInfosBuffer->GetSize());
         assert(vectorSizeof(blasGeometriesInfos) < d3d.blasGeometriesInfosBuffer->GetSize());
-        memcpy(d3d.tlasInstancesBuildInfosBufferPtr, tlasInstancesBuildInfos.data(), vectorSizeof(tlasInstancesBuildInfos));
-        memcpy(d3d.tlasInstancesInfosBufferPtr, tlasInstancesInfos.data(), vectorSizeof(tlasInstancesInfos));
+        memcpy(d3d.blasInstancesBuildInfosBufferPtr, blasInstancesBuildInfos.data(), vectorSizeof(blasInstancesBuildInfos));
+        memcpy(d3d.blasInstancesInfosBufferPtr, blasInstancesInfos.data(), vectorSizeof(blasInstancesInfos));
         memcpy(d3d.blasGeometriesInfosBufferPtr, blasGeometriesInfos.data(), vectorSizeof(blasGeometriesInfos));
 
-        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS tlasInputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL, .NumDescs = (uint)tlasInstancesBuildInfos.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .InstanceDescs = d3d.tlasInstancesBuildInfosBuffer->GetResource()->GetGPUVirtualAddress()};
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS tlasInputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL, .NumDescs = (uint)blasInstancesBuildInfos.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .InstanceDescs = d3d.blasInstancesBuildInfosBuffer->GetResource()->GetGPUVirtualAddress()};
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
         d3d.device->GetRaytracingAccelerationStructurePrebuildInfo(&tlasInputs, &prebuildInfo);
         assert(prebuildInfo.ResultDataMaxSizeInBytes < d3d.tlasBuffer->GetSize());
@@ -3851,13 +3959,19 @@ void d3dRender() {
         dispatchDesc.Width = renderW, dispatchDesc.Height = renderH, dispatchDesc.Depth = 1;
         assert(d3d.constantsBufferOffset < d3d.constantsBuffer->GetSize());
 
-        D3D12_RESOURCE_BARRIER renderTextureTransition = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.renderTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}};
-        d3d.graphicsCmdList->ResourceBarrier(1, &renderTextureTransition);
+        D3D12_RESOURCE_BARRIER barriers[] = {
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.renderTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.depthTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
+        };
+        d3d.graphicsCmdList->ResourceBarrier(countof(barriers), barriers);
 
         PIXSetMarker(d3d.graphicsCmdList, 0, "renderScene");
         d3d.graphicsCmdList->SetPipelineState1(d3d.renderScenePSO);
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.renderSceneRootSig);
         d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
+
+        D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.depthTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
+        d3d.graphicsCmdList->ResourceBarrier(1, &barrier);
     }
     if (showMenu) {
         PIXSetMarker(d3d.graphicsCmdList, 0, "directWrite");
@@ -4193,7 +4307,7 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
     while (!quit) {
         QueryPerformanceCounter(&perfCounterStart);
         ZoneScoped;
-        d3dUpdateShaders();
+        d3dCompileShaders();
         // updateGameUpdateLiveProc();
         mouseDeltaRaw = {0, 0};
         mouseWheel = 0;

@@ -61,5 +61,8 @@
     <ClInclude Include="..\src\pch.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\structsHLSL.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

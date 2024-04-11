@@ -46,3 +46,5 @@
 #undef NDEBUG
 #endif
 
+using namespace DirectX;
+using namespace physx;
