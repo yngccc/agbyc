@@ -1,7 +1,7 @@
 #include "shared.hlsli"
 #include "../structsHLSL.h"
 
-GlobalRootSignature 
+    GlobalRootSignature
 globalRootSig = {
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED),"
 	"StaticSampler(s0, filter = FILTER_ANISOTROPIC, addressU = TEXTURE_ADDRESS_MIRROR, addressV = TEXTURE_ADDRESS_MIRROR, mipLODBias = 0, maxAnisotropy = 16)"
@@ -103,12 +103,13 @@ void primaryRayClosestHit(inout PrimaryRayPayload payload, in BuiltInTriangleInt
     float3 baseColor;
     if (blasInstanceInfo.flags & BLASInstanceFlagForcedColor) {
         baseColor = float3(blasInstanceInfo.color & 0xff000000, blasInstanceInfo.color & 0x00ff0000, blasInstanceInfo.color & 0x0000ff00);
+        payload.color += baseColor;
     } else {
         baseColor = baseColorTexture.SampleGrad(sampler0, uv, texGradient1, texGradient2) * blasGeometryInfo.baseColor;
+        float3 lightDir = normalize(float3(1, 1, 1));
+        float ndotl = dot(normal, lightDir);
+        payload.color += baseColor * ndotl;
     }
-    float3 lightDir = normalize(float3(1, 1, 1));
-    float ndotl = dot(normal, lightDir);
-    payload.color += baseColor * ndotl;
 
     RENDER_INFO_DESCRIPTOR(renderInfo);
     float4 ndc = mul(renderInfo.cameraViewProjectMat, float4(position, 1));

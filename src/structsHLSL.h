@@ -89,11 +89,11 @@ struct Light {
 
 struct RenderInfo {
 #ifdef __cplusplus
-    XMMATRIX cameraViewMat;
-    XMMATRIX cameraViewMatInverseTranspose;
-    XMMATRIX cameraProjectMat;
-    XMMATRIX cameraViewProjectMat;
-    XMMATRIX cameraViewProjectMatInverse;
+    XMMatrix cameraViewMat;
+    XMMatrix cameraViewMatInverseTranspose;
+    XMMatrix cameraProjectMat;
+    XMMatrix cameraViewProjectMat;
+    XMMatrix cameraViewProjectMatInverse;
 #else
     float4x4 cameraViewMat;
     float4x4 cameraViewMatInverseTranspose;
@@ -103,11 +103,11 @@ struct RenderInfo {
 #endif
 };
 
+// also used as instanceMask in D3D12_RAYTRACING_INSTANCE_DESC
 enum ObjectType : uint {
     ObjectTypeNone = 0x01,
     ObjectTypePlayer = 0x01 << 1,
-    ObjectTypeSkybox = 0x01 << 2,
-    ObjectTypeGameObject = 0x01 << 3,
+    ObjectTypeGameObject = 0x01 << 2,
 };
 
 enum BLASInstanceFlag : uint {
@@ -117,12 +117,12 @@ enum BLASInstanceFlag : uint {
 
 struct BLASInstanceInfo {
 #ifdef __cplusplus
-    uint32 descriptorsHeapOffset;
-    uint32 blasGeometriesOffset;
-    uint32 flags;
-    uint32 color;
+    uint descriptorsHeapOffset;
+    uint blasGeometriesOffset;
+    uint flags;
+    uint color;
     ObjectType objectType;
-    uint32 objectIndex;
+    uint objectIndex;
 #else
     uint descriptorsHeapOffset;
     uint blasGeometriesOffset;
