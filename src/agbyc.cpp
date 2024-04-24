@@ -20,6 +20,10 @@
 
 #include <tracy/tracy/tracy.hpp>
 
+#define EDITOR 1
+#define LIVE_RELOAD_SHADERS 1
+#define LIVE_RELOAD_FUNCS 1
+
 typedef int8_t int8;
 typedef int16_t int16;
 typedef int64_t int64;
@@ -38,7 +42,7 @@ static const XMVector xmVectorZero = XMVectorSet(0, 0, 0, 0);
 static const XMVector xmVectorOne = XMVectorSet(1, 1, 1, 1);
 static const XMVector xmQuatIdentity = XMVectorSet(0, 0, 0, 1);
 
-static const float scaleFactor = 0.001f;
+static const float scaleFactor = 0.1f;
 
 constexpr float meters(float n) { return n * scaleFactor; };
 constexpr float decimeters(float n) { return n * 0.1f * scaleFactor; };
@@ -142,6 +146,7 @@ struct float3 {
     float3(const float* v) : x(v[0]), y(v[1]), z(v[2]) {}
     float3(XMVector v) : x(XMVectorGetX(v)), y(XMVectorGetY(v)), z(XMVectorGetZ(v)) {}
     float3(PxVec3 p) : x(p.x), y(p.y), z(p.z) {}
+    float3(PxVec3d p) : x((float)p.x), y((float)p.y), z((float)p.z) {}
     void operator=(const XMVector& v) { x = XMVectorGetX(v), y = XMVectorGetY(v), z = XMVectorGetZ(v); }
     bool operator==(const float3& v) const { return x == v.x && y == v.y && z == v.z; }
     bool operator!=(const float3& v) const { return x != v.x || y != v.y || z != v.z; }
@@ -165,6 +170,7 @@ struct float3 {
     float2 xy() const { return float2(x, y); }
     XMVector toXMVector() const { return XMVectorSet(x, y, z, 1.0f); }
     PxVec3 toPxVec3() const { return PxVec3(x, y, z); }
+    PxVec3d toPxVec3d() const { return PxVec3d(x, y, z); }
     std::string toString() const { return std::format("[{}, {}, {}]", x, y, z); }
     float max() const { return std::max(std::max(x, y), z); }
     float min() const { return std::min(std::min(x, y), z); }
@@ -214,8 +220,8 @@ struct Transform {
         s = scaling, r = rotation, t = translation;
     }
     Transform(PxTransform t) : s(1, 1, 1), r(t.q.x, t.q.y, t.q.z, t.q.w), t(t.p.x, t.p.y, t.p.z) {}
-    XMMatrix toMat() const { return XMMatrixAffineTransformation(s.toXMVector(), xmVectorZero, r.toXMVector(), t.toXMVector()); }
     PxTransform toPxTransform() const { return PxTransform(t.x, t.y, t.z, PxQuat(r.x, r.y, r.z, r.w)); }
+    XMMatrix toMat() const { return XMMatrixAffineTransformation(s.toXMVector(), xmVectorZero, r.toXMVector(), t.toXMVector()); }
 };
 
 struct Plane {
@@ -260,6 +266,41 @@ XMVector quaternionBetween(float3 v1, float3 v2) {
     }
 }
 
+float4 quaternionFromEulerAngles(float3 eulerAngles) {
+    float cr = cosf(eulerAngles.x * 0.5f);
+    float sr = sinf(eulerAngles.x * 0.5f);
+    float cp = cosf(eulerAngles.y * 0.5f);
+    float sp = sinf(eulerAngles.y * 0.5f);
+    float cy = cosf(eulerAngles.z * 0.5f);
+    float sy = sinf(eulerAngles.z * 0.5f);
+
+    float4 q;
+    q.w = cr * cp * cy + sr * sp * sy;
+    q.x = sr * cp * cy - cr * sp * sy;
+    q.y = cr * sp * cy + sr * cp * sy;
+    q.z = cr * cp * sy - sr * sp * cy;
+
+    return q;
+}
+
+float3 quaternionToEulerAngles(float4 q) {
+    float3 angles;
+
+    float sinr_cosp = 2.0f * (q.w * q.x + q.y * q.z);
+    float cosr_cosp = 1.0f - 2.0f * (q.x * q.x + q.y * q.y);
+    angles.x = atan2f(sinr_cosp, cosr_cosp);
+
+    float sinp = sqrtf(1.0f + 2.0f * (q.w * q.y - q.x * q.z));
+    float cosp = sqrtf(1.0f - 2.0f * (q.w * q.y - q.x * q.z));
+    angles.y = 2.0f * atan2f(sinp, cosp) - pi / 2.0f;
+
+    float siny_cosp = 2.0f * (q.w * q.z + q.x * q.y);
+    float cosy_cosp = 1.0f - 2.0f * (q.y * q.y + q.z * q.z);
+    angles.z = atan2f(siny_cosp, cosy_cosp);
+
+    return angles;
+}
+
 float2 ndcToScreen(float2 ndc, float2 screenSize) {
     float2 coord = (float2(ndc.x, -ndc.y) + 1.0f) * 0.5f;
     return coord * screenSize;
@@ -291,7 +332,7 @@ bool intersectRayAABB(float3 p, float3 d, AABB a, float* tmin, float3* q) {
     *tmin = 0.0f;
     float tmax = FLT_MAX;
     for (int i = 0; i < 3; i++) {
-        if (fabs(d[i]) < 0.00001f /*EPSILON*/) {
+        if (fabs(d[i]) < 0.00001f) {
             if (p[i] < a.min[i] || p[i] > a.max[i]) return false;
         } else {
             float ood = 1.0f / d[i];
@@ -783,8 +824,8 @@ struct CameraEditor {
     float2 pitchYaw;
     float fovVertical = 50.0f;
     bool moving;
-    float moveSpeed = 0.01f;
-    float moveSpeedMax = 0.1f;
+    float moveSpeed = meters(5);
+    float moveSpeedMax = meters(500);
 };
 
 enum PlayerState {
@@ -805,8 +846,6 @@ struct Player {
     float runSpeed;
     float3 movement;
     PlayerState state;
-    float3 velocity;
-    float3 acceleration;
     uint32 idleAnimationIndex;
     uint32 walkAnimationIndex;
     uint32 runAnimationIndex;
@@ -866,7 +905,7 @@ struct Editor {
     ObjectType selectedObjectType = ObjectTypeNone;
     uint32 selectedObjectIndex;
     bool selectedObjectXRay = true;
-    PxShape* selectedObjectCollisionShape;
+    PxShape* selectedObjectRigidActorShape;
     bool editObject;
     CameraEditor editObjectCamera;
     ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
@@ -879,7 +918,7 @@ static LARGE_INTEGER perfFrequency = {};
 static LARGE_INTEGER perfCounterStart = {};
 static LARGE_INTEGER perfCounterEnd = {};
 static uint64 frameCount = 0;
-static double frameTime = 0;
+static float frameTime = 0;
 static uint mouseSelectX = UINT_MAX;
 static uint mouseSelectY = UINT_MAX;
 static int2 mouseDeltaRaw = {0, 0};
@@ -933,7 +972,7 @@ static XMMatrix cameraViewProjectMat;
 static XMMatrix cameraViewProjectMatInverse;
 
 static bool showMenu = false;
-static bool showCollisionGeometries = true;
+static bool showRigidActorsGeometries = true;
 
 static PxDefaultAllocator pxAllocator;
 static PxDefaultErrorCallback pxErrorCallback;
@@ -942,11 +981,10 @@ static PxPhysics* pxPhysics;
 static PxDefaultCpuDispatcher* pxDispatcher;
 static PxScene* pxScene;
 static double pxAccumulatedTime = 0.0;
-static double pxTimeStep = 1.0 / 100.0;
+static double pxTimeStep = 1.0 / 60.0;
 static PxMaterial* pxDefaultMaterial;
 static PxControllerManager* pxControllerManager;
 
-#define EDITOR 1
 #if EDITOR
 static Editor editor;
 static bool inEditor = true;
@@ -1179,20 +1217,20 @@ void controllerGetStateXInput() {
         c.rsX = state.Gamepad.sThumbRX / 32767.0f;
         c.rsY = state.Gamepad.sThumbRY / 32767.0f;
         controllerApplyDeadZone(&c);
-        if (controller.back && c.back) c.backDownDuration = controller.backDownDuration + (float)frameTime;
-        if (controller.start && c.start) c.startDownDuration = controller.startDownDuration + (float)frameTime;
-        if (controller.a && c.a) c.aDownDuration = controller.aDownDuration + (float)frameTime;
-        if (controller.b && c.b) c.bDownDuration = controller.bDownDuration + (float)frameTime;
-        if (controller.x && c.x) c.xDownDuration = controller.xDownDuration + (float)frameTime;
-        if (controller.y && c.y) c.yDownDuration = controller.yDownDuration + (float)frameTime;
-        if (controller.up && c.up) c.upDownDuration = controller.upDownDuration + (float)frameTime;
-        if (controller.down && c.down) c.downDownDuration = controller.downDownDuration + (float)frameTime;
-        if (controller.left && c.left) c.leftDownDuration = controller.leftDownDuration + (float)frameTime;
-        if (controller.right && c.right) c.rightDownDuration = controller.rightDownDuration + (float)frameTime;
-        if (controller.lb && c.lb) c.lbDownDuration = controller.lbDownDuration + (float)frameTime;
-        if (controller.rb && c.rb) c.rbDownDuration = controller.rbDownDuration + (float)frameTime;
-        if (controller.ls && c.ls) c.lsDownDuration = controller.lsDownDuration + (float)frameTime;
-        if (controller.rs && c.rs) c.rsDownDuration = controller.rsDownDuration + (float)frameTime;
+        if (controller.back && c.back) c.backDownDuration = controller.backDownDuration + frameTime;
+        if (controller.start && c.start) c.startDownDuration = controller.startDownDuration + frameTime;
+        if (controller.a && c.a) c.aDownDuration = controller.aDownDuration + frameTime;
+        if (controller.b && c.b) c.bDownDuration = controller.bDownDuration + frameTime;
+        if (controller.x && c.x) c.xDownDuration = controller.xDownDuration + frameTime;
+        if (controller.y && c.y) c.yDownDuration = controller.yDownDuration + frameTime;
+        if (controller.up && c.up) c.upDownDuration = controller.upDownDuration + frameTime;
+        if (controller.down && c.down) c.downDownDuration = controller.downDownDuration + frameTime;
+        if (controller.left && c.left) c.leftDownDuration = controller.leftDownDuration + frameTime;
+        if (controller.right && c.right) c.rightDownDuration = controller.rightDownDuration + frameTime;
+        if (controller.lb && c.lb) c.lbDownDuration = controller.lbDownDuration + frameTime;
+        if (controller.rb && c.rb) c.rbDownDuration = controller.rbDownDuration + frameTime;
+        if (controller.ls && c.ls) c.lsDownDuration = controller.lsDownDuration + frameTime;
+        if (controller.rs && c.rs) c.rsDownDuration = controller.rsDownDuration + frameTime;
     }
     controller = c;
 }
@@ -2303,7 +2341,7 @@ bool modelCreateConvexMesh(Model& model, bool forceCooking = true) {
                 points.push_back(float3(XMVector3Transform(vertex.position.toXMVector(), transformMat)));
             }
         }
-        PxCookingParams cookingParams(PxTolerancesScale(meters(1), meters(10)));
+        PxCookingParams cookingParams((PxTolerancesScale()));
         PxConvexMeshDesc convexMeshDesc;
         convexMeshDesc.points.count = (uint)points.size();
         convexMeshDesc.points.stride = sizeof(float3);
@@ -2451,23 +2489,6 @@ void modelInstanceGetSkeletonVisualization(ModelInstance* modelInstance, ModelNo
     }
 }
 
-bool transformImGui(const char* label, Transform* transform) {
-    bool b = false;
-    if (ImGui::TreeNode(label)) {
-        if (ImGui::InputFloat3("S", &transform->s.x, "%.6f")) b = true;
-        ImGui::SameLine();
-        if (ImGui::Button("reset##s")) transform->s = float3(1, 1, 1), b = true;
-        if (ImGui::InputFloat4("R", &transform->r.x, "%.6f")) b = true;
-        ImGui::SameLine();
-        if (ImGui::Button("reset##r")) transform->r = float4(0, 0, 0, 1), b = true;
-        if (ImGui::InputFloat3("T", &transform->t.x, "%.6f")) b = true;
-        ImGui::SameLine();
-        if (ImGui::Button("reset##t")) transform->t = float3(0, 0, 0), b = true;
-        ImGui::TreePop();
-    }
-    return b;
-}
-
 void modelInstanceImGui(ModelInstance* modelInstance) {
     if (ImGui::TreeNode("Model")) {
         ImGui::Text(std::format("File: {}", modelInstance->model->filePath.string()).c_str());
@@ -2562,7 +2583,7 @@ void modelInstanceAddBLASInstancesToTLAS(ModelInstance& modelInstance, const XMM
         if (modelInstance.globalTransformMats.size() > 0) {
             transform = XMMatrixMultiply(transform, modelInstance.globalTransformMats[meshNode - &modelInstance.model->nodes[0]]);
         }
-        transform = XMMatrixMultiply(transform, XMMatrixScaling(scaleFactor, scaleFactor, -scaleFactor)); // convert RH to LH && scaling down by 1000
+        transform = XMMatrixMultiply(transform, XMMatrixScaling(scaleFactor, scaleFactor, -scaleFactor)); // convert RH to LH && scale down by scaleFactor
         transform = XMMatrixMultiply(transform, objectTransform);
         transform = XMMatrixTranspose(transform);
         D3D12_RAYTRACING_INSTANCE_DESC blasInstanceBuildInfo = {.InstanceMask = objectType, .AccelerationStructure = instanceMeshNode->blas->GetResource()->GetGPUVirtualAddress()};
@@ -2624,10 +2645,10 @@ void loadSimpleAssets() {
 
 void physxInit() {
     pxFoundation = PxCreateFoundation(PX_PHYSICS_VERSION, pxAllocator, pxErrorCallback);
-    pxPhysics = PxCreatePhysics(PX_PHYSICS_VERSION, *pxFoundation, PxTolerancesScale(meters(1), meters(10)), true, nullptr);
+    pxPhysics = PxCreatePhysics(PX_PHYSICS_VERSION, *pxFoundation, PxTolerancesScale(), true, nullptr);
     pxDispatcher = PxDefaultCpuDispatcherCreate(4);
     PxSceneDesc sceneDesc(pxPhysics->getTolerancesScale());
-    sceneDesc.gravity = PxVec3(0.0f, -9.81f, 0.0f);
+    sceneDesc.gravity = PxVec3(0.0f, meters(-10), 0.0f);
     sceneDesc.cpuDispatcher = pxDispatcher;
     sceneDesc.filterShader = PxDefaultSimulationFilterShader;
     pxScene = pxPhysics->createScene(sceneDesc);
@@ -2669,8 +2690,8 @@ void editorCameraRotate(CameraEditor& editorCamera, float2 pitchYawDelta) {
 }
 void editorCameraTranslate(CameraEditor& editorCamera, float3 translate) {
     float3 dz = (editorCamera.lookAt - editorCamera.position).normalize();
-    float3 dx = dz.cross({0, 1, 0});
-    float3 dy = dz.cross({1, 0, 0});
+    float3 dx = dz.cross(float3(0, 1, 0));
+    float3 dy = dz.cross(float3(1, 0, 0));
     editorCamera.position += dx * translate.x;
     editorCamera.lookAt += dx * translate.x;
     editorCamera.position += dy * translate.y;
@@ -2704,7 +2725,7 @@ void worldInit(const std::filesystem::path& path) {
     if (ryml::ConstNodeRef editorCameraYaml = yamlRoot.find_child("editorCamera"); editorCameraYaml.valid()) {
         editorCameraYaml["position"] >> editor.camera.position;
         editorCameraYaml["pitchYaw"] >> editor.camera.pitchYaw;
-        editorCameraRotate(editor.camera, {0, 0});
+        editorCameraRotate(editor.camera, float2(0, 0));
         editorCameraYaml["moveSpeed"] >> editor.camera.moveSpeed;
         editor.camera.moveSpeed = std::clamp(editor.camera.moveSpeed, 0.0f, editor.camera.moveSpeedMax);
     } else {
@@ -2713,7 +2734,7 @@ void worldInit(const std::filesystem::path& path) {
     if (ryml::ConstNodeRef editorEditObjectCameraYaml = yamlRoot.find_child("editorEditObjectCamera"); editorEditObjectCameraYaml.valid()) {
         editorEditObjectCameraYaml["position"] >> editor.editObjectCamera.position;
         editorEditObjectCameraYaml["pitchYaw"] >> editor.editObjectCamera.pitchYaw;
-        editorCameraRotate(editor.editObjectCamera, {0, 0});
+        editorCameraRotate(editor.editObjectCamera, float2(0, 0));
         editorEditObjectCameraYaml["moveSpeed"] >> editor.editObjectCamera.moveSpeed;
         editor.editObjectCamera.moveSpeed = std::clamp(editor.editObjectCamera.moveSpeed, 0.0f, editor.editObjectCamera.moveSpeedMax);
     } else {
@@ -2785,11 +2806,11 @@ void worldInit(const std::filesystem::path& path) {
         playerYaml["capsuleHeight"] >> capsuleControllerDesc.height;
         playerYaml["capsuleContactOffset"] >> capsuleControllerDesc.contactOffset;
         playerYaml["capsuleStepOffset"] >> capsuleControllerDesc.stepOffset;
-        capsuleControllerDesc.position = {player.transform.t.x, player.transform.t.y + capsuleControllerDesc.radius + capsuleControllerDesc.height / 2.0f, player.transform.t.z};
         capsuleControllerDesc.material = pxDefaultMaterial;
         assert(capsuleControllerDesc.isValid());
         player.pxController = (PxCapsuleController*)pxControllerManager->createController(capsuleControllerDesc);
         assert(player.pxController);
+        player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d());
     }
     for (ryml::ConstNodeRef gameObjectsYaml = yamlRoot["gameObjects"]; ryml::ConstNodeRef objYaml : gameObjectsYaml) {
         GameObject& obj = gameObjects.emplace_back();
@@ -2799,11 +2820,11 @@ void worldInit(const std::filesystem::path& path) {
         obj.modelInstance = modelInstanceInit(file);
         objYaml["transform"] >> obj.transformDefault;
         obj.transform = obj.transformDefault;
-        if (ryml::ConstNodeRef collisionYaml = objYaml.find_child("collision"); collisionYaml.valid()) {
-            if (collisionYaml["type"] == "static") {
+        if (ryml::ConstNodeRef rigidActorYaml = objYaml.find_child("rigidActor"); rigidActorYaml.valid()) {
+            if (rigidActorYaml["type"] == "static") {
                 obj.rigidActor = pxPhysics->createRigidStatic(obj.transform.toPxTransform());
                 pxScene->addActor(*obj.rigidActor);
-                for (ryml::ConstNodeRef childYaml : collisionYaml["shapes"].children()) {
+                for (ryml::ConstNodeRef childYaml : rigidActorYaml["shapes"].children()) {
                     if (childYaml["type"] == "plane") {
                         PxTransform transform;
                         childYaml["transform"] >> transform;
@@ -2914,12 +2935,12 @@ void worldSave() {
         gameObjectYaml["asset"] << obj.modelInstance.model->filePath.string();
         gameObjectYaml["transform"] << Transform(obj.transformDefault);
         if (obj.rigidActor) {
-            ryml::NodeRef collisionYaml = gameObjectYaml["collision"];
-            collisionYaml |= ryml::MAP;
+            ryml::NodeRef rigidActorYaml = gameObjectYaml["rigidActor"];
+            rigidActorYaml |= ryml::MAP;
             PxActorType::Enum actorType = obj.rigidActor->getType();
             if (actorType == PxActorType::eRIGID_STATIC) {
-                collisionYaml["type"] << "static";
-                ryml::NodeRef shapesYaml = collisionYaml["shapes"];
+                rigidActorYaml["type"] << "static";
+                ryml::NodeRef shapesYaml = rigidActorYaml["shapes"];
                 shapesYaml |= ryml::SEQ, shapesYaml |= ryml::_WIP_STYLE_FLOW_SL;
                 static std::vector<PxShape*> shapes(256);
                 uint shapeCount = obj.rigidActor->getShapes(shapes.data(), 256);
@@ -3015,9 +3036,13 @@ void gameObjectRelease(GameObject& obj) {
 void toggleBetweenEditorPlay() {
     inEditor = !inEditor;
     player.transform = player.transformDefault;
+    player.pxController->setFootPosition(player.transform.t.toPxVec3d());
     playerCameraReset();
     for (GameObject& obj : gameObjects) {
         obj.transform = obj.transformDefault;
+        if (obj.rigidActor) {
+            obj.rigidActor->setGlobalPose(obj.transform.toPxTransform());
+        }
     }
     windowHideCursor(!inEditor);
 }
@@ -3083,14 +3108,24 @@ void editorMainMenuBar() {
         }
         if (ImGui::BeginMenu("View")) {
             if (ImGui::BeginMenu("Camera")) {
-                static float speedPercentage = 0.1f;
-                ImGui::SliderFloat("speed", &speedPercentage, 0.0f, 1.0f);
-                editor.camera.moveSpeed = editor.camera.moveSpeedMax * speedPercentage;
+                float speed = editor.camera.moveSpeed / scaleFactor;
+                float speedMax = editor.camera.moveSpeedMax / scaleFactor;
+                if (ImGui::SliderFloat("speed(meters)", &speed, 0.0f, speedMax)) {
+                    editor.camera.moveSpeed = speed * scaleFactor;
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("EditObjectCamera")) {
+                float speed = editor.editObjectCamera.moveSpeed / scaleFactor;
+                float speedMax = editor.editObjectCamera.moveSpeedMax / scaleFactor;
+                if (ImGui::SliderFloat("speed(meters)", &speed, 0.0f, speedMax)) {
+                    editor.editObjectCamera.moveSpeed = speed * scaleFactor;
+                }
                 ImGui::EndMenu();
             }
             ImGui::Separator();
             ImGui::Checkbox("XRay", &editor.selectedObjectXRay);
-            ImGui::Checkbox("Collision", &showCollisionGeometries);
+            ImGui::Checkbox("RigidActors", &showRigidActorsGeometries);
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -3176,17 +3211,95 @@ void editorObjectsWindow() {
     ImGui::End();
 }
 
+bool transformImGui(Transform& transform, bool hasT, bool hasR, bool hasS) {
+    bool change = false;
+    ImGui::Text("Transform");
+    if (hasT) {
+        if (ImGui::InputFloat3("T", &transform.t.x)) {
+            change = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("reset##t")) {
+            transform.t = float3(0, 0, 0);
+            change = true;
+        }
+    }
+    if (hasR) {
+        float3 angles = quaternionToEulerAngles(transform.r);
+        angles.x = degree(angles.x), angles.y = degree(angles.y), angles.z = degree(angles.z);
+        if (ImGui::InputFloat3("R", &angles.x)) {
+            angles.x = radian(angles.x), angles.y = radian(angles.y), angles.z = radian(angles.z);
+            transform.r = quaternionFromEulerAngles(angles);
+            change = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("reset##r")) {
+            transform.r = float4(0, 0, 0, 1);
+            change = true;
+        }
+    }
+    if (hasS) {
+        if (ImGui::InputFloat3("S", &transform.s.x)) {
+            change = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("reset##s")) {
+            transform.s = float3(1, 1, 1);
+            change = true;
+        }
+    }
+    return change;
+}
+
+bool transformImGui(PxTransform& pxTransform) {
+    Transform transform(pxTransform);
+    if (transformImGui(transform, true, true, false)) {
+        PxTransform pt = transform.toPxTransform();
+        if (pt.isValid()) {
+            pxTransform = pt;
+            return true;
+        }
+    }
+    return false;
+}
+
 void editorObjectPropertiesWindow() {
     if (ImGui::Begin("Properties")) {
         if (editor.selectedObjectType == ObjectTypePlayer) {
             ImGui::Text("Player");
             modelInstanceImGui(&player.modelInstance);
             if (ImGui::TreeNode("Locomotion")) {
-                if (transformImGui("Transform", &player.transformDefault)) {
+                if (transformImGui(player.transformDefault, true, true, true)) {
                     player.transform = player.transformDefault;
+                    player.pxController->setFootPosition(player.transform.t.toPxVec3d());
                 }
-                ImGui::InputFloat3("Velocity", &player.velocity.x, "%.6f");
-                ImGui::InputFloat3("Acceleration", &player.acceleration.x, "%.6f");
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNode("CapsuleController")) {
+                float radius = player.pxController->getRadius();
+                float height = player.pxController->getHeight();
+                float contactOffset = player.pxController->getContactOffset();
+                float stepOffset = player.pxController->getStepOffset();
+                if (ImGui::InputFloat("radius", &radius, 0, 0)) {
+                    radius = std::clamp(radius, meters(0), meters(10));
+                    player.pxController->setRadius(radius);
+                    player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d());
+                }
+                if (ImGui::InputFloat("height", &height, 0, 0)) {
+                    height = std::clamp(height, meters(0), meters(10));
+                    player.pxController->setHeight(height);
+                    player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d());
+                }
+                if (ImGui::InputFloat("contactOffset", &contactOffset, 0, 0)) {
+                    contactOffset = std::clamp(contactOffset, meters(0), meters(1));
+                    player.pxController->setContactOffset(contactOffset);
+                    player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d());
+                }
+                if (ImGui::InputFloat("stepOffset", &stepOffset, 0, 0)) {
+                    stepOffset = std::clamp(stepOffset, meters(0), meters(1));
+                    player.pxController->setStepOffset(stepOffset);
+                    player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d());
+                }
                 ImGui::TreePop();
             }
             if (ImGui::TreeNode("Animations")) {
@@ -3214,13 +3327,13 @@ void editorObjectPropertiesWindow() {
             ImGui::Text("Name \"%s\"", obj.name.c_str());
             modelInstanceImGui(&obj.modelInstance);
             if (ImGui::TreeNode("Locomotion")) {
-                if (transformImGui("Transform", &obj.transformDefault)) {
+                if (transformImGui(obj.transformDefault, true, true, true)) {
                     obj.transform = obj.transformDefault;
                     if (obj.rigidActor) obj.rigidActor->setGlobalPose(obj.transform.toPxTransform());
                 }
                 ImGui::TreePop();
             }
-            bool open = ImGui::TreeNode("Collision");
+            bool open = ImGui::TreeNode("RigidActor");
             if (ImGui::BeginPopupContextItem()) {
                 if (obj.rigidActor) {
                     if (ImGui::Button("delete")) {
@@ -3247,43 +3360,43 @@ void editorObjectPropertiesWindow() {
                     PxActorType::Enum actorType = obj.rigidActor->getType();
                     if (actorType == PxActorType::eRIGID_STATIC) {
                         ImGui::Text("Type: Static");
-                        bool open = ImGui::TreeNode(std::format("Shapes", obj.rigidActor->getNbShapes()).c_str());
+                        bool open = ImGui::TreeNode("Shapes");
                         if (ImGui::BeginPopupContextItem()) {
                             if (ImGui::Button("new plane")) {
-                                editor.selectedObjectCollisionShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxPlaneGeometry(), *pxDefaultMaterial);
+                                editor.selectedObjectRigidActorShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxPlaneGeometry(), *pxDefaultMaterial);
                                 obj.rigidActor->setGlobalPose(obj.transform.toPxTransform());
                                 ImGui::CloseCurrentPopup();
                             }
                             if (ImGui::Button("new box")) {
-                                editor.selectedObjectCollisionShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxBoxGeometry(scaleFactor, scaleFactor, scaleFactor), *pxDefaultMaterial);
+                                editor.selectedObjectRigidActorShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxBoxGeometry(meters(1), meters(1), meters(1)), *pxDefaultMaterial);
                                 obj.rigidActor->setGlobalPose(obj.transform.toPxTransform());
                                 ImGui::CloseCurrentPopup();
                             }
                             if (ImGui::Button("new sphere")) {
-                                editor.selectedObjectCollisionShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxSphereGeometry(scaleFactor), *pxDefaultMaterial);
+                                editor.selectedObjectRigidActorShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxSphereGeometry(meters(1)), *pxDefaultMaterial);
                                 obj.rigidActor->setGlobalPose(obj.transform.toPxTransform());
                                 ImGui::CloseCurrentPopup();
                             }
                             if (ImGui::Button("new capsule")) {
-                                editor.selectedObjectCollisionShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxCapsuleGeometry(scaleFactor, scaleFactor), *pxDefaultMaterial);
+                                editor.selectedObjectRigidActorShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxCapsuleGeometry(meters(1), meters(1)), *pxDefaultMaterial);
                                 obj.rigidActor->setGlobalPose(obj.transform.toPxTransform());
                                 ImGui::CloseCurrentPopup();
                             }
                             if (ImGui::Button("new convex mesh")) {
                                 // if (obj.modelInstance.model->physxConvexMesh) {
-                                //     editor.selectedObjectCollisionShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxConvexMeshGeometry(obj.modelInstance.model->physxConvexMesh), *physxDefaultMaterial);
+                                //     editor.selectedObjectRigidActorShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxConvexMeshGeometry(obj.modelInstance.model->physxConvexMesh), *physxDefaultMaterial);
                                 // } else {
                                 //     assert(modelCreateConvexMesh(*obj.modelInstance.model));
-                                //     editor.selectedObjectCollisionShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxConvexMeshGeometry(obj.modelInstance.model->physxConvexMesh), *physxDefaultMaterial);
+                                //     editor.selectedObjectRigidActorShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxConvexMeshGeometry(obj.modelInstance.model->physxConvexMesh), *physxDefaultMaterial);
                                 // }
                                 // ImGui::CloseCurrentPopup();
                             }
                             // if (ImGui::Button("new triangle mesh")) {
                             //     if (obj.modelInstance.model->physxTriangleMesh) {
-                            //         editor.selectedObjectCollisionShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxTriangleMeshGeometry(obj.modelInstance.model->physxTriangleMesh), *physxDefaultMaterial);
+                            //         editor.selectedObjectRigidActorShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxTriangleMeshGeometry(obj.modelInstance.model->physxTriangleMesh), *physxDefaultMaterial);
                             //     } else {
                             //         assert(modelCreateTriangleMesh(*obj.modelInstance.model));
-                            //         editor.selectedObjectCollisionShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxTriangleMeshGeometry(obj.modelInstance.model->physxTriangleMesh), *physxDefaultMaterial);
+                            //         editor.selectedObjectRigidActorShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxTriangleMeshGeometry(obj.modelInstance.model->physxTriangleMesh), *physxDefaultMaterial);
                             //     }
                             //     ImGui::CloseCurrentPopup();
                             // }
@@ -3301,13 +3414,13 @@ void editorObjectPropertiesWindow() {
                                     bool open = ImGui::TreeNode("plane");
                                     if (ImGui::BeginPopupContextItem()) {
                                         if (ImGui::Button("transform")) {
-                                            editor.selectedObjectCollisionShape = shape;
+                                            editor.selectedObjectRigidActorShape = shape;
                                             ImGui::CloseCurrentPopup();
                                         }
                                         if (ImGui::Button("delete")) {
                                             obj.rigidActor->detachShape(*shape);
                                             shape = nullptr;
-                                            editor.selectedObjectCollisionShape = nullptr;
+                                            editor.selectedObjectRigidActorShape = nullptr;
                                             ImGui::CloseCurrentPopup();
                                         }
                                         ImGui::EndPopup();
@@ -3315,12 +3428,11 @@ void editorObjectPropertiesWindow() {
                                     if (open) {
                                         if (shape) {
                                             PxPlaneGeometry plane = (const PxPlaneGeometry&)geometry;
-                                            PxTransform transform = shape->getLocalPose();
-                                            bool b0 = ImGui::InputFloat3("translate", &transform.p.x, "%.6f");
-                                            if (b0 && transform.isValid()) {
+                                            PxTransform pxTransform = shape->getLocalPose();
+                                            if (transformImGui(pxTransform)) {
                                                 obj.rigidActor->detachShape(*shape);
                                                 PxShape* newShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, plane, *pxDefaultMaterial);
-                                                newShape->setLocalPose(transform);
+                                                newShape->setLocalPose(pxTransform);
                                             }
                                         }
                                         ImGui::TreePop();
@@ -3329,13 +3441,13 @@ void editorObjectPropertiesWindow() {
                                     bool open = ImGui::TreeNode("box");
                                     if (ImGui::BeginPopupContextItem()) {
                                         if (ImGui::Button("transform")) {
-                                            editor.selectedObjectCollisionShape = shape;
+                                            editor.selectedObjectRigidActorShape = shape;
                                             ImGui::CloseCurrentPopup();
                                         }
                                         if (ImGui::Button("delete")) {
                                             obj.rigidActor->detachShape(*shape);
                                             shape = nullptr;
-                                            editor.selectedObjectCollisionShape = nullptr;
+                                            editor.selectedObjectRigidActorShape = nullptr;
                                             ImGui::CloseCurrentPopup();
                                         }
                                         ImGui::EndPopup();
@@ -3343,13 +3455,13 @@ void editorObjectPropertiesWindow() {
                                     if (open) {
                                         if (shape) {
                                             PxBoxGeometry box = (const PxBoxGeometry&)geometry;
-                                            PxTransform transform = shape->getLocalPose();
-                                            bool b0 = ImGui::InputFloat3("extents", &box.halfExtents.x, "%.6f");
-                                            bool b1 = ImGui::InputFloat3("translate", &transform.p.x, "%.6f");
-                                            if ((b0 || b1) && (box.isValid() && transform.isValid())) {
+                                            PxTransform pxTransform = shape->getLocalPose();
+                                            bool b0 = ImGui::InputFloat3("extents", &box.halfExtents.x) && box.isValid();
+                                            bool b1 = transformImGui(pxTransform);
+                                            if (b0 || b1) {
                                                 obj.rigidActor->detachShape(*shape);
                                                 PxShape* newShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, box, *pxDefaultMaterial);
-                                                newShape->setLocalPose(transform);
+                                                newShape->setLocalPose(pxTransform);
                                             }
                                         }
                                         ImGui::TreePop();
@@ -3358,13 +3470,13 @@ void editorObjectPropertiesWindow() {
                                     bool open = ImGui::TreeNode("sphere");
                                     if (ImGui::BeginPopupContextItem()) {
                                         if (ImGui::Button("transform")) {
-                                            editor.selectedObjectCollisionShape = shape;
+                                            editor.selectedObjectRigidActorShape = shape;
                                             ImGui::CloseCurrentPopup();
                                         }
                                         if (ImGui::Button("delete")) {
                                             obj.rigidActor->detachShape(*shape);
                                             shape = nullptr;
-                                            editor.selectedObjectCollisionShape = nullptr;
+                                            editor.selectedObjectRigidActorShape = nullptr;
                                             ImGui::CloseCurrentPopup();
                                         }
                                         ImGui::EndPopup();
@@ -3372,13 +3484,13 @@ void editorObjectPropertiesWindow() {
                                     if (open) {
                                         if (shape) {
                                             PxSphereGeometry sphere = (const PxSphereGeometry&)geometry;
-                                            PxTransform transform = shape->getLocalPose();
-                                            bool b0 = ImGui::InputFloat("radius", &sphere.radius, 0, 0, "%.6f");
-                                            bool b1 = ImGui::InputFloat3("translate", &transform.p.x, "%.6f");
-                                            if ((b0 || b1) && (sphere.isValid() && transform.isValid())) {
+                                            PxTransform pxTransform = shape->getLocalPose();
+                                            bool b0 = ImGui::InputFloat("radius", &sphere.radius, 0, 0) && sphere.isValid();
+                                            bool b1 = transformImGui(pxTransform);
+                                            if (b0 || b1) {
                                                 obj.rigidActor->detachShape(*shape);
                                                 PxShape* newShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, sphere, *pxDefaultMaterial);
-                                                newShape->setLocalPose(transform);
+                                                newShape->setLocalPose(pxTransform);
                                             }
                                         }
                                         ImGui::TreePop();
@@ -3387,13 +3499,13 @@ void editorObjectPropertiesWindow() {
                                     bool open = ImGui::TreeNode("capsule");
                                     if (ImGui::BeginPopupContextItem()) {
                                         if (ImGui::Button("transform")) {
-                                            editor.selectedObjectCollisionShape = shape;
+                                            editor.selectedObjectRigidActorShape = shape;
                                             ImGui::CloseCurrentPopup();
                                         }
                                         if (ImGui::Button("delete")) {
                                             obj.rigidActor->detachShape(*shape);
                                             shape = nullptr;
-                                            editor.selectedObjectCollisionShape = nullptr;
+                                            editor.selectedObjectRigidActorShape = nullptr;
                                             ImGui::CloseCurrentPopup();
                                         }
                                         ImGui::EndPopup();
@@ -3401,14 +3513,14 @@ void editorObjectPropertiesWindow() {
                                     if (open) {
                                         if (shape) {
                                             PxCapsuleGeometry capsule = (const PxCapsuleGeometry&)geometry;
-                                            PxTransform transform = shape->getLocalPose();
-                                            bool b0 = ImGui::InputFloat("radius", &capsule.radius, 0, 0, "%.6f");
-                                            bool b1 = ImGui::InputFloat("halfHeight", &capsule.halfHeight, 0, 0, "%.6f");
-                                            bool b2 = ImGui::InputFloat3("translate", &transform.p.x, "%.6f");
-                                            if ((b0 || b1 || b2) && (capsule.isValid() && transform.isValid())) {
+                                            PxTransform pxTransform = shape->getLocalPose();
+                                            bool b0 = ImGui::InputFloat("radius", &capsule.radius, 0, 0) && capsule.isValid();
+                                            bool b1 = ImGui::InputFloat("halfHeight", &capsule.halfHeight, 0, 0) && capsule.isValid();
+                                            bool b2 = transformImGui(pxTransform);
+                                            if (b0 || b1 || b2) {
                                                 obj.rigidActor->detachShape(*shape);
                                                 PxShape* newShape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, capsule, *pxDefaultMaterial);
-                                                newShape->setLocalPose(transform);
+                                                newShape->setLocalPose(pxTransform);
                                             }
                                         }
                                         ImGui::TreePop();
@@ -3417,13 +3529,13 @@ void editorObjectPropertiesWindow() {
                                     bool open = ImGui::TreeNode("convexMesh");
                                     if (ImGui::BeginPopupContextItem()) {
                                         if (ImGui::Button("transform")) {
-                                            editor.selectedObjectCollisionShape = shape;
+                                            editor.selectedObjectRigidActorShape = shape;
                                             ImGui::CloseCurrentPopup();
                                         }
                                         if (ImGui::Button("delete")) {
                                             obj.rigidActor->detachShape(*shape);
                                             shape = nullptr;
-                                            editor.selectedObjectCollisionShape = nullptr;
+                                            editor.selectedObjectRigidActorShape = nullptr;
                                             ImGui::CloseCurrentPopup();
                                         }
                                         ImGui::EndPopup();
@@ -3478,16 +3590,16 @@ void editorUpdate() {
             uint mouseSelectInstanceIndex = d3d.collisionQueryResultsBufferPtr[0].instanceIndex;
             if (mouseSelectInstanceIndex == UINT_MAX) {
                 editor.selectedObjectType = ObjectTypeNone;
-                editor.selectedObjectCollisionShape = nullptr;
+                editor.selectedObjectRigidActorShape = nullptr;
             } else {
                 BLASInstanceInfo& info = blasInstancesInfos[mouseSelectInstanceIndex];
                 if (info.objectType == editor.selectedObjectType && info.objectIndex == editor.selectedObjectIndex) {
                     editor.selectedObjectType = ObjectTypeNone;
-                    editor.selectedObjectCollisionShape = nullptr;
+                    editor.selectedObjectRigidActorShape = nullptr;
                 } else {
                     editor.selectedObjectType = info.objectType;
                     editor.selectedObjectIndex = info.objectIndex;
-                    editor.selectedObjectCollisionShape = nullptr;
+                    editor.selectedObjectRigidActorShape = nullptr;
                 }
             }
         }
@@ -3529,7 +3641,7 @@ void editorUpdate() {
             }
             if (editor.selectedObjectType == ObjectTypePlayer) {
                 player.transform = player.transformDefault;
-                player.pxController->getActor()->setGlobalPose(player.transform.toPxTransform());
+                player.pxController->setFootPosition(player.transform.t.toPxVec3d());
             } else if (editor.selectedObjectType == ObjectTypeGameObject) {
                 GameObject& obj = gameObjects[editor.selectedObjectIndex];
                 obj.transform = obj.transformDefault;
@@ -3559,12 +3671,12 @@ void editorUpdate() {
                     }
                 }
                 if (editor.selectedObjectType == ObjectTypePlayer) {
-                    player.transform = Transform();
-                    player.pxController->getActor()->setGlobalPose(PxTransform(PxIdentity));
+                    player.transform.t = float3(0, 0, 0);
+                    player.pxController->setFootPosition(PxVec3d(0, 0, 0));
                     player.pxController->getActor()->setActorFlag(PxActorFlag::eVISUALIZATION, true);
                 } else if (editor.selectedObjectType == ObjectTypeGameObject) {
                     GameObject& obj = gameObjects[editor.selectedObjectIndex];
-                    obj.transform = Transform();
+                    obj.transform.t = float3(0, 0, 0);
                     if (obj.rigidActor) {
                         obj.rigidActor->setGlobalPose(PxTransform(PxIdentity));
                         obj.rigidActor->setActorFlag(PxActorFlag::eVISUALIZATION, true);
@@ -3589,9 +3701,9 @@ void editorUpdate() {
     {
         CameraEditor& camera = editor.editObject ? editor.editObjectCamera : editor.camera;
         if (camera.moving || controllerStickMoved()) {
-            float pitch = (mouseDeltaRaw.y * mouseSensitivity - controller.rsY * controllerSensitivity) * (float)frameTime;
-            float yaw = (mouseDeltaRaw.x * mouseSensitivity + controller.rsX * controllerSensitivity) * (float)frameTime;
-            float distance = (float)frameTime * camera.moveSpeed;
+            float pitch = (mouseDeltaRaw.y * mouseSensitivity - controller.rsY * controllerSensitivity) * frameTime;
+            float yaw = (mouseDeltaRaw.x * mouseSensitivity + controller.rsX * controllerSensitivity) * frameTime;
+            float distance = frameTime * camera.moveSpeed;
             float3 translate = {-controller.lsX * distance, 0, controller.lsY * distance};
             if (ImGui::IsKeyDown(ImGuiKey_W)) translate.z = distance;
             if (ImGui::IsKeyDown(ImGuiKey_S)) translate.z = -distance;
@@ -3599,13 +3711,13 @@ void editorUpdate() {
             if (ImGui::IsKeyDown(ImGuiKey_D)) translate.x = -distance;
             if (ImGui::IsKeyDown(ImGuiKey_Q)) translate.y = distance;
             if (ImGui::IsKeyDown(ImGuiKey_E)) translate.y = -distance;
-            editorCameraRotate(camera, {pitch, yaw});
+            editorCameraRotate(camera, float2(pitch, yaw));
             editorCameraTranslate(camera, translate);
         }
         {
             cameraViewMat = XMMatrixLookAtLH(camera.position.toXMVector(), camera.lookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
             cameraViewMatInverseTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, cameraViewMat));
-            cameraProjectMat = XMMatrixPerspectiveFovLH(radian(camera.fovVertical), (float)renderW / (float)renderH, 0.0001f, 10.0f);
+            cameraProjectMat = XMMatrixPerspectiveFovLH(radian(camera.fovVertical), (float)renderW / (float)renderH, centimeters(1), meters(1000));
             cameraViewProjectMat = XMMatrixMultiply(cameraViewMat, cameraProjectMat);
             cameraViewProjectMatInverse = XMMatrixInverse(nullptr, cameraViewProjectMat);
         }
@@ -3640,34 +3752,34 @@ void editorUpdate() {
         return ImGuizmo::Manipulate((const float*)&cameraViewMat, (const float*)&cameraProjectMat, editor.gizmoOperation, editor.gizmoMode, (float*)transformMat);
     };
     if (editor.editObject) {
-        if (editor.selectedObjectCollisionShape) {
-            XMMatrix transformMat = Transform(editor.selectedObjectCollisionShape->getLocalPose()).toMat();
+        if (editor.selectedObjectRigidActorShape) {
+            XMMatrix transformMat = Transform(editor.selectedObjectRigidActorShape->getLocalPose()).toMat();
             if (transformGizmo(&transformMat)) {
                 Transform transform(transformMat);
-                const PxGeometry& pxGeometry = editor.selectedObjectCollisionShape->getGeometry();
+                const PxGeometry& pxGeometry = editor.selectedObjectRigidActorShape->getGeometry();
                 if (pxGeometry.getType() == PxGeometryType::eSPHERE) {
                     PxSphereGeometry newPxGeometry = (PxSphereGeometry&)pxGeometry;
                     float s = std::clamp((transform.s.x + transform.s.y + transform.s.z) / 3.0f, 0.98f, 1.02f);
                     newPxGeometry.radius *= s;
-                    editor.selectedObjectCollisionShape->setGeometry(newPxGeometry);
+                    editor.selectedObjectRigidActorShape->setGeometry(newPxGeometry);
                 } else if (pxGeometry.getType() == PxGeometryType::ePLANE) {
                     PxPlaneGeometry newPxGeometry = (PxPlaneGeometry&)pxGeometry;
-                    editor.selectedObjectCollisionShape->setGeometry(newPxGeometry);
+                    editor.selectedObjectRigidActorShape->setGeometry(newPxGeometry);
                 } else if (pxGeometry.getType() == PxGeometryType::eCAPSULE) {
                     PxCapsuleGeometry newPxGeometry = (PxCapsuleGeometry&)pxGeometry;
                     newPxGeometry.halfHeight *= std::clamp(transform.s.x, 0.98f, 1.02f);
                     newPxGeometry.radius *= std::clamp((transform.s.y + transform.s.z) / 2.0f, 0.98f, 1.02f);
-                    editor.selectedObjectCollisionShape->setGeometry(newPxGeometry);
+                    editor.selectedObjectRigidActorShape->setGeometry(newPxGeometry);
                 } else if (pxGeometry.getType() == PxGeometryType::eBOX) {
                     PxBoxGeometry newPxGeometry = (PxBoxGeometry&)pxGeometry;
                     newPxGeometry.halfExtents.x *= std::clamp(transform.s.x, 0.98f, 1.02f);
                     newPxGeometry.halfExtents.y *= std::clamp(transform.s.y, 0.98f, 1.02f);
                     newPxGeometry.halfExtents.z *= std::clamp(transform.s.z, 0.98f, 1.02f);
-                    editor.selectedObjectCollisionShape->setGeometry(newPxGeometry);
+                    editor.selectedObjectRigidActorShape->setGeometry(newPxGeometry);
                 } else {
                     assert(false);
                 }
-                editor.selectedObjectCollisionShape->setLocalPose(Transform(transformMat).toPxTransform());
+                editor.selectedObjectRigidActorShape->setLocalPose(Transform(transformMat).toPxTransform());
             }
         }
     } else {
@@ -3676,6 +3788,7 @@ void editorUpdate() {
             if (transformGizmo(&transformMat)) {
                 player.transformDefault = Transform(transformMat);
                 player.transform = player.transformDefault;
+                player.pxController->setFootPosition(player.transform.t.toPxVec3d());
             }
         } else if (editor.selectedObjectType == ObjectTypeGameObject && editor.selectedObjectIndex < gameObjects.size()) {
             GameObject& obj = gameObjects[editor.selectedObjectIndex];
@@ -3711,22 +3824,24 @@ void editorUpdate() {
 }
 #endif
 
-// void updateGameUpdateLiveProc() {
-//     static HMODULE gameDLL = nullptr;
-//     static std::filesystem::path gameDLLPath = exeDir / "game.dll";
-//     static std::filesystem::path gameDLLCopyPath = exeDir / "game.dll";
-//     static std::filesystem::file_time_type gameDLLPrevLastWriteTime = {};
-//     std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(gameDLLPath);
-//     if (lastWriteTime > gameDLLPrevLastWriteTime) {
-//         gameDLLPrevLastWriteTime = lastWriteTime;
-//         FreeLibrary(gameDLL);
-//         CopyFileW(gameDLLPath.c_str(), gameDLLCopyPath.c_str(), false);
-//         gameDLL = LoadLibraryW(gameDLLCopyPath.c_str());
-//         assert(gameDLL);
-//         gameUpdateLive = (gameUpdateLiveProc)GetProcAddress(gameDLL, "gameUpdateLive");
-//         assert(gameUpdateLive);
-//     }
-// }
+void liveReloadFuncs() {
+    static HMODULE gameDLL = nullptr;
+    static std::filesystem::path gameDLLPath = exeDir / "game.dll";
+    static std::filesystem::path gameDLLCopyPath = exeDir / "game.dll";
+    static std::filesystem::file_time_type gameDLLPrevLastWriteTime = {};
+    if (std::filesystem::is_regular_file(gameDLLPath)) {
+        std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(gameDLLPath);
+        if (lastWriteTime > gameDLLPrevLastWriteTime) {
+            gameDLLPrevLastWriteTime = lastWriteTime;
+            FreeLibrary(gameDLL);
+            CopyFileW(gameDLLPath.c_str(), gameDLLCopyPath.c_str(), false);
+            gameDLL = LoadLibraryW(gameDLLCopyPath.c_str());
+            assert(gameDLL);
+            // gameUpdateLive = (gameUpdateLiveProc)GetProcAddress(gameDLL, "gameUpdateLive");
+            // assert(gameUpdateLive);
+        }
+    }
+}
 
 void gameUpdate() {
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !showMenu) {
@@ -3745,13 +3860,6 @@ void gameUpdate() {
     //     // ImGui::DebugLog("%s", str.c_str());
     //     if (queryResult.instanceIndex == UINT_MAX) {
     //         // ImGui::DebugLog("null\n");
-    //         if (player.movement != float3(0, 0, 0)) {
-    //             player.position += player.movement;
-    //             playerCameraTranslate(player.movement);
-    //             float angle = acosf(player.movement.normalize().dot(float3(0, 0, -1)));
-    //             if (player.movement.x > 0) angle = -angle;
-    //             player.pitchYawRoll = float3(0, angle, 0);
-    //         }
     //     } else {
     //         TLASInstanceInfo& instanceInfo = tlasInstancesInfos[queryResult.instanceIndex];
     //         if (instanceInfo.objectType == ObjectTypeGameObject) {
@@ -3762,63 +3870,65 @@ void gameUpdate() {
     //     }
     // }
     {
-        float pitch = (-mouseDeltaRaw.y * mouseSensitivity + controller.rsY * controllerSensitivity) * (float)frameTime;
-        float yaw = (mouseDeltaRaw.x * mouseSensitivity + controller.rsX * controllerSensitivity) * (float)frameTime;
+        float pitch = (-mouseDeltaRaw.y * mouseSensitivity + controller.rsY * controllerSensitivity) * frameTime;
+        float yaw = (mouseDeltaRaw.x * mouseSensitivity + controller.rsX * controllerSensitivity) * frameTime;
         playerCameraSetPitchYaw(player.camera.pitchYaw + float2(pitch, yaw));
     }
     {
-        float3 moveDir = {0, 0, 0};
-        bool jump = false;
+        float3 playerMoveDir(0, 0, 0);
+        bool playerJump = false;
         {
             float3 forwardDir = player.camera.lookAt - player.camera.position;
             forwardDir.y = 0;
             forwardDir = forwardDir.normalize();
             float3 sideDir = forwardDir.cross(float3(0, 1, 0));
-            if (ImGui::IsKeyDown(ImGuiKey_W)) moveDir += forwardDir;
-            if (ImGui::IsKeyDown(ImGuiKey_S)) moveDir += -forwardDir;
-            if (ImGui::IsKeyDown(ImGuiKey_A)) moveDir += sideDir;
-            if (ImGui::IsKeyDown(ImGuiKey_D)) moveDir += -sideDir;
-            moveDir += forwardDir * controller.lsY;
-            moveDir += sideDir * -controller.lsX;
-            moveDir = moveDir.normalize();
+            if (ImGui::IsKeyDown(ImGuiKey_W)) playerMoveDir += forwardDir;
+            if (ImGui::IsKeyDown(ImGuiKey_S)) playerMoveDir += -forwardDir;
+            if (ImGui::IsKeyDown(ImGuiKey_A)) playerMoveDir += sideDir;
+            if (ImGui::IsKeyDown(ImGuiKey_D)) playerMoveDir += -sideDir;
+            playerMoveDir += forwardDir * controller.lsY;
+            playerMoveDir += sideDir * -controller.lsX;
+            playerMoveDir = playerMoveDir.normalize();
 
-            jump = ImGui::IsKeyPressed(ImGuiKey_Space);
-            if (jump) { ImGui::DebugLog("jump\n"); }
+            playerJump = ImGui::IsKeyPressed(ImGuiKey_Space);
         }
-
-        if (moveDir == float3(0, 0, 0)) {
+        if (playerMoveDir == float3(0, 0, 0)) {
             player.state = PlayerStateIdle;
             player.movement = float3(0, 0, 0);
             player.modelInstance.animation = &player.modelInstance.model->animations[player.idleAnimationIndex];
         } else {
-            if (!ImGui::IsKeyDown(ImGuiKey_LeftShift) && sqrtf(controller.lsX * controller.lsX + controller.lsY * controller.lsY) < 0.8f) {
+            if (!ImGui::IsKeyDown(ImGuiKey_LeftShift) && (controller.lsX * controller.lsX + controller.lsY * controller.lsY) < 0.6f) {
                 player.state = PlayerStateWalk;
-                player.movement = moveDir * player.walkSpeed * (float)frameTime;
+                player.movement = playerMoveDir * player.walkSpeed * frameTime;
                 player.modelInstance.animation = &player.modelInstance.model->animations[player.walkAnimationIndex];
             } else {
                 player.state = PlayerStateRun;
-                player.movement = moveDir * player.runSpeed * (float)frameTime;
+                player.movement = playerMoveDir * player.runSpeed * frameTime;
                 player.modelInstance.animation = &player.modelInstance.model->animations[player.runAnimationIndex];
             }
         }
         if (player.movement != float3(0, 0, 0)) {
-            player.transform.t += player.movement;
-            playerCameraTranslate(player.movement);
-            float angle = acosf(player.movement.normalize().dot(float3(0, 0, -1)));
-            if (player.movement.x > 0) angle = -angle;
-            player.transform.r = float4(XMQuaternionRotationRollPitchYaw(0, angle, 0));
+            float3 playerOldPosition = player.transform.t;
+            player.pxController->move(player.movement.toPxVec3(), millimeters(1), frameTime, PxControllerFilters());
+            ImGui::DebugLog("%f %f %f\n", player.movement.x, player.movement.y, player.movement.z);
+            player.transform.t = float3(player.pxController->getFootPosition());
+            float3 movement = player.transform.t - playerOldPosition;
+            playerCameraTranslate(movement);
+            if (movement.length() > millimeters(1)) {
+                float angle = acosf(movement.normalize().dot(float3(0, 0, -1)));
+                if (movement.x > 0) angle = -angle;
+                player.transform.r = float4(XMQuaternionRotationRollPitchYaw(0, angle, 0));
+            }
         }
     }
-    {
-        modelInstanceUpdateAnimation(&player.modelInstance, frameTime);
-        for (GameObject& obj : gameObjects) {
-            modelInstanceUpdateAnimation(&obj.modelInstance, frameTime);
-        }
+    modelInstanceUpdateAnimation(&player.modelInstance, frameTime);
+    for (GameObject& obj : gameObjects) {
+        modelInstanceUpdateAnimation(&obj.modelInstance, frameTime);
     }
     {
         cameraViewMat = XMMatrixLookAtLH(player.camera.position.toXMVector(), player.camera.lookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
         cameraViewMatInverseTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, cameraViewMat));
-        cameraProjectMat = XMMatrixPerspectiveFovLH(radian(player.camera.fovVertical), (float)renderW / (float)renderH, 0.0001f, 10.0f);
+        cameraProjectMat = XMMatrixPerspectiveFovLH(radian(player.camera.fovVertical), (float)renderW / (float)renderH, centimeters(1), meters(1000));
         cameraViewProjectMat = XMMatrixMultiply(cameraViewMat, cameraProjectMat);
         cameraViewProjectMatInverse = XMMatrixInverse(nullptr, cameraViewProjectMat);
     }
@@ -3833,7 +3943,7 @@ void gameUpdate() {
 }
 
 void update() {
-    ImGui::GetIO().DeltaTime = (float)frameTime;
+    ImGui::GetIO().DeltaTime = frameTime;
     ImGui::GetIO().DisplaySize = ImVec2((float)renderW, (float)renderH);
     ImGui::NewFrame();
     if (ImGui::IsKeyDown(ImGuiKey_F4) && ImGui::IsKeyDown(ImGuiKey_LeftAlt)) {
@@ -3872,7 +3982,7 @@ void update() {
             }
         }
 #endif
-        if (showCollisionGeometries) {
+        if (showRigidActorsGeometries) {
             const PxRenderBuffer& physxRenderBuffer = pxScene->getRenderBuffer();
             for (PxU32 i = 0; i < physxRenderBuffer.getNbPoints(); i++) {
                 const PxDebugPoint& pxPoint = physxRenderBuffer.getPoints()[i];
@@ -4062,7 +4172,7 @@ void d3dRender() {
             float3 dir = cylinder.p1 - cylinder.p0;
             float s = cylinder.radius / scaleFactor;
             float sY = dir.length() / scaleFactor;
-            float4 r = quaternionBetween(float3(0, 0.001f, 0), dir);
+            float4 r = quaternionBetween(float3(0, 0.01f, 0), dir);
             XMMatrix transformMat = XMMatrixAffineTransformation(XMVectorSet(s, sY, s, 0), xmVectorZero, r.toXMVector(), cylinder.p0.toXMVector());
             modelInstanceAddBLASInstancesToTLAS(modelInstanceCylinder, transformMat, ObjectTypeNone, 0, BLASInstanceFlagForcedColor, 0xff000000);
         }
@@ -4506,7 +4616,7 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
         QueryPerformanceCounter(&perfCounterStart);
         ZoneScoped;
         d3dCompileShaders();
-        // updateGameUpdateLiveProc();
+        liveReloadFuncs();
         mouseDeltaRaw = {0, 0};
         mouseWheel = 0;
         controllerGetStateXInput();
@@ -4520,7 +4630,7 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
         frameCount += 1;
         FrameMark;
         QueryPerformanceCounter(&perfCounterEnd);
-        frameTime = (double)(perfCounterEnd.QuadPart - perfCounterStart.QuadPart) / (double)perfFrequency.QuadPart;
+        frameTime = (float)((double)(perfCounterEnd.QuadPart - perfCounterStart.QuadPart) / (double)perfFrequency.QuadPart);
     }
     worldSave();
     worldWriteSave(saveDir / "save.yaml");
