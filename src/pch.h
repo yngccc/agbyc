@@ -52,6 +52,7 @@ using DirectX::XMVectorMultiply;
 using DirectX::XMVector3Normalize;
 using DirectX::XMVector3Rotate;
 using DirectX::XMVector3Transform;
+using DirectX::XMVector3Unproject;
 using DirectX::XMMatrixIdentity;
 using DirectX::XMMatrixScaling;
 using DirectX::XMMatrixAffineTransformation;

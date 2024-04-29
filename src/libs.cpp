@@ -16,5 +16,6 @@
 
 #include <rapidyaml/rapidyaml-0.5.0.cpp>
 
+#define TRACY_ENABLE
 #include <tracy/tracyclient.cpp>
 

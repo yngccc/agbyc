@@ -1,7 +1,7 @@
 #include "shared.hlsli"
 #include "../structsHLSL.h"
 
-    GlobalRootSignature
+GlobalRootSignature
 globalRootSig = {
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED),"
 	"StaticSampler(s0, filter = FILTER_ANISOTROPIC, addressU = TEXTURE_ADDRESS_MIRROR, addressV = TEXTURE_ADDRESS_MIRROR, mipLODBias = 0, maxAnisotropy = 16)"
@@ -9,13 +9,13 @@ globalRootSig = {
 
 sampler sampler0 : register(s0);
 
-RaytracingPipelineConfig pipelineConfig = { 3 /*MaxTraceRecursionDepth*/ };
+RaytracingPipelineConfig pipelineConfig = {3 /*MaxTraceRecursionDepth*/};
 
-RaytracingShaderConfig shaderConfig = { 16 /*UINT MaxPayloadSizeInBytes*/, 8 /*UINT MaxAttributeSizeInBytes*/ };
+RaytracingShaderConfig shaderConfig = {16 /*UINT MaxPayloadSizeInBytes*/, 8 /*UINT MaxAttributeSizeInBytes*/};
 
-TriangleHitGroup primaryRayHitGroup = { "primaryRayAnyHit", "primaryRayClosestHit" };
+TriangleHitGroup primaryRayHitGroup = {"primaryRayAnyHit", "primaryRayClosestHit"};
 
-TriangleHitGroup secondaryRayHitGroup = { "", "secondaryRayClosestHit" };
+TriangleHitGroup secondaryRayHitGroup = {"", "secondaryRayClosestHit"};
 
 struct PrimaryRayPayload {
     float3 color;
@@ -95,7 +95,7 @@ void primaryRayClosestHit(inout PrimaryRayPayload payload, in BuiltInTriangleInt
     uint baseColorTextureWidth, baseColorTextureHeight;
     baseColorTexture.GetDimensions(baseColorTextureWidth, baseColorTextureHeight);
     float fovy = RADIAN(50);
-    float alpha = atan(2.0 * tan(fovy * 0.5) / (float) baseColorTextureHeight);
+    float alpha = atan(2.0 * tan(fovy * 0.5) / (float)baseColorTextureHeight);
     float radius = RayTCurrent() * tan(alpha);
     float2 texGradient1, texGradient2;
     anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGradient1, texGradient2);
