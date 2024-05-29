@@ -6,24 +6,40 @@
 
 #define HDR_SCALE_FACTOR (80.0f / 10000.0f)
 
-#define RENDER_TEXTURE_SRV_DESCRIPTOR(name) Texture2D<float4> name = ResourceDescriptorHeap[0];
-#define RENDER_TEXTURE_UAV_DESCRIPTOR(name) RWTexture2D<float4> name = ResourceDescriptorHeap[1];
-#define DEPTH_TEXTURE_UAV_DESCRIPTOR(name) RWTexture2D<float> name = ResourceDescriptorHeap[2];
-#define MOTION_VECTOR_TEXTURE_UAV_DESCRIPTOR(name) RWTexture2D<float2> name = ResourceDescriptorHeap[3];
-#define RENDER_INFO_DESCRIPTOR(name) ConstantBuffer<RenderInfo> name = ResourceDescriptorHeap[4];
-#define BVH_DESCRIPTOR(name) RaytracingAccelerationStructure name = ResourceDescriptorHeap[5];
-#define BLAS_INSTANCES_INFOS_DESCRIPTOR(name) StructuredBuffer<BLASInstanceInfo> name = ResourceDescriptorHeap[6];
-#define BLAS_GEOMETRIES_INFOS_DESCRIPTOR(name) StructuredBuffer<BLASGeometryInfo> name = ResourceDescriptorHeap[7];
-#define SKYBOX_TEXTURE_DESCRIPTOR(name) Texture2D<float3> name = ResourceDescriptorHeap[8];
-#define IMGUI_IMAGE_DESCRIPTOR(name) Texture2D<float4> name = ResourceDescriptorHeap[9];
-#define DIRECT_WRITE_IMAGE_DESCRIPTOR(name) Texture2D<float4> name = ResourceDescriptorHeap[10];
-#define COLLISION_QUERIES_DESCRIPTOR(name) StructuredBuffer<CollisionQuery> name = ResourceDescriptorHeap[11];
-#define COLLISION_QUERY_RESULTS_DESCRIPTOR(name) RWStructuredBuffer<CollisionQueryResult> name = ResourceDescriptorHeap[12];
+uint jenkinsHash(uint x) {
+    x += x << 10;
+    x ^= x >> 6;
+    x += x << 3;
+    x ^= x >> 11;
+    x += x << 15;
+    return x;
+}
+
+uint initRNG(uint2 pixel, uint2 resolution, uint frame) {
+    uint rngState = dot(pixel, uint2(1, resolution.x)) ^ jenkinsHash(frame);
+    return jenkinsHash(rngState);
+}
+
+float uintToFloat(uint x) {
+    return asfloat(0x3f800000 | (x >> 9)) - 1.f;
+}
+
+uint xorshift(inout uint rngState) {
+    rngState ^= rngState << 13;
+    rngState ^= rngState >> 17;
+    rngState ^= rngState << 5;
+    return rngState;
+}
+
+float rand(inout uint rngState) {
+    return uintToFloat(xorshift(rngState));
+}
 
 float srgbToLinear(float e) {
     if (e <= 0.04045) {
         return e / 12.92;
-    } else{
+    }
+    else {
         return pow((e + 0.055) / 1.055, 2.4);
     }
 }
@@ -35,7 +51,8 @@ float3 srgbToLinear(float3 srgb) {
 float linearToSRGB(float e) {
     if (e <= 0.0031308) {
         return e * 12.92;
-    } else{
+    }
+    else {
         return 1.055 * pow(e, 1.0 / 2.4) - 0.055;
     }
 }

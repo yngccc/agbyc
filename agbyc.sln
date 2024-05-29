@@ -8,14 +8,11 @@ EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
-		Profile|x64 = Profile|x64
 		Release|x64 = Release|x64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{74D2630A-BFC0-40FA-BD11-C1E42B360507}.Debug|x64.ActiveCfg = Debug|x64
 		{74D2630A-BFC0-40FA-BD11-C1E42B360507}.Debug|x64.Build.0 = Debug|x64
-		{74D2630A-BFC0-40FA-BD11-C1E42B360507}.Profile|x64.ActiveCfg = Profile|x64
-		{74D2630A-BFC0-40FA-BD11-C1E42B360507}.Profile|x64.Build.0 = Profile|x64
 		{74D2630A-BFC0-40FA-BD11-C1E42B360507}.Release|x64.ActiveCfg = Release|x64
 		{74D2630A-BFC0-40FA-BD11-C1E42B360507}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection

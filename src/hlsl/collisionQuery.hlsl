@@ -1,10 +1,19 @@
 #include "shared.hlsli"
 #include "../structsHLSL.h"
 
-GlobalRootSignature globalRootSig = { "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED)" };
-RaytracingPipelineConfig pipelineConfig = { 1 };
-RaytracingShaderConfig shaderConfig = { 16, 8 };
-TriangleHitGroup hitGroup = { "", "closestHit" };
+GlobalRootSignature
+globalRootSig = { 
+    "RootFlags(0),"
+    "SRV(t0), SRV(t1), UAV(u0)",
+};
+
+RaytracingAccelerationStructure bvh : register(t0);
+StructuredBuffer<CollisionQuery> collisionQueries : register(t1);
+RWStructuredBuffer<CollisionQueryResult> collisionQueryResults : register(u0);
+
+RaytracingPipelineConfig pipelineConfig = {1};
+RaytracingShaderConfig shaderConfig = {16, 8};
+TriangleHitGroup hitGroup = {"", "closestHit"};
 
 struct RayPayload {
     CollisionQueryResult collisionQueryResult;
@@ -12,10 +21,6 @@ struct RayPayload {
 
 [shader("raygeneration")]
 void rayGen() {
-    BVH_DESCRIPTOR(bvh);
-    COLLISION_QUERIES_DESCRIPTOR(collisionQueries);
-    COLLISION_QUERY_RESULTS_DESCRIPTOR(collisionQueryResults);
-    
     uint collisionQueryIndex = DispatchRaysIndex().x;
     CollisionQuery query = collisionQueries[collisionQueryIndex];
     RayPayload rayPayload;

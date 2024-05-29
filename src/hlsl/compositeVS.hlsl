@@ -2,11 +2,14 @@
 #include "../structsHLSL.h"
 
 #define rootSig \
-"RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED), " \
-"RootConstants(num32BitConstants=1, b0), "\
+"RootFlags(0)," \
+"RootConstants(num32BitConstants=1, b0)," \
+"DescriptorTable(SRV(t0), SRV(t1), visibility = SHADER_VISIBILITY_PIXEL)," \
 "StaticSampler(s0, filter = FILTER_MIN_MAG_MIP_LINEAR, addressU = TEXTURE_ADDRESS_CLAMP, addressV = TEXTURE_ADDRESS_CLAMP)"
 
 uint flags : register(b0);
+Texture2D<float3> renderTexture : register(t0);
+Texture2D<float4> directWriteImage : register(t1);
 sampler textureSampler : register(s0);
 
 struct VSOutput {
@@ -25,15 +28,13 @@ VSOutput vertexShader(uint vertexID : SV_VertexID) {
 [RootSignature(rootSig)]
 float4 pixelShader(VSOutput vsOutput) : SV_TARGET {
     float3 output;
-    RENDER_TEXTURE_SRV_DESCRIPTOR(renderTexture);
-    float4 renderTextureColor = renderTexture.Sample(textureSampler, vsOutput.texCoord);
+    float3 renderTextureColor = renderTexture.Sample(textureSampler, vsOutput.texCoord);
     bool directWrite = flags & CompositeFlagDirectWrite;
     if (directWrite) {
-        DIRECT_WRITE_IMAGE_DESCRIPTOR(directWriteImage);
         float4 directWriteColor = directWriteImage.Sample(textureSampler, vsOutput.texCoord);
-        output = renderTextureColor.rgb * (1 - directWriteColor.a) + directWriteColor.rgb * directWriteColor.a;
+        output = renderTextureColor * (1 - directWriteColor.a) + directWriteColor.rgb * directWriteColor.a;
     } else {
-        output = renderTextureColor.rgb;
+        output = renderTextureColor;
     }
     bool hdr = flags & CompositeFlagHDR;
     if (hdr) {
@@ -42,5 +43,5 @@ float4 pixelShader(VSOutput vsOutput) : SV_TARGET {
     } else {
         output = linearToSRGB(output);
     }
-    return float4(output, 1);
+    return float4(output, 0);
 }

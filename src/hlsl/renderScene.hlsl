@@ -4,12 +4,21 @@
 GlobalRootSignature
 globalRootSig = {
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED),"
+    "CBV(b0), SRV(t0), SRV(t1), SRV(t2),"
+    "DescriptorTable(UAV(u0), UAV(u1), SRV(t3)),"
 	"StaticSampler(s0, filter = FILTER_ANISOTROPIC, addressU = TEXTURE_ADDRESS_MIRROR, addressV = TEXTURE_ADDRESS_MIRROR, mipLODBias = 0, maxAnisotropy = 16)"
 };
 
-sampler sampler0 : register(s0);
+RWTexture2D<float4> renderTexture : register(u0);
+RWTexture2D<float> depthTexture : register(u1);
+ConstantBuffer<RenderInfo> renderInfo : register(b0);
+RaytracingAccelerationStructure bvh : register(t0);
+StructuredBuffer<BLASInstanceInfo> blasInstancesInfos : register(t1);
+StructuredBuffer<BLASGeometryInfo> blasGeometriesInfos : register(t2);
+Texture2D<float3> skyboxTexture : register(t3);
+sampler textureSampler : register(s0);
 
-RaytracingPipelineConfig pipelineConfig = {3 /*MaxTraceRecursionDepth*/};
+RaytracingPipelineConfig pipelineConfig = {4 /*MaxTraceRecursionDepth*/};
 
 RaytracingShaderConfig shaderConfig = {16 /*UINT MaxPayloadSizeInBytes*/, 8 /*UINT MaxAttributeSizeInBytes*/};
 
@@ -32,39 +41,27 @@ void rayGen() {
     uint2 pixelIndex = DispatchRaysIndex().xy;
     float2 pixelCoord = ((float2(pixelIndex) + 0.5f) / float2(imageSize)) * 2.0f - 1.0f;
 
-    RENDER_TEXTURE_UAV_DESCRIPTOR(renderTexture);
-    DEPTH_TEXTURE_UAV_DESCRIPTOR(depthTexture);
-    RENDER_INFO_DESCRIPTOR(renderInfo);
-    BVH_DESCRIPTOR(bvh);
-
     RayDesc primaryRay = pinholeCameraRay(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjectMat);
     PrimaryRayPayload primaryRayPayload;
     primaryRayPayload.color = float3(0, 0, 0);
     primaryRayPayload.depth = 0;
     TraceRay(bvh, RAY_FLAG_NONE, 0xff, 0, 0, 0, primaryRay, primaryRayPayload);
-    renderTexture[pixelIndex] = float4(primaryRayPayload.color, 1);
+    renderTexture[pixelIndex] = float4(primaryRayPayload.color, 0);
     depthTexture[pixelIndex] = primaryRayPayload.depth;
 }
 
 [shader("miss")]
 void primaryRayMiss(inout PrimaryRayPayload payload) {
-    SKYBOX_TEXTURE_DESCRIPTOR(skyboxTexture);
     float3 viewDir = WorldRayDirection();
     float theta = atan2(viewDir.z, viewDir.x);
     float phi = acos(viewDir.y);
-    float3 skyboxColor = skyboxTexture.SampleLevel(sampler0, float2((theta + PI) / (2.0 * PI), phi / PI), 0);
-    payload.color += skyboxColor * 0.2f;
+    float3 skyboxColor = skyboxTexture.SampleLevel(textureSampler, float2((theta + PI) / (2.0 * PI), phi / PI), 0);
+    payload.color += skyboxColor * 0.2;
     payload.depth = 1.0;
 }
 
-    //if (blasInstanceInfo.flags & BLASInstanceFlagSelected && barycentricsOnEdge(trigAttribs.barycentrics, 0.02)) {
-    //    payload.color = float3(0, 1, 0);
-    //}
-
 [shader("closesthit")]
 void primaryRayClosestHit(inout PrimaryRayPayload payload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
-    BLAS_INSTANCES_INFOS_DESCRIPTOR(blasInstancesInfos);
-    BLAS_GEOMETRIES_INFOS_DESCRIPTOR(blasGeometriesInfos);
     BLASInstanceInfo blasInstanceInfo = blasInstancesInfos[InstanceIndex()];
     BLASGeometryInfo blasGeometryInfo = blasGeometriesInfos[blasInstanceInfo.blasGeometriesOffset + GeometryIndex()];
     
@@ -99,39 +96,36 @@ void primaryRayClosestHit(inout PrimaryRayPayload payload, in BuiltInTriangleInt
     float radius = RayTCurrent() * tan(alpha);
     float2 texGradient1, texGradient2;
     anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGradient1, texGradient2);
-        
+
     float3 baseColor;
+    float3 lightDir = normalize(float3(1, 1, 1));
     if (blasInstanceInfo.flags & BLASInstanceFlagForcedColor) {
         baseColor = float3(blasInstanceInfo.color & 0xff000000, blasInstanceInfo.color & 0x00ff0000, blasInstanceInfo.color & 0x0000ff00);
         payload.color += baseColor;
-    } else {
-        baseColor = baseColorTexture.SampleGrad(sampler0, uv, texGradient1, texGradient2) * blasGeometryInfo.baseColor;
-        float3 lightDir = normalize(float3(1, 1, 1));
+    }
+    else {
+        baseColor = baseColorTexture.SampleGrad(textureSampler, uv, texGradient1, texGradient2) * blasGeometryInfo.baseColor;
         float ndotl = dot(normal, lightDir);
         payload.color += baseColor * ndotl;
     }
 
-    RENDER_INFO_DESCRIPTOR(renderInfo);
     float4 ndc = mul(renderInfo.cameraViewProjectMat, float4(position, 1));
     payload.depth = ndc.z / ndc.w;
     
-    //BVH_DESCRIPTOR(bvh);
-    //SecondaryRayPayload rayPayload;
-    //RayDesc shadowRay;
-    //shadowRay.Origin = position + normal * 0.005;
-    //shadowRay.TMin = 0.0f;
-    //shadowRay.TMax = 1000.0f;
-    //shadowRay.Direction = lightDir;
-    //TraceRay(bvh, RAY_FLAG_NONE, 0xff, 1, 0, 1, shadowRay, rayPayload);
-    //if (rayPayload.hit) {
-    //    payload.color *= 0.1;
-    //}
+    SecondaryRayPayload rayPayload;
+    RayDesc shadowRay;
+    shadowRay.Origin = position + normal * 0.008;
+    shadowRay.TMin = 0.0f;
+    shadowRay.TMax = 1000.0f;
+    shadowRay.Direction = lightDir;
+    TraceRay(bvh, RAY_FLAG_NONE, 0xff, 1, 0, 1, shadowRay, rayPayload);
+    if (rayPayload.hit) {
+        payload.color *= 0.1;
+    }
 }
 
 [shader("anyhit")]
 void primaryRayAnyHit(inout PrimaryRayPayload payload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
-    BLAS_INSTANCES_INFOS_DESCRIPTOR(blasInstancesInfos);
-    BLAS_GEOMETRIES_INFOS_DESCRIPTOR(blasGeometriesInfos);
     BLASInstanceInfo blasInstanceInfo = blasInstancesInfos[InstanceIndex()];
     BLASGeometryInfo blasGeometryInfo = blasGeometriesInfos[blasInstanceInfo.blasGeometriesOffset + GeometryIndex()];
 
@@ -149,8 +143,9 @@ void primaryRayAnyHit(inout PrimaryRayPayload payload, in BuiltInTriangleInterse
     float3 baseColor;
     if (blasInstanceInfo.flags & BLASInstanceFlagForcedColor) {
         baseColor = float3(blasInstanceInfo.color & 0xff000000, blasInstanceInfo.color & 0x00ff0000, blasInstanceInfo.color & 0x0000ff00);
-    } else {
-        baseColor = baseColorTexture.SampleLevel(sampler0, uv, 0) * blasGeometryInfo.baseColor;
+    }
+    else {
+        baseColor = baseColorTexture.SampleLevel(textureSampler, uv, 0) * blasGeometryInfo.baseColor;
     }
     payload.color += (baseColor * 0.25);
     

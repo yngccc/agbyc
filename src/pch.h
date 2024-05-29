@@ -1,9 +1,11 @@
 #pragma once
 
+#include <cassert>
 #include <algorithm>
 #include <array>
 #include <filesystem>
 #include <format>
+#include <iostream>
 #include <fstream>
 #include <list>
 #include <span>
@@ -11,7 +13,9 @@
 #include <streambuf>
 #include <string>
 #include <vector>
-#include <cassert>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -22,6 +26,8 @@
 #include <shlobj.h>
 #include <cderr.h>
 #include <commdlg.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 
 #include <d3dx12.h>
 #include <dxgi1_6.h>
@@ -36,6 +42,9 @@
 #include <directxmath.h>
 #include <directxtex.h>
 #include <directxcollision.h>
+
+#undef near
+#undef far
 
 typedef DirectX::XMMATRIX XMMatrix;
 typedef DirectX::XMVECTOR XMVector;

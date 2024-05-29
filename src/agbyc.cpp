@@ -20,10 +20,10 @@
 
 #define TRACY_ENABLE
 #include <tracy/tracy/tracy.hpp>
-
 #define EDITOR
 #define LIVE_RELOAD_SHADERS
 #define LIVE_RELOAD_FUNCS
+#define PHYSX_PVD
 
 typedef int8_t int8;
 typedef int16_t int16;
@@ -42,13 +42,6 @@ static const XMMatrix xmMatrixIdentity = XMMatrixIdentity();
 static const XMVector xmVectorZero = XMVectorSet(0, 0, 0, 0);
 static const XMVector xmVectorOne = XMVectorSet(1, 1, 1, 1);
 static const XMVector xmQuatIdentity = XMVectorSet(0, 0, 0, 1);
-
-static const float scaleFactor = 0.1f;
-
-constexpr float meters(float n) { return n * scaleFactor; };
-constexpr float decimeters(float n) { return n * 0.1f * scaleFactor; };
-constexpr float centimeters(float n) { return n * 0.01f * scaleFactor; };
-constexpr float millimeters(float n) { return n * 0.001f * scaleFactor; };
 
 constexpr float radian(float d) { return d * (pi / 180.0f); }
 constexpr float degree(float r) { return r * (180.0f / pi); }
@@ -149,6 +142,7 @@ struct float3 {
     float3(PxVec3 p) : x(p.x), y(p.y), z(p.z) {}
     float3(PxVec3d p) : x((float)p.x), y((float)p.y), z((float)p.z) {}
     void operator=(XMVector v) { x = XMVectorGetX(v), y = XMVectorGetY(v), z = XMVectorGetZ(v); }
+    void operator=(PxVec3 v) { x = v.x, y = v.y, z = v.z; }
     bool operator==(float3 v) const { return x == v.x && y == v.y && z == v.z; }
     bool operator!=(float3 v) const { return x != v.x || y != v.y || z != v.z; }
     float& operator[](int i) { return (&x)[i]; }
@@ -198,6 +192,8 @@ struct float4 {
     float4(const float* v) : x(v[0]), y(v[1]), z(v[2]), w(v[3]) {}
     float4(XMVector v) : x(XMVectorGetX(v)), y(XMVectorGetY(v)), z(XMVectorGetZ(v)), w(XMVectorGetW(v)) {}
     void operator=(XMVector v) { x = XMVectorGetX(v), y = XMVectorGetY(v), z = XMVectorGetZ(v), w = XMVectorGetW(v); }
+    void operator=(PxVec4 v) { x = v.x, y = v.y, z = v.z, w = v.w; }
+    void operator=(PxQuat v) { x = v.x, y = v.y, z = v.z, w = v.w; }
     void operator=(float3 v) { x = v.x, y = v.y, z = v.z, w = 0; }
     float& operator[](int i) { return (&x)[i]; }
     float operator[](int i) const { return (&x)[i]; }
@@ -261,7 +257,8 @@ XMVector quaternionBetween(float3 v1, float3 v2) {
     if (((c / k) - (-1.0f)) < 0.000001f) {
         float3 u = v1.orthogonal().normalize();
         return XMVectorSet(u.x, u.y, u.z, 0);
-    } else {
+    }
+    else {
         float3 u = v1.cross(v2);
         return XMQuaternionNormalize(XMVectorSet(u.x, u.y, u.z, c + k));
     }
@@ -324,7 +321,8 @@ bool intersectSegmentPlane(float3 a, float3 b, Plane p, float* t, float3* q) {
     if (*t >= 0.0f && *t <= 1.0f) {
         *q = a + ab * t;
         return true;
-    } else {
+    }
+    else {
         return false;
     }
 }
@@ -335,7 +333,8 @@ bool intersectRayAABB(float3 p, float3 d, AABB a, float* tmin, float3* q) {
     for (int i = 0; i < 3; i++) {
         if (fabs(d[i]) < 0.00001f) {
             if (p[i] < a.min[i] || p[i] > a.max[i]) return false;
-        } else {
+        }
+        else {
             float ood = 1.0f / d[i];
             float t1 = (a.min[i] - p[i]) * ood;
             float t2 = (a.max[i] - p[i]) * ood;
@@ -414,46 +413,48 @@ void showConsole() {
 }
 
 template <typename T>
-struct Handle {
+struct ArenaElementHandle {
     uint index;
     uint generation;
 };
 
 template <typename T>
-struct ArrayElem {
-    T elem;
+struct ArenaElement {
+    T element;
+    bool valid;
     uint generation;
 };
 
 template <typename T>
-struct Array {
-    std::vector<ArrayElem<T>> elems;
+struct Arena {
+    std::vector<ArenaElement<T>> elements;
     std::stack<uint> freeSlots;
 
-    Handle<T> add(const T& newElem) {
+    ArenaElementHandle<T> add(const T& newElement) {
         if (freeSlots.empty()) {
-            elems.push_back(ArrayElem{newElem, 1});
-            return Handle<T>{elems.size() - 1, 1};
-        } else {
+            elements.push_back(ArenaElement{newElement, true, 0});
+            return ArenaElementHandle<T>{(uint)(elements.size() - 1), 0};
+        }
+        else {
             uint index = freeSlots.top();
             freeSlots.pop();
-            elems[index].elem = newElem;
-            return Handle<T>{index, elems[index].generation};
+            elements[index].element = newElement;
+            elements[index].valid = true;
+            return ArenaElementHandle<T>{index, elements[index].generation};
         }
     }
     void remove(uint index) {
-        for (uint freeSlotIndex : freeSlots) {
-            if (freeSlotIndex == index) {
-                return;
-            }
+        if (elements[index].valid) {
+            elements[index].generation += 1;
+            elements[index].valid = false;
+            freeSlots.push(index);
         }
-        elems[index].generation += 1;
-        freeSlots.push(index);
     }
-    T* get(Handle<T> handle) {
-        if (elems[handle.index].generation == handle.generation) {
-            return &elems[handle.index].elem;
-        } else {
+    T* get(ArenaElementHandle<T> handle) {
+        if (elements[handle.index].generation == handle.generation) {
+            return &elements[handle.index].element;
+        }
+        else {
             return nullptr;
         }
     }
@@ -491,6 +492,12 @@ struct D3DDescriptor {
     D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle;
 };
 
+struct D3DFence {
+    ID3D12Fence* fence;
+    HANDLE event;
+    uint64 value;
+};
+
 struct D3D {
     IDXGIFactory7* dxgiFactory;
     IDXGIOutput6* dxgiOutput;
@@ -498,30 +505,20 @@ struct D3D {
     std::vector<DisplayMode> displayModes;
     ID3D12Device5* device;
 
-    // bool gpuUploadHeapSupported;
-
     ID3D12CommandQueue* graphicsQueue;
     ID3D12CommandAllocator* graphicsCmdAllocator;
     ID3D12GraphicsCommandList4* graphicsCmdList;
 
-    ID3D12Fence* renderDoneFence;
-    HANDLE renderDoneFenceEvent;
-    uint64 renderDoneFenceValue;
+    D3DFence transferFence;
+    D3DFence renderFence;
+    D3DFence collisionQueriesFence;
 
-    ID3D12Fence* collisionQueriesFence;
-    HANDLE collisionQueriesFenceEvent;
-    uint64 collisionQueriesFenceValue;
-
-    ID3D12CommandQueue* transferQueue;
-    ID3D12CommandAllocator* transferCmdAllocator;
-    ID3D12GraphicsCommandList4* transferCmdList;
-
-    ID3D12Fence* transferDoneFence;
-    HANDLE transferDoneFenceEvent;
-    uint64 transferDoneFenceCounter;
+    // ID3D12CommandQueue* transferQueue;
+    // ID3D12CommandAllocator* transferCmdAllocator;
+    // ID3D12GraphicsCommandList4* transferCmdList;
 
     IDXGISwapChain4* swapChain;
-    DXGI_FORMAT swapChainFormat;
+    const DXGI_FORMAT swapChainFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
     ID3D12Resource* swapChainImages[2];
     D3D12_CPU_DESCRIPTOR_HANDLE swapChainImageRTVDescriptors[2];
     D3D12_CPU_DESCRIPTOR_HANDLE swapChainImageUAVDescriptors[2];
@@ -537,23 +534,28 @@ struct D3D {
 
     D3D12MA::Allocation* stagingBuffer;
     uint8* stagingBufferPtr;
-    uint64 stagingBufferOffset = 0;
+    uint64 stagingBufferOffset;
 
     D3D12MA::Allocation* constantsBuffer;
     uint8* constantsBufferPtr;
-    uint32 constantsBufferOffset = 0;
+    uint32 constantsBufferOffset;
 
     D3D12MA::Allocation* renderTexture;
     D3D12MA::Allocation* renderTexturePrevFrame;
-    DXGI_FORMAT renderTextureFormat;
+    const DXGI_FORMAT renderTextureFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+    D3D12MA::Allocation* renderAccumulationTexture;
+    const DXGI_FORMAT renderAccumulationTextureFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    uint renderAccumulationCount;
 
     D3D12MA::Allocation* depthTexture;
-    DXGI_FORMAT depthTextureFormat;
+    const DXGI_FORMAT depthTextureFormat = DXGI_FORMAT_R32_FLOAT;
 
     D3D12MA::Allocation* motionVectorTexture;
-    DXGI_FORMAT motionVectorTextureFormat;
+    const DXGI_FORMAT motionVectorTextureFormat = DXGI_FORMAT_R32G32_FLOAT;
 
     D3D12MA::Allocation* directWriteTexture;
+    const DXGI_FORMAT directWriteTextureFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
     D3D12MA::Allocation* imguiTexture;
     D3D12MA::Allocation* imguiVertexBuffer;
@@ -594,6 +596,13 @@ struct D3D {
     void* renderScenePrimaryRayHitGroupID;
     void* renderSceneSecondaryRayMissID;
     void* renderSceneSecondaryRayHitGroupID;
+
+    ID3D12StateObject* pathTracerPSO;
+    ID3D12StateObjectProperties* pathTracerPSOProps;
+    ID3D12RootSignature* pathTracerRootSig;
+    void* pathTracerRayGenID;
+    void* pathTracerRayMissID;
+    void* pathTracerRayHitGroupID;
 
     ID3D12StateObject* collisionQueryPSO;
     ID3D12StateObjectProperties* collisionQueryProps;
@@ -690,6 +699,7 @@ struct ModelMesh {
     std::vector<ModelPrimitive> primitives;
     std::vector<Vertex> vertices;
     std::vector<uint> indices;
+    uint descriptorsHeapOffset;
     D3D12MA::Allocation* verticesBuffer;
     D3D12MA::Allocation* indicesBuffer;
     D3D12MA::Allocation* blas;
@@ -766,9 +776,8 @@ struct Model {
     std::vector<ModelMaterial> materials;
     std::vector<ModelTexture> textures;
     std::vector<ModelImage> images;
-    std::vector<PxShape*> collisionShapes;
-    // PxConvexMesh* physxConvexMesh;
-    // PxTriangleMesh* physxTriangleMesh;
+    PxConvexMesh* convexMesh;
+    PxTriangleMesh* triangleMesh;
 };
 
 struct ModelInstanceSkin {
@@ -808,8 +817,8 @@ struct CameraEditor {
     float2 pitchYaw;
     float fovVertical = 50.0f;
     bool moving;
-    float moveSpeed = meters(5);
-    float moveSpeedMax = meters(500);
+    float moveSpeed = 5;
+    float moveSpeedMax = 500;
 };
 
 enum PlayerState {
@@ -828,7 +837,7 @@ struct Player {
     Transform transform;
     float walkSpeed;
     float runSpeed;
-    float3 movement;
+    float3 velocity;
     PlayerState state;
     uint32 idleAnimationIndex;
     uint32 walkAnimationIndex;
@@ -887,7 +896,6 @@ struct EditorUndo {
 enum EditorMode {
     EditorModeFreeCam,
     EditorModeEditObject,
-    EditorModeEditModel,
 };
 
 struct Editor {
@@ -896,15 +904,13 @@ struct Editor {
     CameraEditor editCamera;
     ObjectType selectedObjectType = ObjectTypeNone;
     uint selectedObjectIndex = UINT_MAX;
-    bool selectedObjectXRay = true;
-    // PxShape* selectedObjectRigidActorShape;
+    bool selectedObjectXRay = false;
     uint renameObjectIndex = UINT_MAX;
     ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
     ImGuizmo::MODE gizmoMode = ImGuizmo::LOCAL;
     bool beginDragDropGameObject;
     GameObject dragDropGameObject;
     uint selectedModelIndex = UINT_MAX;
-    PxShape* selectedModelCollisionShape;
     std::stack<EditorUndo> undos;
 };
 
@@ -918,13 +924,13 @@ static uint mouseSelectX = UINT_MAX;
 static uint mouseSelectY = UINT_MAX;
 static int2 mouseDeltaRaw = {0, 0};
 static float mouseWheel = 0;
-static float mouseSensitivity = 0.2f;
+static float mouseSensitivity = 0.001f;
 static float controllerSensitivity = 2.0f;
 
 static WindowMode windowMode = WindowModeWindowed;
-static uint32 windowX = 0, windowY = 0;
-static uint32 windowW = 1920, windowH = 1080;
-static uint32 renderW = 1920, renderH = 1080;
+static int windowX = 0, windowY = 0;
+static int windowW = 1920, windowH = 1080;
+static int renderW = 1920, renderH = 1080;
 static DXGI_RATIONAL refreshRate = {60, 1};
 static bool hdr = false;
 static Window window = {};
@@ -945,10 +951,12 @@ static ModelInstance modelInstanceSphere;   /* diameter 1 meter */
 static ModelInstance modelInstanceCube;     /* 1 meter w/h/d */
 static ModelInstance modelInstanceCylinder; /* length 1 meter, diameter 1 meter */
 static Player player;
-static std::vector<GameObject> gameObjects;
+static const uint gameObjectsMaxCount = 10000;
+static std::vector<GameObject> gameObjects = [] { std::vector<GameObject> gameObjects; gameObjects.reserve(gameObjectsMaxCount); return gameObjects; }();
+static std::vector<GameObject*> gameObjectsWithDynamicRigidBody;
 static std::vector<Light> lights;
 
-static std::vector<D3D12_RAYTRACING_INSTANCE_DESC> blasInstancesBuildInfos;
+static std::vector<D3D12_RAYTRACING_INSTANCE_DESC> blasInstancesDescs;
 static std::vector<BLASInstanceInfo> blasInstancesInfos;
 static std::vector<BLASGeometryInfo> blasGeometriesInfos;
 
@@ -956,9 +964,7 @@ static std::vector<Sphere> debugSpheres;
 static std::vector<Line> debugLines;
 static std::vector<Triangle> debugTriangles;
 
-// static std::vector<CircleScreenSpace> debugCircles;
-// static std::vector<LineScreenSpace> debugLines;
-// static std::vector<TriangleScreenSpace> debugTriangles;
+static bool pathTracer;
 
 static XMMatrix cameraViewMat;
 static XMMatrix cameraViewMatInverseTranspose;
@@ -966,8 +972,8 @@ static XMMatrix cameraProjectMat;
 static XMMatrix cameraViewProjectMat;
 static XMMatrix cameraViewProjectMatInverse;
 
-static bool showMenu = false;
-static bool showRigidActorsGeometries = true;
+static bool showMenu;
+static bool showRigidActorsGeometries;
 
 static PxDefaultAllocator pxAllocator;
 static PxDefaultErrorCallback pxErrorCallback;
@@ -975,8 +981,8 @@ static PxFoundation* pxFoundation;
 static PxPhysics* pxPhysics;
 static PxDefaultCpuDispatcher* pxDispatcher;
 static PxScene* pxScene;
-static float pxAccumulatedTime = 0.0;
 static float pxTimeStep = 1.0f / 60.0f;
+static float pxTimeAccumulated = 0.0f;
 static PxMaterial* pxDefaultMaterial;
 static PxControllerManager* pxControllerManager;
 
@@ -1000,9 +1006,10 @@ static std::filesystem::path saveDir = [] {
     std::filesystem::path documentFolderPath(documentFolderPathStr);
     CoTaskMemFree(documentFolderPathStr);
     documentFolderPath = documentFolderPath / "AGBY_GAME_SAVES";
-    if (!std::filesystem::exists(documentFolderPath)) {
-        bool createSuccess = std::filesystem::create_directory(documentFolderPath);
-        assert(createSuccess);
+    std::error_code err;
+    bool createSuccess = std::filesystem::create_directory(documentFolderPath, err);
+    if (!createSuccess) {
+        assert(std::filesystem::exists(documentFolderPath));
     }
     return documentFolderPath;
 }();
@@ -1090,18 +1097,27 @@ void windowClipCursor(bool clip) {
         }
         RECT rect = {cursorP.x, cursorP.y, cursorP.x, cursorP.y};
         ClipCursor(&rect);
-    } else {
+    }
+    else {
         ClipCursor(nullptr);
     }
 }
 
 void windowHideCursor(bool hide) {
-    if (hide) {
-        windowClipCursor(true);
-        ShowCursor(false);
-    } else {
-        windowClipCursor(false);
-        ShowCursor(true);
+    CURSORINFO cursorInfo = {.cbSize = sizeof(CURSORINFO)};
+    if (GetCursorInfo(&cursorInfo)) {
+        if (hide) {
+            windowClipCursor(true);
+            if (cursorInfo.flags == CURSOR_SHOWING) {
+                ShowCursor(false);
+            }
+        }
+        else {
+            windowClipCursor(false);
+            if (cursorInfo.flags != CURSOR_SHOWING) {
+                ShowCursor(true);
+            }
+        }
     }
 }
 
@@ -1113,6 +1129,7 @@ void imguiInit() {
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = _strdup((exeDir / "imgui.ini").string().c_str());
     assert(io.Fonts->AddFontDefault());
+    io.FontGlobalScale = (float)GetSystemMetrics(SM_CYSCREEN) / 1080.0f;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 }
 
@@ -1233,35 +1250,15 @@ void controllerGetStateXInput() {
 void d3dMessageCallback(D3D12_MESSAGE_CATEGORY category, D3D12_MESSAGE_SEVERITY severity, D3D12_MESSAGE_ID id, LPCSTR description, void* context) {
     if (id == D3D12_MESSAGE_ID_REFLECTSHAREDPROPERTIES_INVALIDOBJECT) return;
     if (severity == D3D12_MESSAGE_SEVERITY_CORRUPTION || severity == D3D12_MESSAGE_SEVERITY_ERROR) {
-        __debugbreak();
+        OutputDebugStringA(description);
+        //__debugbreak();
     }
 }
 
-void d3dTransferQueueStartRecording() {
-    assert(SUCCEEDED(d3d.transferCmdAllocator->Reset()));
-    assert(SUCCEEDED(d3d.transferCmdList->Reset(d3d.transferCmdAllocator, nullptr)));
-}
-
-void d3dTransferQueueSubmitRecording() {
-    assert(SUCCEEDED(d3d.transferCmdList->Close()));
-    d3d.transferQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.transferCmdList);
-}
-
-void d3dTransferQueueWait() {
-    d3d.transferDoneFenceCounter += 1;
-    d3d.transferQueue->Signal(d3d.transferDoneFence, d3d.transferDoneFenceCounter);
-    if (d3d.transferDoneFence->GetCompletedValue() < d3d.transferDoneFenceCounter) {
-        assert(SUCCEEDED(d3d.transferDoneFence->SetEventOnCompletion(d3d.transferDoneFenceCounter, d3d.transferDoneFenceEvent)));
-        assert(WaitForSingleObjectEx(d3d.transferDoneFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
-    }
-}
-
-D3D12MA::Allocation* d3dCreateImage(const D3D12MA::ALLOCATION_DESC& allocDesc, D3D12_CLEAR_VALUE* clearValue, const D3D12_RESOURCE_DESC& resourceDesc, D3D12_SUBRESOURCE_DATA* imageMipsData, const wchar_t* name) {
+D3D12MA::Allocation* d3dCreateImage(const D3D12MA::ALLOCATION_DESC& allocDesc, D3D12_CLEAR_VALUE* clearValue, const D3D12_RESOURCE_DESC& resourceDesc, D3D12_SUBRESOURCE_DATA* imageMipsData, ID3D12GraphicsCommandList* cmdList, const wchar_t* name, D3D12_RESOURCE_STATES stateAfter) {
     D3D12MA::Allocation* image;
     assert(SUCCEEDED(d3d.allocator->CreateResource(&allocDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, clearValue, &image, {}, nullptr)));
-    if (name) {
-        image->GetResource()->SetName(name);
-    }
+    image->GetResource()->SetName(name);
     if (imageMipsData) {
         d3d.stagingBufferOffset = align(d3d.stagingBufferOffset, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT mipFootprints[16];
@@ -1273,13 +1270,18 @@ D3D12MA::Allocation* d3dCreateImage(const D3D12MA::ALLOCATION_DESC& allocDesc, D
         for (uint mipIndex = 0; mipIndex < resourceDesc.MipLevels; mipIndex++) {
             mipFootprints[mipIndex].Offset += d3d.stagingBufferOffset;
         }
-        assert(UpdateSubresources(d3d.transferCmdList, image->GetResource(), d3d.stagingBuffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, imageMipsData) == requiredSize);
+        assert(UpdateSubresources(cmdList, image->GetResource(), d3d.stagingBuffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, imageMipsData) == requiredSize);
         d3d.stagingBufferOffset += (uint)requiredSize;
     }
+    D3D12_RESOURCE_BARRIER transition = {
+        .Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+        .Transition = {.pResource = image->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = stateAfter},
+    };
+    cmdList->ResourceBarrier(1, &transition);
     return image;
 }
 
-D3D12MA::Allocation* d3dCreateImageSTB(const std::filesystem::path& ddsFilePath, const wchar_t* name = nullptr) {
+D3D12MA::Allocation* d3dCreateImageSTB(const std::filesystem::path& ddsFilePath, ID3D12GraphicsCommandList* cmdList, const wchar_t* name, D3D12_RESOURCE_STATES stateAfter) {
     int width, height, channelCount;
     unsigned char* imageData = stbi_load(ddsFilePath.string().c_str(), &width, &height, &channelCount, 4);
     assert(imageData);
@@ -1287,7 +1289,7 @@ D3D12MA::Allocation* d3dCreateImageSTB(const std::filesystem::path& ddsFilePath,
     D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint)width, .Height = (uint)height, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, .SampleDesc = {.Count = 1}};
     D3D12MA::Allocation* image;
     assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image, {}, nullptr)));
-    if (name) { image->GetResource()->SetName(name); }
+    image->GetResource()->SetName(name);
     d3d.stagingBufferOffset = align(d3d.stagingBufferOffset, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT mipFootprint;
     uint rowCount;
@@ -1297,13 +1299,18 @@ D3D12MA::Allocation* d3dCreateImageSTB(const std::filesystem::path& ddsFilePath,
     assert(d3d.stagingBufferOffset + requiredSize < d3d.stagingBuffer->GetSize());
     mipFootprint.Offset += d3d.stagingBufferOffset;
     D3D12_SUBRESOURCE_DATA srcData = {.pData = imageData, .RowPitch = width * 4, .SlicePitch = width * height * 4};
-    assert(UpdateSubresources(d3d.transferCmdList, image->GetResource(), d3d.stagingBuffer->GetResource(), 0, 1, requiredSize, &mipFootprint, &rowCount, &rowSize, &srcData) == requiredSize);
+    assert(UpdateSubresources(cmdList, image->GetResource(), d3d.stagingBuffer->GetResource(), 0, 1, requiredSize, &mipFootprint, &rowCount, &rowSize, &srcData) == requiredSize);
     d3d.stagingBufferOffset += requiredSize;
     stbi_image_free(imageData);
+    D3D12_RESOURCE_BARRIER transition = {
+        .Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+        .Transition = {.pResource = image->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = stateAfter},
+    };
+    cmdList->ResourceBarrier(1, &transition);
     return image;
 }
 
-D3D12MA::Allocation* d3dCreateImageDDS(const std::filesystem::path& ddsFilePath, const wchar_t* name = nullptr) {
+D3D12MA::Allocation* d3dCreateImageDDS(const std::filesystem::path& ddsFilePath, ID3D12GraphicsCommandList* cmdList, const wchar_t* name, D3D12_RESOURCE_STATES stateAfter) {
     DirectX::ScratchImage scratchImage;
     assert(SUCCEEDED(LoadFromDDSFile(ddsFilePath.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, scratchImage)));
     assert(scratchImage.GetImageCount() == scratchImage.GetMetadata().mipLevels);
@@ -1311,10 +1318,18 @@ D3D12MA::Allocation* d3dCreateImageDDS(const std::filesystem::path& ddsFilePath,
     DXGI_FORMAT format = scratchImageInfo.format;
     if (format == DXGI_FORMAT_BC7_UNORM) format = DXGI_FORMAT_BC7_UNORM_SRGB;
     D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-    D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint)scratchImageInfo.width, .Height = (uint)scratchImageInfo.height, .DepthOrArraySize = (uint16)scratchImageInfo.arraySize, .MipLevels = (uint16)scratchImageInfo.mipLevels, .Format = format, .SampleDesc = {.Count = 1}};
+    D3D12_RESOURCE_DESC resourceDesc = {
+        .Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        .Width = (uint)scratchImageInfo.width,
+        .Height = (uint)scratchImageInfo.height,
+        .DepthOrArraySize = (uint16)scratchImageInfo.arraySize,
+        .MipLevels = (uint16)scratchImageInfo.mipLevels,
+        .Format = format,
+        .SampleDesc = {.Count = 1},
+    };
     D3D12MA::Allocation* image;
     assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image, {}, nullptr)));
-    if (name) { image->GetResource()->SetName(name); }
+    image->GetResource()->SetName(name);
     d3d.stagingBufferOffset = align(d3d.stagingBufferOffset, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT mipFootprints[16];
     uint rowCounts[16];
@@ -1328,22 +1343,35 @@ D3D12MA::Allocation* d3dCreateImageDDS(const std::filesystem::path& ddsFilePath,
         const DirectX::Image& image = scratchImage.GetImages()[mipIndex];
         srcData[mipIndex] = {.pData = image.pixels, .RowPitch = (int64)image.rowPitch, .SlicePitch = (int64)image.slicePitch};
     }
-    assert(UpdateSubresources(d3d.transferCmdList, image->GetResource(), d3d.stagingBuffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, srcData) == requiredSize);
+    assert(UpdateSubresources(cmdList, image->GetResource(), d3d.stagingBuffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, srcData) == requiredSize);
     d3d.stagingBufferOffset += requiredSize;
+    D3D12_RESOURCE_BARRIER transition = {
+        .Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+        .Transition = {.pResource = image->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = stateAfter},
+    };
+    cmdList->ResourceBarrier(1, &transition);
     return image;
 }
 
-void d3dWaitForRender() {
-    if (d3d.renderDoneFence->GetCompletedValue() < d3d.renderDoneFenceValue) {
-        assert(SUCCEEDED(d3d.renderDoneFence->SetEventOnCompletion(d3d.renderDoneFenceValue, d3d.renderDoneFenceEvent)));
-        assert(WaitForSingleObjectEx(d3d.renderDoneFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
-    }
+void d3dCmdListReset() {
+    assert(SUCCEEDED(d3d.graphicsCmdAllocator->Reset()));
+    assert(SUCCEEDED(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
 }
 
-void d3dWaitForCollisionQueries() {
-    if (d3d.collisionQueriesFence->GetCompletedValue() < d3d.collisionQueriesFenceValue) {
-        assert(SUCCEEDED(d3d.collisionQueriesFence->SetEventOnCompletion(d3d.collisionQueriesFenceValue, d3d.collisionQueriesFenceEvent)));
-        assert(WaitForSingleObjectEx(d3d.collisionQueriesFenceEvent, INFINITE, false) == WAIT_OBJECT_0);
+void d3dCmdListExecute() {
+    assert(SUCCEEDED(d3d.graphicsCmdList->Close()));
+    d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
+}
+
+void d3dSignalFence(D3DFence* fence) {
+    fence->value += 1;
+    d3d.graphicsQueue->Signal(fence->fence, fence->value);
+}
+
+void d3dWaitFence(D3DFence* fence) {
+    if (fence->fence->GetCompletedValue() < fence->value) {
+        assert(SUCCEEDED(fence->fence->SetEventOnCompletion(fence->value, fence->event)));
+        assert(WaitForSingleObjectEx(fence->event, INFINITE, false) == WAIT_OBJECT_0);
     }
 }
 
@@ -1391,31 +1419,26 @@ void d3dInit() {
     {
         D3D12_COMMAND_QUEUE_DESC graphicsQueueDesc = {.Type = D3D12_COMMAND_LIST_TYPE_DIRECT, .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE};
         assert(SUCCEEDED(d3d.device->CreateCommandQueue(&graphicsQueueDesc, IID_PPV_ARGS(&d3d.graphicsQueue))));
-        D3D12_COMMAND_QUEUE_DESC transferQueueDesc = {.Type = D3D12_COMMAND_LIST_TYPE_DIRECT, .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE};
-        assert(SUCCEEDED(d3d.device->CreateCommandQueue(&transferQueueDesc, IID_PPV_ARGS(&d3d.transferQueue))));
-
         assert(SUCCEEDED(d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&d3d.graphicsCmdAllocator))));
-        assert(SUCCEEDED(d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&d3d.transferCmdAllocator))));
-
         assert(SUCCEEDED(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.graphicsCmdAllocator, nullptr, IID_PPV_ARGS(&d3d.graphicsCmdList))));
         assert(SUCCEEDED(d3d.graphicsCmdList->Close()));
-        assert(SUCCEEDED(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.transferCmdAllocator, nullptr, IID_PPV_ARGS(&d3d.transferCmdList))));
-        assert(SUCCEEDED(d3d.transferCmdList->Close()));
+        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.transferFence.fence))));
+        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.renderFence.fence))));
+        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.collisionQueriesFence.fence))));
+        d3d.transferFence.event = CreateEventA(nullptr, false, false, nullptr);
+        d3d.renderFence.event = CreateEventA(nullptr, false, false, nullptr);
+        d3d.collisionQueriesFence.event = CreateEventA(nullptr, false, false, nullptr);
+        assert(d3d.transferFence.event);
+        assert(d3d.renderFence.event);
+        assert(d3d.collisionQueriesFence.event);
 
-        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.renderDoneFence))));
-        d3d.renderDoneFenceEvent = CreateEventA(nullptr, false, false, nullptr);
-        assert(d3d.renderDoneFenceEvent);
-
-        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.collisionQueriesFence))));
-        d3d.collisionQueriesFenceEvent = CreateEventA(nullptr, false, false, nullptr);
-        assert(d3d.collisionQueriesFenceEvent);
-
-        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.transferDoneFence))));
-        d3d.transferDoneFenceEvent = CreateEventA(nullptr, false, false, nullptr);
-        assert(d3d.transferDoneFenceEvent);
+        // D3D12_COMMAND_QUEUE_DESC transferQueueDesc = {.Type = D3D12_COMMAND_LIST_TYPE_COPY, .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE};
+        // assert(SUCCEEDED(d3d.device->CreateCommandQueue(&transferQueueDesc, IID_PPV_ARGS(&d3d.transferQueue))));
+        // assert(SUCCEEDED(d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY, IID_PPV_ARGS(&d3d.transferCmdAllocator))));
+        // assert(SUCCEEDED(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COPY, d3d.transferCmdAllocator, nullptr, IID_PPV_ARGS(&d3d.transferCmdList))));
+        // assert(SUCCEEDED(d3d.transferCmdList->Close()));
     }
     {
-        d3d.swapChainFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
         uint dxgiModeCount = 0;
         d3d.dxgiOutput->GetDisplayModeList(d3d.swapChainFormat, 0, &dxgiModeCount, nullptr);
         std::vector<DXGI_MODE_DESC> dxgiModes(dxgiModeCount);
@@ -1474,7 +1497,7 @@ void d3dInit() {
             d3d.device->CreateRenderTargetView(image, nullptr, d3d.swapChainImageRTVDescriptors[imageIndex]);
             d3d.rtvDescriptorCount += 1;
         }
-        d3d.cbvSrvUavDescriptorCapacity = 16384;
+        d3d.cbvSrvUavDescriptorCapacity = 1000000;
         d3d.cbvSrvUavDescriptorSize = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         D3D12_DESCRIPTOR_HEAP_DESC cbvSrvUavDescriptorHeapDesc = {.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, .NumDescriptors = d3d.cbvSrvUavDescriptorCapacity, .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
         assert(SUCCEEDED(d3d.device->CreateDescriptorHeap(&cbvSrvUavDescriptorHeapDesc, IID_PPV_ARGS(&d3d.cbvSrvUavDescriptorHeap))));
@@ -1519,8 +1542,8 @@ void d3dInit() {
     {
         D3D12_RESOURCE_DESC textureDesc = {
             .Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-            .Width = renderW,
-            .Height = renderH,
+            .Width = (uint)renderW,
+            .Height = (uint)renderH,
             .DepthOrArraySize = 1,
             .MipLevels = 1,
             .SampleDesc = {.Count = 1},
@@ -1528,28 +1551,30 @@ void d3dInit() {
         };
         D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
 
-        textureDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
+        textureDesc.Format = d3d.renderTextureFormat;
         textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        d3d.renderTextureFormat = textureDesc.Format;
         assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr)));
         assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexturePrevFrame, {}, nullptr)));
         d3d.renderTexture->GetResource()->SetName(L"renderTexture");
         d3d.renderTexturePrevFrame->GetResource()->SetName(L"renderTexturePrevFrame");
 
-        textureDesc.Format = DXGI_FORMAT_R32_FLOAT;
+        textureDesc.Format = d3d.depthTextureFormat;
         textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        d3d.depthTextureFormat = textureDesc.Format;
         assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.depthTexture, {}, nullptr)));
         d3d.depthTexture->GetResource()->SetName(L"depthTexture");
 
-        textureDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
+        textureDesc.Format = d3d.motionVectorTextureFormat;
         textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        d3d.motionVectorTextureFormat = textureDesc.Format;
         assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.motionVectorTexture, {}, nullptr)));
         d3d.motionVectorTexture->GetResource()->SetName(L"motionVectorTexture");
+
+        textureDesc.Format = d3d.renderAccumulationTextureFormat;
+        textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &d3d.renderAccumulationTexture, {}, nullptr)));
+        d3d.renderAccumulationTexture->GetResource()->SetName(L"renderAccumulationTexture");
     }
     {
-        d3dTransferQueueStartRecording();
+        d3dCmdListReset();
         d3d.stagingBufferOffset = 0;
         {
             uint8* imguiTextureData;
@@ -1557,52 +1582,44 @@ void d3dInit() {
             ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&imguiTextureData, &imguiTextureWidth, &imguiTextureHeight);
             D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint64)imguiTextureWidth, .Height = (uint)imguiTextureHeight, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
             D3D12_SUBRESOURCE_DATA data = {.pData = imguiTextureData, .RowPitch = imguiTextureWidth * 4, .SlicePitch = imguiTextureWidth * imguiTextureHeight * 4};
-            d3d.imguiTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, nullptr, desc, &data, L"imguiTexture");
+            d3d.imguiTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, nullptr, desc, &data, d3d.graphicsCmdList, L"imguiTexture", D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         }
         {
             D3D12_CLEAR_VALUE clearValue = {.Format = DXGI_FORMAT_R8G8B8A8_UNORM, .Color = {0.0f, 0.0f, 0.0f, 0.0f}};
-            D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = renderW, .Height = renderH, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}, .Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
-            d3d.directWriteTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, &clearValue, desc, nullptr, L"directWriteTexture");
+            D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint)renderW, .Height = (uint)renderH, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}, .Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
+            d3d.directWriteTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, &clearValue, desc, nullptr, d3d.graphicsCmdList, L"directWriteTexture", D3D12_RESOURCE_STATE_RENDER_TARGET);
         }
         {
             uint8_4 defaultEmissiveTextureData[4] = {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}};
             D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = 2, .Height = 2, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
             D3D12_SUBRESOURCE_DATA data = {.pData = defaultEmissiveTextureData, .RowPitch = 8, .SlicePitch = 16};
-            d3d.defaultEmissiveTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, nullptr, desc, &data, L"defaultEmissiveTexture");
+            d3d.defaultEmissiveTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, nullptr, desc, &data, d3d.graphicsCmdList, L"defaultEmissiveTexture", D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             d3d.defaultEmissiveTextureSRVDesc = {.Format = desc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = desc.MipLevels}};
         }
         {
             uint8_4 defaultBaseColorTextureData[4] = {{255, 255, 255, 255}, {255, 255, 255, 255}, {255, 255, 255, 255}, {255, 255, 255, 255}};
             D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = 2, .Height = 2, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
             D3D12_SUBRESOURCE_DATA data = {.pData = defaultBaseColorTextureData, .RowPitch = 8, .SlicePitch = 16};
-            d3d.defaultBaseColorTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, nullptr, desc, &data, L"defaultBaseColorTexture");
+            d3d.defaultBaseColorTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, nullptr, desc, &data, d3d.graphicsCmdList, L"defaultBaseColorTexture", D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             d3d.defaultBaseColorTextureSRVDesc = {.Format = desc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = desc.MipLevels}};
         }
         {
             uint8_2 defaultMetallicRoughnessData[4] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
             D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = 2, .Height = 2, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8_UNORM, .SampleDesc = {.Count = 1}};
             D3D12_SUBRESOURCE_DATA data = {.pData = defaultMetallicRoughnessData, .RowPitch = 4, .SlicePitch = 8};
-            d3d.defaultMetallicRoughnessTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, nullptr, desc, &data, L"defaultMetallicRoughnessTexture");
+            d3d.defaultMetallicRoughnessTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, nullptr, desc, &data, d3d.graphicsCmdList, L"defaultMetallicRoughnessTexture", D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             d3d.defaultMetallicRoughnessTextureSRVDesc = {.Format = desc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = desc.MipLevels}};
         }
         {
             float2 defaultNormalTextureData[4] = {{0.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f}};
             D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = 2, .Height = 2, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R32G32_FLOAT, .SampleDesc = {.Count = 1}};
             D3D12_SUBRESOURCE_DATA data = {.pData = defaultNormalTextureData, .RowPitch = 16, .SlicePitch = 32};
-            d3d.defaultNormalTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, nullptr, desc, &data, L"defaultNormalTexture");
+            d3d.defaultNormalTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, nullptr, desc, &data, d3d.graphicsCmdList, L"defaultNormalTexture", D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             d3d.defaultNormalTextureSRVDesc = {.Format = desc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = desc.MipLevels}};
         }
-        D3D12_RESOURCE_BARRIER barriers[] = {
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.imguiTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.directWriteTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET}},
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.defaultEmissiveTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.defaultBaseColorTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.defaultMetallicRoughnessTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.defaultNormalTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
-        };
-        d3d.transferCmdList->ResourceBarrier(countof(barriers), barriers);
-        d3dTransferQueueSubmitRecording();
-        d3dTransferQueueWait();
+        d3dCmdListExecute();
+        d3dSignalFence(&d3d.transferFence);
+        d3dWaitFence(&d3d.transferFence);
     }
 }
 
@@ -1613,7 +1630,7 @@ void d3dCompileShaders() {
         std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
         if (lastWriteTime > prevLastWriteTime) {
             prevLastWriteTime = lastWriteTime;
-            d3dWaitForRender();
+            d3dWaitFence(&d3d.renderFence);
             if (d3d.renderScenePSO) d3d.renderScenePSO->Release();
             if (d3d.renderScenePSOProps) d3d.renderScenePSOProps->Release();
             if (d3d.renderSceneRootSig) d3d.renderSceneRootSig->Release();
@@ -1633,12 +1650,35 @@ void d3dCompileShaders() {
         }
     }
     {
+        static std::filesystem::path shaderPath = exeDir / "pathTracer.cso";
+        static std::filesystem::file_time_type prevLastWriteTime = {};
+        std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
+        if (lastWriteTime > prevLastWriteTime) {
+            prevLastWriteTime = lastWriteTime;
+            d3dWaitFence(&d3d.renderFence);
+            if (d3d.pathTracerPSO) d3d.pathTracerPSO->Release();
+            if (d3d.pathTracerPSOProps) d3d.pathTracerPSOProps->Release();
+            if (d3d.pathTracerRootSig) d3d.pathTracerRootSig->Release();
+            std::vector<uint8> rtByteCode = fileReadBytes(shaderPath);
+            D3D12_EXPORT_DESC exportDescs[] = {{L"globalRootSig"}, {L"pipelineConfig"}, {L"shaderConfig"}, {L"rayGen"}, {L"rayMiss"}, {L"rayHitGroup"}, {L"rayAnyHit"}, {L"rayClosestHit"}};
+            D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
+            D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
+            D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
+            assert(SUCCEEDED(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.pathTracerPSO))));
+            assert(SUCCEEDED(d3d.pathTracerPSO->QueryInterface(IID_PPV_ARGS(&d3d.pathTracerPSOProps))));
+            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.pathTracerRootSig))));
+            assert(d3d.pathTracerRayGenID = d3d.pathTracerPSOProps->GetShaderIdentifier(L"rayGen"));
+            assert(d3d.pathTracerRayMissID = d3d.pathTracerPSOProps->GetShaderIdentifier(L"rayMiss"));
+            assert(d3d.pathTracerRayHitGroupID = d3d.pathTracerPSOProps->GetShaderIdentifier(L"rayHitGroup"));
+        }
+    }
+    {
         static std::filesystem::path shaderPath = exeDir / "collisionQuery.cso";
         static std::filesystem::file_time_type prevLastWriteTime = {};
         std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
         if (lastWriteTime > prevLastWriteTime) {
             prevLastWriteTime = lastWriteTime;
-            d3dWaitForRender();
+            d3dWaitFence(&d3d.renderFence);
             if (d3d.collisionQueryPSO) d3d.collisionQueryPSO->Release();
             if (d3d.collisionQueryProps) d3d.collisionQueryProps->Release();
             if (d3d.collisionQueryRootSig) d3d.collisionQueryRootSig->Release();
@@ -1661,7 +1701,7 @@ void d3dCompileShaders() {
         std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
         if (lastWriteTime > prevLastWriteTime) {
             prevLastWriteTime = lastWriteTime;
-            d3dWaitForRender();
+            d3dWaitFence(&d3d.renderFence);
             if (d3d.vertexSkinningPSO) d3d.vertexSkinningPSO->Release();
             if (d3d.vertexSkinningRootSig) d3d.vertexSkinningRootSig->Release();
             std::vector<uint8> csByteCode = fileReadBytes(shaderPath);
@@ -1680,7 +1720,7 @@ void d3dCompileShaders() {
         if (lastWriteTimeVS > prevLastWriteTimeVS || lastWriteTimePS > prevLastWriteTimePS) {
             prevLastWriteTimeVS = lastWriteTimeVS;
             prevLastWriteTimePS = lastWriteTimePS;
-            d3dWaitForRender();
+            d3dWaitFence(&d3d.renderFence);
             if (d3d.compositePSO) d3d.compositePSO->Release();
             if (d3d.compositeRootSig) d3d.compositeRootSig->Release();
             std::vector<uint8> vsByteCode = fileReadBytes(shaderPathVS);
@@ -1710,7 +1750,7 @@ void d3dCompileShaders() {
         if (lastWriteTimeVS > prevLastWriteTimeVS || lastWriteTimePS > prevLastWriteTimePS) {
             prevLastWriteTimeVS = lastWriteTimeVS;
             prevLastWriteTimePS = lastWriteTimePS;
-            d3dWaitForRender();
+            d3dWaitFence(&d3d.renderFence);
             if (d3d.imguiPSO) d3d.imguiPSO->Release();
             if (d3d.imguiRootSig) d3d.imguiRootSig->Release();
             std::vector<uint8> vsByteCode = fileReadBytes(shaderPathVS);
@@ -1753,7 +1793,8 @@ void d3dApplySettings() {
     assert(SUCCEEDED(d3d.dxgiOutput->GetDesc1(&dxgiOutputDesc)));
     if (hdr && dxgiOutputDesc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) {
         assert(SUCCEEDED(d3d.swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)));
-    } else {
+    }
+    else {
         assert(SUCCEEDED(d3d.swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)));
     }
     if (windowMode == WindowModeWindowed) {
@@ -1763,15 +1804,17 @@ void d3dApplySettings() {
         assert(GetMonitorInfo(MonitorFromWindow(window.hwnd, MONITOR_DEFAULTTOPRIMARY), &mi));
         assert(SetWindowLong(window.hwnd, GWL_STYLE, dwStyle | WS_OVERLAPPEDWINDOW) != 0);
         assert(SetWindowPos(window.hwnd, NULL, windowX, windowY, windowW, windowH, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED));
-    } else if (windowMode == WindowModeBorderless) {
+    }
+    else if (windowMode == WindowModeBorderless) {
         assert(SUCCEEDED(d3d.swapChain->SetFullscreenState(false, nullptr)));
         DWORD dwStyle = GetWindowLong(window.hwnd, GWL_STYLE);
         MONITORINFO mi = {.cbSize = sizeof(mi)};
         assert(GetMonitorInfo(MonitorFromWindow(window.hwnd, MONITOR_DEFAULTTOPRIMARY), &mi));
         assert(SetWindowLong(window.hwnd, GWL_STYLE, dwStyle & ~WS_OVERLAPPEDWINDOW) != 0);
         assert(SetWindowPos(window.hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_NOOWNERZORDER | SWP_FRAMECHANGED));
-    } else if (windowMode == WindowModeFullscreen) {
-        DXGI_MODE_DESC dxgiMode = {.Width = windowW, .Height = windowH, .RefreshRate = refreshRate, .Format = d3d.swapChainFormat};
+    }
+    else if (windowMode == WindowModeFullscreen) {
+        DXGI_MODE_DESC dxgiMode = {.Width = (uint)windowW, .Height = (uint)windowH, .RefreshRate = refreshRate, .Format = d3d.swapChainFormat};
         assert(SUCCEEDED(d3d.swapChain->ResizeTarget(&dxgiMode)));
         assert(SUCCEEDED(d3d.swapChain->SetFullscreenState(true, nullptr)));
     }
@@ -1788,11 +1831,15 @@ D3DDescriptor d3dAppendCBVDescriptor(D3D12_CONSTANT_BUFFER_VIEW_DESC* constantBu
 }
 
 D3DDescriptor d3dAppendSRVDescriptor(D3D12_SHADER_RESOURCE_VIEW_DESC* resourceViewDesc, ID3D12Resource* resource) {
+    ZoneScopedN("d3dAppendSRVDescriptor");
     assert(d3d.cbvSrvUavDescriptorCount < d3d.cbvSrvUavDescriptorCapacity);
     uint offset = d3d.cbvSrvUavDescriptorSize * d3d.cbvSrvUavDescriptorCount;
     D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr + offset};
     D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = {d3d.cbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr + offset};
-    d3d.device->CreateShaderResourceView(resource, resourceViewDesc, cpuHandle);
+    {
+        ZoneScopedN("CreateShaderResourceView");
+        d3d.device->CreateShaderResourceView(resource, resourceViewDesc, cpuHandle);
+    }
     d3d.cbvSrvUavDescriptorCount++;
     return {cpuHandle, gpuHandle};
 }
@@ -1848,7 +1895,8 @@ bool projectCameraSpacePointToScreen(float3 p, float2* pScreen) {
         pNDCSpace /= pNDCSpace.w;
         *pScreen = ndcToScreen(pNDCSpace.xy(), float2((float)renderW, (float)renderH));
         return true;
-    } else {
+    }
+    else {
         return false;
     }
 }
@@ -1870,7 +1918,8 @@ bool projectCameraSpaceLineToScreen(float3 p0, float3 p1, float2* p0Screen, floa
         *p0Screen = ndcToScreen(p0NDCSpace.xy(), screenSize);
         *p1Screen = ndcToScreen(p1NDCSpace.xy(), screenSize);
         return true;
-    } else if (!frustumContainsP0 && !frustumContainsP1) {
+    }
+    else if (!frustumContainsP0 && !frustumContainsP1) {
         float t;
         XMVector dir = XMVector3Normalize(XMVectorSubtract(p0ViewSpace, p1ViewSpace));
         if (frustum.Intersects(p1ViewSpace, dir, t)) {
@@ -1890,7 +1939,8 @@ bool projectCameraSpaceLineToScreen(float3 p0, float3 p1, float2* p0Screen, floa
             }
         }
         return false;
-    } else if (frustumContainsP0) {
+    }
+    else if (frustumContainsP0) {
         float t;
         XMVector dir = XMVector3Normalize(XMVectorSubtract(p0ViewSpace, p1ViewSpace));
         if (frustum.Intersects(p1ViewSpace, dir, t)) {
@@ -1902,7 +1952,8 @@ bool projectCameraSpaceLineToScreen(float3 p0, float3 p1, float2* p0Screen, floa
             *p1Screen = ndcToScreen(intersectionNDCSpace.xy(), screenSize);
             return true;
         }
-    } else if (frustumContainsP1) {
+    }
+    else if (frustumContainsP1) {
         float t;
         XMVector dir = XMVector3Normalize(XMVectorSubtract(p1ViewSpace, p0ViewSpace));
         if (frustum.Intersects(p0ViewSpace, dir, t)) {
@@ -1961,7 +2012,7 @@ Model* modelLoad(const std::filesystem::path& filePath) {
     model->filePathStr = filePath.string();
     model->gltfData = gltfData;
 
-    d3dTransferQueueStartRecording();
+    d3dCmdListReset();
     d3d.stagingBufferOffset = 0;
 
     model->nodes.resize(gltfData->nodes_count);
@@ -1980,7 +2031,8 @@ Model* modelLoad(const std::filesystem::path& filePath) {
             uint parentNodeIndex = (uint)(gltfNode.parent - gltfData->nodes);
             assert(parentNodeIndex >= 0 && parentNodeIndex < gltfData->nodes_count);
             node.parent = &model->nodes[parentNodeIndex];
-        } else {
+        }
+        else {
             node.parent = nullptr;
         }
         for (cgltf_node* child : std::span(gltfNode.children, gltfNode.children_count)) {
@@ -1993,7 +2045,8 @@ Model* modelLoad(const std::filesystem::path& filePath) {
         node.globalTransform = XMMatrix(nodeTransform);
         if (gltfNode.has_matrix) {
             node.localTransform = XMMatrix(gltfNode.matrix);
-        } else {
+        }
+        else {
             Transform localTransform = {};
             if (gltfNode.has_scale) localTransform.s = float3(gltfNode.scale);
             if (gltfNode.has_rotation) localTransform.r = float4(gltfNode.rotation);
@@ -2004,14 +2057,16 @@ Model* modelLoad(const std::filesystem::path& filePath) {
             uint meshIndex = (uint)(gltfNode.mesh - gltfData->meshes);
             assert(meshIndex >= 0 && meshIndex < gltfData->meshes_count);
             node.mesh = &model->meshes[meshIndex];
-        } else {
+        }
+        else {
             node.mesh = nullptr;
         }
         if (gltfNode.skin) {
             uint skinIndex = (uint)(gltfNode.skin - gltfData->skins);
             assert(skinIndex >= 0 && skinIndex < gltfData->skins_count);
             node.skin = &model->skins[skinIndex];
-        } else {
+        }
+        else {
             node.skin = nullptr;
         }
     }
@@ -2037,15 +2092,20 @@ Model* modelLoad(const std::filesystem::path& filePath) {
             for (cgltf_attribute& attribute : std::span(gltfPrimitive.attributes, gltfPrimitive.attributes_count)) {
                 if (attribute.type == cgltf_attribute_type_position) {
                     positions = attribute.data;
-                } else if (attribute.type == cgltf_attribute_type_normal) {
+                }
+                else if (attribute.type == cgltf_attribute_type_normal) {
                     normals = attribute.data;
-                } else if (attribute.type == cgltf_attribute_type_tangent) {
+                }
+                else if (attribute.type == cgltf_attribute_type_tangent) {
                     tangents = attribute.data;
-                } else if (attribute.type == cgltf_attribute_type_texcoord) {
+                }
+                else if (attribute.type == cgltf_attribute_type_texcoord) {
                     uvs = attribute.data;
-                } else if (attribute.type == cgltf_attribute_type_joints) {
+                }
+                else if (attribute.type == cgltf_attribute_type_joints) {
                     jointIndices = attribute.data;
-                } else if (attribute.type == cgltf_attribute_type_weights) {
+                }
+                else if (attribute.type == cgltf_attribute_type_weights) {
                     jointWeights = attribute.data;
                 }
             }
@@ -2077,7 +2137,8 @@ Model* modelLoad(const std::filesystem::path& filePath) {
                 if (jointIndicesBuffer) {
                     if (jointIndices->component_type == cgltf_component_type_r_16u) {
                         vertex.joints = ((uint16_4*)jointIndicesBuffer)[vertexIndex];
-                    } else {
+                    }
+                    else {
                         vertex.joints = ((uint8_4*)jointIndicesBuffer)[vertexIndex];
                     }
                 }
@@ -2088,7 +2149,8 @@ Model* modelLoad(const std::filesystem::path& filePath) {
             }
             if (indices->component_type == cgltf_component_type_r_16u) {
                 std::copy_n((uint16*)indicesBuffer, indices->count, std::back_inserter(mesh.indices));
-            } else {
+            }
+            else {
                 std::copy_n((uint*)indicesBuffer, indices->count, std::back_inserter(mesh.indices));
             }
             if (gltfPrimitive.material) {
@@ -2107,18 +2169,18 @@ Model* modelLoad(const std::filesystem::path& filePath) {
         mesh.verticesBuffer->GetResource()->SetName(std::format(L"{}Mesh{}IndicesBuffer", filePath.stem().wstring(), meshIndex).c_str());
 
         memcpy(d3d.stagingBufferPtr + d3d.stagingBufferOffset, mesh.vertices.data(), vectorSizeof(mesh.vertices));
-        d3d.transferCmdList->CopyBufferRegion(mesh.verticesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(mesh.vertices));
+        d3d.graphicsCmdList->CopyBufferRegion(mesh.verticesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(mesh.vertices));
         d3d.stagingBufferOffset += vectorSizeof(mesh.vertices);
         assert(d3d.stagingBufferOffset < d3d.stagingBuffer->GetSize());
         memcpy(d3d.stagingBufferPtr + d3d.stagingBufferOffset, mesh.indices.data(), vectorSizeof(mesh.indices));
-        d3d.transferCmdList->CopyBufferRegion(mesh.indicesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(mesh.indices));
+        d3d.graphicsCmdList->CopyBufferRegion(mesh.indicesBuffer->GetResource(), 0, d3d.stagingBuffer->GetResource(), d3d.stagingBufferOffset, vectorSizeof(mesh.indices));
         d3d.stagingBufferOffset += vectorSizeof(mesh.indices);
         assert(d3d.stagingBufferOffset < d3d.stagingBuffer->GetSize());
         D3D12_RESOURCE_BARRIER bufferBarriers[2] = {
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = mesh.verticesBuffer->GetResource(), .Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = mesh.indicesBuffer->GetResource(), .Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}},
         };
-        d3d.transferCmdList->ResourceBarrier(countof(bufferBarriers), bufferBarriers);
+        d3d.graphicsCmdList->ResourceBarrier(countof(bufferBarriers), bufferBarriers);
 
         std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs;
         for (ModelPrimitive& primitive : mesh.primitives) {
@@ -2149,7 +2211,7 @@ Model* modelLoad(const std::filesystem::path& filePath) {
         assert(SUCCEEDED(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &mesh.blasScratch, {}, nullptr)));
         mesh.blasScratch->GetResource()->SetName(std::format(L"{}Mesh{}BlasScratch", filePath.stem().wstring(), meshIndex).c_str());
         D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = mesh.blas->GetResource()->GetGPUVirtualAddress(), .Inputs = inputs, .ScratchAccelerationStructureData = mesh.blasScratch->GetResource()->GetGPUVirtualAddress()};
-        d3d.transferCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+        d3d.graphicsCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
     }
     for (uint skinIndex = 0; skinIndex < gltfData->skins_count; skinIndex++) {
         cgltf_skin& gltfSkin = gltfData->skins[skinIndex];
@@ -2198,12 +2260,15 @@ Model* modelLoad(const std::filesystem::path& filePath) {
             ModelAnimationSampler& sampler = animation.samplers.emplace_back();
             if (gltfSampler.interpolation == cgltf_interpolation_type_linear) {
                 sampler.interpolation = AnimationSamplerInterpolationLinear;
-            } else if (gltfSampler.interpolation == cgltf_interpolation_type_step) {
+            }
+            else if (gltfSampler.interpolation == cgltf_interpolation_type_step) {
                 sampler.interpolation = AnimationSamplerInterpolationStep;
-            } else if (gltfSampler.interpolation == cgltf_interpolation_type_cubic_spline) {
+            }
+            else if (gltfSampler.interpolation == cgltf_interpolation_type_cubic_spline) {
                 sampler.interpolation = AnimationSamplerInterpolationCubicSpline;
                 assert(false);
-            } else {
+            }
+            else {
                 assert(false);
             }
             assert(gltfSampler.input->component_type == cgltf_component_type_r_32f && gltfSampler.input->type == cgltf_type_scalar);
@@ -2220,7 +2285,8 @@ Model* modelLoad(const std::filesystem::path& filePath) {
                 keyFrame.time = inputs[frameIndex];
                 if (gltfSampler.output->type == cgltf_type_vec3) {
                     keyFrame.xyzw = ((float3*)outputs)[frameIndex];
-                } else {
+                }
+                else {
                     keyFrame.xyzw = ((float4*)outputs)[frameIndex];
                 }
             }
@@ -2237,13 +2303,16 @@ Model* modelLoad(const std::filesystem::path& filePath) {
             if (gltfChannel.target_path == cgltf_animation_path_type_translation) {
                 assert(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec3);
                 channel.type = AnimationChannelTypeTranslate;
-            } else if (gltfChannel.target_path == cgltf_animation_path_type_rotation) {
+            }
+            else if (gltfChannel.target_path == cgltf_animation_path_type_rotation) {
                 assert(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec4);
                 channel.type = AnimationChannelTypeRotate;
-            } else if (gltfChannel.target_path == cgltf_animation_path_type_scale) {
+            }
+            else if (gltfChannel.target_path == cgltf_animation_path_type_scale) {
                 assert(gltfAnimation.samplers[samplerIndex].output->type == cgltf_type_vec3);
                 channel.type = AnimationChannelTypeScale;
-            } else {
+            }
+            else {
                 assert(false);
             }
         }
@@ -2255,16 +2324,16 @@ Model* modelLoad(const std::filesystem::path& filePath) {
         std::filesystem::path imageDDSFilePath = imageFilePath;
         imageDDSFilePath.replace_extension(".dds");
         if (std::filesystem::exists(imageDDSFilePath)) {
-            image.gpuData = d3dCreateImageDDS(imageDDSFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str());
-        } else if (std::filesystem::exists(imageFilePath)) {
-            image.gpuData = d3dCreateImageSTB(imageFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str());
-        } else {
+            image.gpuData = d3dCreateImageDDS(imageDDSFilePath, d3d.graphicsCmdList, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
+        else if (std::filesystem::exists(imageFilePath)) {
+            image.gpuData = d3dCreateImageSTB(imageFilePath, d3d.graphicsCmdList, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
+        else {
             assert(false);
         }
         D3D12_RESOURCE_DESC imageDesc = image.gpuData->GetResource()->GetDesc();
         image.srvDesc = {.Format = imageDesc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = imageDesc.MipLevels}};
-        D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = image.gpuData->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
-        d3d.transferCmdList->ResourceBarrier(1, &barrier);
     }
     for (uint textureIndex = 0; textureIndex < gltfData->textures_count; textureIndex++) {
         cgltf_texture& gltfTexture = gltfData->textures[textureIndex];
@@ -2274,12 +2343,14 @@ Model* modelLoad(const std::filesystem::path& filePath) {
         if (gltfTexture.sampler) {
             if (gltfTexture.sampler->wrap_s == 33071) {
                 texture.wrapU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-            } else if (gltfTexture.sampler->wrap_s == 33648) {
+            }
+            else if (gltfTexture.sampler->wrap_s == 33648) {
                 texture.wrapU = D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
             }
             if (gltfTexture.sampler->wrap_t == 33071) {
                 texture.wrapV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-            } else if (gltfTexture.sampler->wrap_t == 33648) {
+            }
+            else if (gltfTexture.sampler->wrap_t == 33648) {
                 texture.wrapV = D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
             }
         }
@@ -2314,10 +2385,96 @@ Model* modelLoad(const std::filesystem::path& filePath) {
             material.normalTexture = &model->textures[gltfMaterial.normal_texture.texture - &gltfData->textures[0]];
         }
     }
-    d3dTransferQueueSubmitRecording();
-    d3dTransferQueueWait();
-
+    d3dCmdListExecute();
+    d3dSignalFence(&d3d.transferFence);
+    d3dWaitFence(&d3d.transferFence);
+    {
+        std::filesystem::path convexMeshPath = gltfFilePath;
+        convexMeshPath.replace_extension("convexMesh");
+        if (std::filesystem::exists(convexMeshPath)) {
+            std::vector<uint8> data = fileReadBytes(convexMeshPath);
+            PxDefaultMemoryInputData input(data.data(), (uint)data.size());
+            model->convexMesh = pxPhysics->createConvexMesh(input);
+            assert(model->convexMesh);
+        }
+    }
+    {
+        std::filesystem::path triangleMeshPath = gltfFilePath;
+        triangleMeshPath.replace_extension("triangleMesh");
+        if (std::filesystem::exists(triangleMeshPath)) {
+            std::vector<uint8> data = fileReadBytes(triangleMeshPath);
+            PxDefaultMemoryInputData input(data.data(), (uint)data.size());
+            model->triangleMesh = pxPhysics->createTriangleMesh(input);
+            assert(model->triangleMesh);
+        }
+    }
     return model;
+}
+
+bool modelGenerateConvexMesh(Model* model) {
+    std::vector<PxVec3> vertices;
+    for (ModelNode* node : model->meshNodes) {
+        for (Vertex& vertex : node->mesh->vertices) {
+            XMVector p = XMVector3Transform(XMVector3Transform(vertex.position.toXMVector(), node->globalTransform), XMMatrixScaling(1, 1, -1));
+            vertices.push_back(PxVec3(XMVectorGetX(p), XMVectorGetY(p), XMVectorGetZ(p)));
+        }
+    }
+    PxConvexMeshDesc meshDesc;
+    meshDesc.points.count = (uint)vertices.size();
+    meshDesc.points.stride = sizeof(PxVec3);
+    meshDesc.points.data = vertices.data();
+    meshDesc.flags = PxConvexFlag::eCOMPUTE_CONVEX;
+    PxCookingParams params(PxTolerancesScale(1, 10));
+    PxDefaultMemoryOutputStream output;
+    PxConvexMeshCookingResult::Enum result;
+    if (!PxCookConvexMesh(params, meshDesc, output, &result)) {
+        return false;
+    }
+    else {
+        PxDefaultMemoryInputData input(output.getData(), output.getSize());
+        model->convexMesh = pxPhysics->createConvexMesh(input);
+        std::filesystem::path convexMeshFilePath = model->filePath;
+        convexMeshFilePath.replace_extension("convexMesh");
+        fileWriteBytes(convexMeshFilePath, output.getData(), output.getSize());
+        return true;
+    }
+}
+
+bool modelGenerateTriangleMesh(Model* model) {
+    std::vector<PxVec3> vertices;
+    std::vector<uint32> indices;
+    uint indicesOffset = 0;
+    for (ModelNode* node : model->meshNodes) {
+        for (Vertex& vertex : node->mesh->vertices) {
+            XMVector p = XMVector3Transform(XMVector3Transform(vertex.position.toXMVector(), node->globalTransform), XMMatrixScaling(1, 1, -1));
+            vertices.push_back(PxVec3(XMVectorGetX(p), XMVectorGetY(p), XMVectorGetZ(p)));
+        }
+        for (uint32 index : node->mesh->indices) {
+            indices.push_back(index + indicesOffset);
+        }
+        indicesOffset += (uint)node->mesh->vertices.size();
+    }
+    PxTriangleMeshDesc meshDesc;
+    meshDesc.points.count = (uint)vertices.size();
+    meshDesc.points.stride = sizeof(PxVec3);
+    meshDesc.points.data = vertices.data();
+    meshDesc.triangles.count = (uint)indices.size() / 3;
+    meshDesc.triangles.stride = 3 * 4;
+    meshDesc.triangles.data = indices.data();
+    PxCookingParams params(PxTolerancesScale(1, 10));
+    PxDefaultMemoryOutputStream output;
+    PxTriangleMeshCookingResult::Enum result;
+    if (!PxCookTriangleMesh(params, meshDesc, output, &result)) {
+        return false;
+    }
+    else {
+        PxDefaultMemoryInputData input(output.getData(), output.getSize());
+        model->triangleMesh = pxPhysics->createTriangleMesh(input);
+        std::filesystem::path triangleMeshFilePath = model->filePath;
+        triangleMeshFilePath.replace_extension("triangleMesh");
+        fileWriteBytes(triangleMeshFilePath, output.getData(), output.getSize());
+        return true;
+    }
 }
 
 // bool modelCreateConvexMesh(Model& model, bool forceCooking = true) {
@@ -2424,7 +2581,8 @@ ModelInstance modelInstanceInit(Model* model) {
             instanceMeshNode.verticesBuffer = meshNode->mesh->verticesBuffer;
             instanceMeshNode.blas = meshNode->mesh->blas;
             instanceMeshNode.blasScratch = meshNode->mesh->blasScratch;
-        } else {
+        }
+        else {
             D3D12MA::ALLOCATION_DESC verticesBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
             D3D12_RESOURCE_DESC verticesBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = meshNode->mesh->verticesBuffer->GetSize(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
             assert(SUCCEEDED(d3d.allocator->CreateResource(&verticesBufferAllocDesc, &verticesBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &instanceMeshNode.verticesBuffer, {}, nullptr)));
@@ -2477,11 +2635,11 @@ void modelInstanceRelease(ModelInstance& modelInstance) {
 void modelInstanceGetSkeletonVisualization(ModelInstance* modelInstance, ModelNode* node, const XMMatrix& transformMat) {
     int64 nodeIndex = node - &modelInstance->model->nodes[0];
     XMVector nodePosition = XMVector3Transform(XMVector3Transform(xmVectorZero, modelInstance->globalTransformMats[nodeIndex]), transformMat);
-    debugSpheres.push_back(Sphere{.center = float3(nodePosition), .radius = meters(0.03f), .color = 0xffffffff});
+    debugSpheres.push_back(Sphere{.center = float3(nodePosition), .radius = 0.03f, .color = 0xffffffff});
     for (ModelNode* childNode : node->children) {
         int64 childNodeIndex = childNode - &modelInstance->model->nodes[0];
         XMVector childNodePosition = XMVector3Transform(XMVector3Transform(xmVectorZero, modelInstance->globalTransformMats[childNodeIndex]), transformMat);
-        debugLines.push_back(Line{.p0 = float3(nodePosition), .p1 = float3(childNodePosition), .radius = meters(0.01f), .color = 0xffffffff});
+        debugLines.push_back(Line{.p0 = float3(nodePosition), .p1 = float3(childNodePosition), .radius = 0.01f, .color = 0xffffffff});
         modelInstanceGetSkeletonVisualization(modelInstance, childNode, transformMat);
     }
 }
@@ -2540,19 +2698,24 @@ void modelInstanceUpdateAnimation(ModelInstance* modelInstance, double time) {
             if (channel.type == AnimationChannelTypeTranslate) {
                 if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
                     modelInstance->localTransforms[nodeIndex].t = lerp(frame0.xyz(), frame1.xyz(), percentage);
-                } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
+                }
+                else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
                     modelInstance->localTransforms[nodeIndex].t = percentage < 1.0f ? frame0.xyz() : frame1.xyz();
                 }
-            } else if (channel.type == AnimationChannelTypeRotate) {
+            }
+            else if (channel.type == AnimationChannelTypeRotate) {
                 if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
                     modelInstance->localTransforms[nodeIndex].r = slerp(frame0, frame1, percentage);
-                } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
+                }
+                else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
                     modelInstance->localTransforms[nodeIndex].r = percentage < 1.0f ? frame0 : frame1;
                 }
-            } else if (channel.type == AnimationChannelTypeScale) {
+            }
+            else if (channel.type == AnimationChannelTypeScale) {
                 if (channel.sampler->interpolation == AnimationSamplerInterpolationLinear) {
                     modelInstance->localTransforms[nodeIndex].s = lerp(frame0.xyz(), frame1.xyz(), percentage);
-                } else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
+                }
+                else if (channel.sampler->interpolation == AnimationSamplerInterpolationStep) {
                     modelInstance->localTransforms[nodeIndex].s = percentage < 1.0f ? frame0.xyz() : frame1.xyz();
                 }
             }
@@ -2572,57 +2735,50 @@ void modelInstanceUpdateAnimation(ModelInstance* modelInstance, double time) {
     }
 }
 
-void modelInstanceAddBLASInstancesToTLAS(ModelInstance& modelInstance, const XMMatrix& objectTransform, ObjectType objectType, uint objectIndex, uint instanceFlags, uint color) {
-    for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance.meshNodes.size(); meshNodeIndex++) {
-        ModelNode* meshNode = modelInstance.model->meshNodes[meshNodeIndex];
-        ModelInstanceMeshNode* instanceMeshNode = &modelInstance.meshNodes[meshNodeIndex];
+void modelAddBLASInstancesToTLAS(Model& model, const XMMatrix& modelTransform, uint instanceFlags, uint color) {
+    for (ModelNode* meshNode : model.meshNodes) {
         XMMatrix transform = meshNode->globalTransform;
-        if (modelInstance.globalTransformMats.size() > 0) {
-            transform = XMMatrixMultiply(transform, modelInstance.globalTransformMats[meshNode - &modelInstance.model->nodes[0]]);
-        }
-        transform = XMMatrixMultiply(transform, XMMatrixScaling(scaleFactor, scaleFactor, -scaleFactor)); // convert RH to LH && scale down by scaleFactor
-        transform = XMMatrixMultiply(transform, objectTransform);
+        transform = XMMatrixMultiply(transform, XMMatrixScaling(1, 1, -1)); // convert RH to LH
+        transform = XMMatrixMultiply(transform, modelTransform);
         transform = XMMatrixTranspose(transform);
-        D3D12_RAYTRACING_INSTANCE_DESC blasInstanceBuildInfo = {.InstanceMask = objectType, .AccelerationStructure = instanceMeshNode->blas->GetResource()->GetGPUVirtualAddress()};
-        BLASInstanceInfo blasInstanceInfo = {.descriptorsHeapOffset = d3d.cbvSrvUavDescriptorCount, .blasGeometriesOffset = (uint)blasGeometriesInfos.size(), .flags = instanceFlags, .color = color, .objectType = objectType, .objectIndex = objectIndex};
-#ifdef EDITOR
-        if (objectType != ObjectTypeNone && editor.selectedObjectType == objectType && editor.selectedObjectIndex == objectIndex) {
-            if (editor.selectedObjectXRay) {
-                blasInstanceBuildInfo.Flags |= D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE;
-            }
-        }
-#endif
+        D3D12_RAYTRACING_INSTANCE_DESC blasInstanceBuildInfo = {.InstanceMask = ObjectTypeNone, .AccelerationStructure = meshNode->mesh->blas->GetResource()->GetGPUVirtualAddress()};
+        BLASInstanceInfo blasInstanceInfo = {.descriptorsHeapOffset = d3d.cbvSrvUavDescriptorCount, .blasGeometriesOffset = (uint)blasGeometriesInfos.size(), .flags = instanceFlags, .color = color, .objectType = ObjectTypeNone, .objectIndex = UINT_MAX};
         memcpy(blasInstanceBuildInfo.Transform, &transform, sizeof(blasInstanceBuildInfo.Transform));
-        blasInstancesBuildInfos.push_back(blasInstanceBuildInfo);
+        blasInstancesDescs.push_back(blasInstanceBuildInfo);
         blasInstancesInfos.push_back(blasInstanceInfo);
         for (const ModelPrimitive& primitive : meshNode->mesh->primitives) {
             D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.verticesBufferOffset, .NumElements = primitive.verticesCount, .StructureByteStride = sizeof(struct Vertex)}};
             D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.indicesBufferOffset, .NumElements = primitive.indicesCount, .StructureByteStride = sizeof(uint)}};
-            d3dAppendSRVDescriptor(&vertexBufferDesc, instanceMeshNode->verticesBuffer->GetResource());
+            d3dAppendSRVDescriptor(&vertexBufferDesc, meshNode->mesh->verticesBuffer->GetResource());
             d3dAppendSRVDescriptor(&indexBufferDesc, meshNode->mesh->indicesBuffer->GetResource());
             if (primitive.material) {
                 blasGeometriesInfos.push_back(BLASGeometryInfo{.emissive = primitive.material->emissive, .metallic = primitive.material->metallic, .baseColor = primitive.material->baseColor.xyz(), .roughness = primitive.material->roughness});
                 if (primitive.material->emissiveTexture) {
                     d3dAppendSRVDescriptor(&primitive.material->emissiveTexture->image->srvDesc, primitive.material->emissiveTexture->image->gpuData->GetResource());
-                } else {
+                }
+                else {
                     d3dAppendSRVDescriptor(&d3d.defaultEmissiveTextureSRVDesc, d3d.defaultEmissiveTexture->GetResource());
                 }
                 if (primitive.material->baseColorTexture) {
                     d3dAppendSRVDescriptor(&primitive.material->baseColorTexture->image->srvDesc, primitive.material->baseColorTexture->image->gpuData->GetResource());
-                } else {
+                }
+                else {
                     d3dAppendSRVDescriptor(&d3d.defaultBaseColorTextureSRVDesc, d3d.defaultBaseColorTexture->GetResource());
                 }
                 if (primitive.material->metallicRoughnessTexture) {
                     d3dAppendSRVDescriptor(&primitive.material->metallicRoughnessTexture->image->srvDesc, primitive.material->metallicRoughnessTexture->image->gpuData->GetResource());
-                } else {
+                }
+                else {
                     d3dAppendSRVDescriptor(&d3d.defaultMetallicRoughnessTextureSRVDesc, d3d.defaultMetallicRoughnessTexture->GetResource());
                 }
                 if (primitive.material->normalTexture) {
                     d3dAppendSRVDescriptor(&primitive.material->normalTexture->image->srvDesc, primitive.material->normalTexture->image->gpuData->GetResource());
-                } else {
+                }
+                else {
                     d3dAppendSRVDescriptor(&d3d.defaultNormalTextureSRVDesc, d3d.defaultNormalTexture->GetResource());
                 }
-            } else {
+            }
+            else {
                 blasGeometriesInfos.push_back(BLASGeometryInfo{.emissive = {0.0f, 0.0f, 0.0f}, .metallic = 0.0f, .baseColor = {0.7f, 0.7f, 0.7f}, .roughness = 0.7f});
                 d3dAppendSRVDescriptor(&d3d.defaultEmissiveTextureSRVDesc, d3d.defaultEmissiveTexture->GetResource());
                 d3dAppendSRVDescriptor(&d3d.defaultBaseColorTextureSRVDesc, d3d.defaultBaseColorTexture->GetResource());
@@ -2630,6 +2786,88 @@ void modelInstanceAddBLASInstancesToTLAS(ModelInstance& modelInstance, const XMM
                 d3dAppendSRVDescriptor(&d3d.defaultNormalTextureSRVDesc, d3d.defaultNormalTexture->GetResource());
             }
         }
+    }
+}
+
+void modelInstanceAddBLASInstancesToTLAS(ModelInstance& modelInstance, const XMMatrix& objectTransform, ObjectType objectType, uint objectIndex, uint instanceFlags, uint color) {
+    ZoneScopedN("modelInstanceAddBLASInstancesToTLAS");
+    for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance.meshNodes.size(); meshNodeIndex++) {
+        ModelInstanceMeshNode* instanceMeshNode = &modelInstance.meshNodes[meshNodeIndex];
+        ModelNode* meshNode = modelInstance.model->meshNodes[meshNodeIndex];
+        XMMatrix transform = meshNode->globalTransform;
+        if (modelInstance.globalTransformMats.size() > 0) {
+            transform = XMMatrixMultiply(transform, modelInstance.globalTransformMats[meshNode - &modelInstance.model->nodes[0]]);
+        }
+        transform = XMMatrixMultiply(transform, XMMatrixScaling(1, 1, -1)); // convert RH to LH
+        transform = XMMatrixMultiply(transform, objectTransform);
+        transform = XMMatrixTranspose(transform);
+        D3D12_RAYTRACING_INSTANCE_DESC blasInstanceDesc = {.InstanceMask = objectType, .Flags = 0, .AccelerationStructure = instanceMeshNode->blas->GetResource()->GetGPUVirtualAddress()};
+#ifdef EDITOR
+        if (editor.mode == EditorModeFreeCam && objectType != ObjectTypeNone && editor.selectedObjectType == objectType && editor.selectedObjectIndex == objectIndex && editor.selectedObjectXRay) {
+            blasInstanceDesc.Flags |= D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE;
+        }
+#endif
+        memcpy(blasInstanceDesc.Transform, &transform, sizeof(blasInstanceDesc.Transform));
+        BLASInstanceInfo blasInstanceInfo = {.blasGeometriesOffset = (uint)blasGeometriesInfos.size(), .flags = instanceFlags, .color = color, .objectType = objectType, .objectIndex = objectIndex};
+        if (instanceMeshNode->verticesBuffer == meshNode->mesh->verticesBuffer) {
+            blasInstanceInfo.descriptorsHeapOffset = meshNode->mesh->descriptorsHeapOffset;
+            for (const ModelPrimitive& primitive : meshNode->mesh->primitives) {
+                if (primitive.material) {
+                    blasGeometriesInfos.push_back(BLASGeometryInfo{.emissive = primitive.material->emissive, .metallic = primitive.material->metallic, .baseColor = primitive.material->baseColor.xyz(), .roughness = primitive.material->roughness});
+                }
+                else {
+                    blasGeometriesInfos.push_back(BLASGeometryInfo{.emissive = {0.0f, 0.0f, 0.0f}, .metallic = 0.0f, .baseColor = {0.7f, 0.7f, 0.7f}, .roughness = 0.7f});
+                }
+            }
+        }
+        else {
+            blasInstanceInfo.descriptorsHeapOffset = d3d.cbvSrvUavDescriptorCount;
+            {
+                ZoneScopedN("append primitives descriptors");
+                for (const ModelPrimitive& primitive : meshNode->mesh->primitives) {
+                    D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.verticesBufferOffset, .NumElements = primitive.verticesCount, .StructureByteStride = sizeof(struct Vertex)}};
+                    D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.indicesBufferOffset, .NumElements = primitive.indicesCount, .StructureByteStride = sizeof(uint)}};
+                    d3dAppendSRVDescriptor(&vertexBufferDesc, instanceMeshNode->verticesBuffer->GetResource());
+                    d3dAppendSRVDescriptor(&indexBufferDesc, meshNode->mesh->indicesBuffer->GetResource());
+                    if (primitive.material) {
+                        blasGeometriesInfos.push_back(BLASGeometryInfo{.emissive = primitive.material->emissive, .metallic = primitive.material->metallic, .baseColor = primitive.material->baseColor.xyz(), .roughness = primitive.material->roughness});
+                        if (primitive.material->emissiveTexture) {
+                            d3dAppendSRVDescriptor(&primitive.material->emissiveTexture->image->srvDesc, primitive.material->emissiveTexture->image->gpuData->GetResource());
+                        }
+                        else {
+                            d3dAppendSRVDescriptor(&d3d.defaultEmissiveTextureSRVDesc, d3d.defaultEmissiveTexture->GetResource());
+                        }
+                        if (primitive.material->baseColorTexture) {
+                            d3dAppendSRVDescriptor(&primitive.material->baseColorTexture->image->srvDesc, primitive.material->baseColorTexture->image->gpuData->GetResource());
+                        }
+                        else {
+                            d3dAppendSRVDescriptor(&d3d.defaultBaseColorTextureSRVDesc, d3d.defaultBaseColorTexture->GetResource());
+                        }
+                        if (primitive.material->metallicRoughnessTexture) {
+                            d3dAppendSRVDescriptor(&primitive.material->metallicRoughnessTexture->image->srvDesc, primitive.material->metallicRoughnessTexture->image->gpuData->GetResource());
+                        }
+                        else {
+                            d3dAppendSRVDescriptor(&d3d.defaultMetallicRoughnessTextureSRVDesc, d3d.defaultMetallicRoughnessTexture->GetResource());
+                        }
+                        if (primitive.material->normalTexture) {
+                            d3dAppendSRVDescriptor(&primitive.material->normalTexture->image->srvDesc, primitive.material->normalTexture->image->gpuData->GetResource());
+                        }
+                        else {
+                            d3dAppendSRVDescriptor(&d3d.defaultNormalTextureSRVDesc, d3d.defaultNormalTexture->GetResource());
+                        }
+                    }
+                    else {
+                        blasGeometriesInfos.push_back(BLASGeometryInfo{.emissive = {0.0f, 0.0f, 0.0f}, .metallic = 0.0f, .baseColor = {0.7f, 0.7f, 0.7f}, .roughness = 0.7f});
+                        d3dAppendSRVDescriptor(&d3d.defaultEmissiveTextureSRVDesc, d3d.defaultEmissiveTexture->GetResource());
+                        d3dAppendSRVDescriptor(&d3d.defaultBaseColorTextureSRVDesc, d3d.defaultBaseColorTexture->GetResource());
+                        d3dAppendSRVDescriptor(&d3d.defaultMetallicRoughnessTextureSRVDesc, d3d.defaultMetallicRoughnessTexture->GetResource());
+                        d3dAppendSRVDescriptor(&d3d.defaultNormalTextureSRVDesc, d3d.defaultNormalTexture->GetResource());
+                    }
+                }
+            }
+        }
+        blasInstancesDescs.push_back(blasInstanceDesc);
+        blasInstancesInfos.push_back(blasInstanceInfo);
     }
 }
 
@@ -2641,24 +2879,66 @@ void loadSimpleAssets() {
 
 void physxInit() {
     pxFoundation = PxCreateFoundation(PX_PHYSICS_VERSION, pxAllocator, pxErrorCallback);
-    pxPhysics = PxCreatePhysics(PX_PHYSICS_VERSION, *pxFoundation, PxTolerancesScale(), true, nullptr);
+    PxPvd* pvd = nullptr;
+#ifdef PHYSX_PVD
+    pvd = PxCreatePvd(*pxFoundation);
+    assert(pvd);
+    PxPvdTransport* transport = PxDefaultPvdSocketTransportCreate("127.0.0.1", 5425, 10);
+    assert(transport);
+    pvd->connect(*transport, PxPvdInstrumentationFlag::eALL);
+#endif
+    pxPhysics = PxCreatePhysics(PX_PHYSICS_VERSION, *pxFoundation, PxTolerancesScale(1, 10), true, pvd);
     pxDispatcher = PxDefaultCpuDispatcherCreate(4);
     PxSceneDesc sceneDesc(pxPhysics->getTolerancesScale());
-    sceneDesc.gravity = PxVec3(0.0f, meters(-10), 0.0f);
+    sceneDesc.gravity = PxVec3(0, -10, 0);
     sceneDesc.cpuDispatcher = pxDispatcher;
     sceneDesc.filterShader = PxDefaultSimulationFilterShader;
     pxScene = pxPhysics->createScene(sceneDesc);
     pxScene->setVisualizationParameter(PxVisualizationParameter::eSCALE, 1.0f);
     pxScene->setVisualizationParameter(PxVisualizationParameter::eCOLLISION_SHAPES, 2.0f);
-    pxDefaultMaterial = pxPhysics->createMaterial(0.5f, 0.5f, 0.6f);
+    pxDefaultMaterial = pxPhysics->createMaterial(0.7f, 0.7f, 0.4f);
     pxControllerManager = PxCreateControllerManager(*pxScene);
-    pxControllerManager->setOverlapRecoveryModule(true);
+    pxControllerManager->setOverlapRecoveryModule(false);
 }
 
-void playerCameraReset() {
+void physxScaleShapeGeometry(PxShape* shape, float3 scale) {
+    if (scale == float3(1, 1, 1)) return;
+    const PxGeometry& geometry = shape->getGeometry();
+    PxGeometryType::Enum geometryType = geometry.getType();
+    if (geometryType == PxGeometryType::eSPHERE) {
+        PxSphereGeometry sphereGeomerty = (const PxSphereGeometry&)geometry;
+        sphereGeomerty.radius *= ((abs(scale.x) + abs(scale.y) + abs(scale.z)) / 3.0f);
+        shape->setGeometry(sphereGeomerty);
+    }
+    else if (geometryType == PxGeometryType::eCAPSULE) {
+        PxCapsuleGeometry capsuleGeomerty = (const PxCapsuleGeometry&)geometry;
+        capsuleGeomerty.radius *= (abs(scale.x) + abs(scale.z)) / 2.0f;
+        capsuleGeomerty.halfHeight *= abs(scale.y);
+        shape->setGeometry(capsuleGeomerty);
+    }
+    else if (geometryType == PxGeometryType::eBOX) {
+        PxBoxGeometry boxGeometry = (const PxBoxGeometry&)geometry;
+        boxGeometry.halfExtents.x *= abs(scale.x);
+        boxGeometry.halfExtents.y *= abs(scale.y);
+        boxGeometry.halfExtents.z *= abs(scale.z);
+        shape->setGeometry(boxGeometry);
+    }
+    else if (geometryType == PxGeometryType::eCONVEXMESH) {
+        PxConvexMeshGeometry convexMeshGeometry = (const PxConvexMeshGeometry&)geometry;
+        convexMeshGeometry.scale = PxMeshScale(scale.toPxVec3());
+        shape->setGeometry(convexMeshGeometry);
+    }
+    else {
+        assert(false);
+    }
+}
+
+void playerCameraReset(bool keepPitchYaw) {
     player.camera.lookAt = player.transform.t + player.camera.lookAtOffset;
     player.camera.position = player.camera.lookAt + (float3(0, 0, 1) * player.camera.distance);
-    player.camera.pitchYaw = float2(0, 0);
+    if (!keepPitchYaw) {
+        player.camera.pitchYaw = float2(0, 0);
+    }
 }
 
 void playerCameraSetPitchYaw(float2 pitchYawNew) {
@@ -2718,86 +2998,45 @@ void worldInit(const std::filesystem::path& path) {
     worldFilePath = path;
 
 #ifdef EDITOR
-    if (ryml::ConstNodeRef editorCameraYaml = yamlRoot.find_child("editorCamera"); editorCameraYaml.valid()) {
-        editorCameraYaml["position"] >> editor.camera.position;
-        editorCameraYaml["pitchYaw"] >> editor.camera.pitchYaw;
-        editorCameraRotate(editor.camera, float2(0, 0));
-        editorCameraYaml["moveSpeed"] >> editor.camera.moveSpeed;
-        editor.camera.moveSpeed = std::clamp(editor.camera.moveSpeed, 0.0f, editor.camera.moveSpeedMax);
-    } else {
-        editor.camera = {};
-    }
-    if (ryml::ConstNodeRef editorEditCameraYaml = yamlRoot.find_child("editorEditCamera"); editorEditCameraYaml.valid()) {
-        editorEditCameraYaml["position"] >> editor.editCamera.position;
-        editorEditCameraYaml["pitchYaw"] >> editor.editCamera.pitchYaw;
-        editorCameraRotate(editor.editCamera, float2(0, 0));
-        editorEditCameraYaml["moveSpeed"] >> editor.editCamera.moveSpeed;
-        editor.editCamera.moveSpeed = std::clamp(editor.editCamera.moveSpeed, 0.0f, editor.editCamera.moveSpeedMax);
-    } else {
-        editor.editCamera = {};
+    if (ryml::ConstNodeRef editorYaml = yamlRoot.find_child("editor"); editorYaml.valid()) {
+        if (ryml::ConstNodeRef editorCameraYaml = editorYaml.find_child("camera"); editorCameraYaml.valid()) {
+            editorCameraYaml["position"] >> editor.camera.position;
+            editorCameraYaml["pitchYaw"] >> editor.camera.pitchYaw;
+            editorCameraRotate(editor.camera, float2(0, 0));
+            editorCameraYaml["moveSpeed"] >> editor.camera.moveSpeed;
+            editor.camera.moveSpeed = std::clamp(editor.camera.moveSpeed, 0.0f, editor.camera.moveSpeedMax);
+        }
+        if (ryml::ConstNodeRef editorEditCameraYaml = editorYaml.find_child("editCamera"); editorEditCameraYaml.valid()) {
+            editorEditCameraYaml["position"] >> editor.editCamera.position;
+            editorEditCameraYaml["pitchYaw"] >> editor.editCamera.pitchYaw;
+            editorCameraRotate(editor.editCamera, float2(0, 0));
+            editorEditCameraYaml["moveSpeed"] >> editor.editCamera.moveSpeed;
+            editor.editCamera.moveSpeed = std::clamp(editor.editCamera.moveSpeed, 0.0f, editor.editCamera.moveSpeedMax);
+        }
     }
 #endif
     {
         ryml::ConstNodeRef assetsYaml = yamlRoot["assets"];
 
         ryml::ConstNodeRef skyboxesYaml = assetsYaml["skyboxes"];
-        d3dTransferQueueStartRecording();
+        d3dCmdListReset();
         d3d.stagingBufferOffset = 0;
         for (ryml::ConstNodeRef skyboxYaml : skyboxesYaml) {
             std::string file;
             skyboxYaml >> file;
             Skybox skybox;
             skybox.hdriTextureFilePath = file;
-            skybox.hdriTexture = d3dCreateImageDDS(exeDir / skybox.hdriTextureFilePath);
-            D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = skybox.hdriTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
-            d3d.transferCmdList->ResourceBarrier(1, &barrier);
+            skybox.hdriTexture = d3dCreateImageDDS(exeDir / skybox.hdriTextureFilePath, d3d.graphicsCmdList, L"SkyboxHDRI", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             skyboxes.push_back(skybox);
         }
-        d3dTransferQueueSubmitRecording();
-        d3dTransferQueueWait();
+        d3dCmdListExecute();
+        d3dSignalFence(&d3d.transferFence);
+        d3dWaitFence(&d3d.transferFence);
 
         for (ryml::ConstNodeRef modelsYaml = assetsYaml["models"]; ryml::ConstNodeRef modelYaml : modelsYaml) {
             std::string modelFile;
-            modelYaml["model"] >> modelFile;
+            modelYaml["file"] >> modelFile;
             Model* model = modelLoad(modelFile);
-            if (ryml::ConstNodeRef collisionShapesYaml = modelYaml.find_child("collisionShapes"); collisionShapesYaml.valid()) {
-                for (ryml::ConstNodeRef shapeYaml : collisionShapesYaml) {
-                    PxTransform transform;
-                    PxShape* shape = nullptr;
-                    if (shapeYaml["type"] == "plane") {
-                        shapeYaml["transform"] >> transform;
-                        shape = pxPhysics->createShape(PxPlaneGeometry(), *pxDefaultMaterial);
-                    } else if (shapeYaml["type"] == "box") {
-                        float3 extents;
-                        shapeYaml["extents"] >> extents;
-                        shapeYaml["transform"] >> transform;
-                        shape = pxPhysics->createShape(PxBoxGeometry(extents.x, extents.y, extents.z), *pxDefaultMaterial);
-                    } else if (shapeYaml["type"] == "sphere") {
-                        float radius;
-                        shapeYaml["radius"] >> radius;
-                        shapeYaml["transform"] >> transform;
-                        shape = pxPhysics->createShape(PxSphereGeometry(radius), *pxDefaultMaterial);
-                    } else if (shapeYaml["type"] == "capsule") {
-                        float radius, halfHeight;
-                        shapeYaml["radius"] >> radius;
-                        shapeYaml["halfHeight"] >> halfHeight;
-                        shapeYaml["transform"] >> transform;
-                        shape = pxPhysics->createShape(PxCapsuleGeometry(radius, halfHeight), *pxDefaultMaterial);
-                    } else if (shapeYaml["type"] == "convexMesh") {
-                        assert(false);
-                        // shapeYaml["transform"] >> transform;
-                        //  if (!obj.modelInstance.model->physxConvexMesh) {
-                        //      assert(modelCreateConvexMesh(*obj.modelInstance.model));
-                        //  }
-                        //  PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxConvexMeshGeometry(obj.modelInstance.model->physxConvexMesh), *pxDefaultMaterial);
-                        //  shape->setLocalPose(transform);
-                    } else {
-                        assert(false);
-                    }
-                    shape->setLocalPose(transform);
-                    model->collisionShapes.push_back(shape);
-                }
-            }
         }
     }
     {
@@ -2829,57 +3068,139 @@ void worldInit(const std::filesystem::path& path) {
         player.modelInstance.animation = &player.modelInstance.model->animations[player.idleAnimationIndex];
         playerYaml["cameraLookAtOffset"] >> player.camera.lookAtOffset;
         playerYaml["cameraDistance"] >> player.camera.distance;
-        playerCameraReset();
+        playerCameraReset(false);
         PxCapsuleControllerDesc capsuleControllerDesc;
         playerYaml["capsuleRadius"] >> capsuleControllerDesc.radius;
         playerYaml["capsuleHeight"] >> capsuleControllerDesc.height;
         playerYaml["capsuleContactOffset"] >> capsuleControllerDesc.contactOffset;
         playerYaml["capsuleStepOffset"] >> capsuleControllerDesc.stepOffset;
-        capsuleControllerDesc.material = pxDefaultMaterial;
+        capsuleControllerDesc.slopeLimit = cosf(radian(35));
+        capsuleControllerDesc.climbingMode = PxCapsuleClimbingMode::eCONSTRAINED;
+        capsuleControllerDesc.material = pxPhysics->createMaterial(0.5f, 0.5f, 0.0f);
         assert(capsuleControllerDesc.isValid());
         player.pxController = (PxCapsuleController*)pxControllerManager->createController(capsuleControllerDesc);
         assert(player.pxController);
-        player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d());
+        assert(player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d()));
     }
     for (ryml::ConstNodeRef gameObjectsYaml = yamlRoot["gameObjects"]; ryml::ConstNodeRef objYaml : gameObjectsYaml) {
         GameObject& obj = gameObjects.emplace_back();
+        assert(gameObjects.size() < gameObjectsMaxCount);
         objYaml["name"] >> obj.name;
-        std::string file;
-        objYaml["asset"] >> file;
-        obj.modelInstance = modelInstanceInit(file);
+        std::string assetFile;
+        objYaml["asset"] >> assetFile;
+        obj.modelInstance = modelInstanceInit(assetFile);
         objYaml["transform"] >> obj.transformDefault;
         obj.transform = obj.transformDefault;
         if (ryml::ConstNodeRef rigidActorYaml = objYaml.find_child("rigidActor"); rigidActorYaml.valid()) {
             if (rigidActorYaml["type"] == "static") {
                 obj.rigidActor = pxPhysics->createRigidStatic(obj.transform.toPxTransform());
-                for (PxShape* shape : obj.modelInstance.model->collisionShapes) {
-                    obj.rigidActor->attachShape(*shape);
-                }
                 pxScene->addActor(*obj.rigidActor);
-            } else {
+            }
+            else if (rigidActorYaml["type"] == "dynamic") {
+                obj.rigidActor = pxPhysics->createRigidDynamic(obj.transform.toPxTransform());
+                float mass;
+                rigidActorYaml["mass"] >> mass;
+                ((PxRigidDynamic*)obj.rigidActor)->setMass(mass);
+                pxScene->addActor(*obj.rigidActor);
+            }
+            else {
                 assert(false);
             }
+            if (ryml::ConstNodeRef shapesYaml = rigidActorYaml.find_child("shapes"); shapesYaml.valid()) {
+                for (ryml::ConstNodeRef shapeYaml : shapesYaml) {
+                    PxTransform transform(PxIdentity);
+                    if (shapeYaml["type"] == "plane") {
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxPlaneGeometry(), *pxDefaultMaterial);
+                        shapeYaml["transform"] >> transform;
+                        shape->setLocalPose(transform);
+                    }
+                    else if (shapeYaml["type"] == "box") {
+                        float3 halfExtents;
+                        shapeYaml["halfExtents"] >> halfExtents;
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxBoxGeometry(halfExtents.x, halfExtents.y, halfExtents.z), *pxDefaultMaterial);
+                        shapeYaml["transform"] >> transform;
+                        shape->setLocalPose(transform);
+                    }
+                    else if (shapeYaml["type"] == "sphere") {
+                        float radius;
+                        shapeYaml["radius"] >> radius;
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxSphereGeometry(radius), *pxDefaultMaterial);
+                        shapeYaml["transform"] >> transform;
+                        shape->setLocalPose(transform);
+                    }
+                    else if (shapeYaml["type"] == "capsule") {
+                        float radius, halfHeight;
+                        shapeYaml["radius"] >> radius;
+                        shapeYaml["halfHeight"] >> halfHeight;
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxCapsuleGeometry(radius, halfHeight), *pxDefaultMaterial);
+                        shapeYaml["transform"] >> transform;
+                        shape->setLocalPose(transform);
+                    }
+                    else if (shapeYaml["type"] == "cylinder") {
+                        float radius, height;
+                        shapeYaml["radius"] >> radius;
+                        shapeYaml["height"] >> height;
+                        PxCustomGeometryExt::CylinderCallbacks* cylinder = new PxCustomGeometryExt::CylinderCallbacks(height, radius, 0, 0);
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxCustomGeometry(*cylinder), *pxDefaultMaterial);
+                        shapeYaml["transform"] >> transform;
+                        shape->setLocalPose(transform);
+                    }
+                    else if (shapeYaml["type"] == "cone") {
+                        float radius, height;
+                        shapeYaml["radius"] >> radius;
+                        shapeYaml["height"] >> height;
+                        PxCustomGeometryExt::ConeCallbacks* cone = new PxCustomGeometryExt::ConeCallbacks(height, radius, 0, 0);
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxCustomGeometry(*cone), *pxDefaultMaterial);
+                        shapeYaml["transform"] >> transform;
+                        shape->setLocalPose(transform);
+                    }
+                    else if (shapeYaml["type"] == "convexMesh") {
+                        if (!obj.modelInstance.model->convexMesh) {
+                            assert(modelGenerateConvexMesh(obj.modelInstance.model));
+                        }
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxConvexMeshGeometry(obj.modelInstance.model->convexMesh, PxMeshScale(obj.transform.s.toPxVec3())), *pxDefaultMaterial);
+                        shapeYaml["transform"] >> transform;
+                        shape->setLocalPose(transform);
+                    }
+                    else if (shapeYaml["type"] == "triangleMesh") {
+                        if (!obj.modelInstance.model->triangleMesh) {
+                            assert(modelGenerateTriangleMesh(obj.modelInstance.model));
+                        }
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxTriangleMeshGeometry(obj.modelInstance.model->triangleMesh, PxMeshScale(obj.transform.s.toPxVec3())), *pxDefaultMaterial);
+                        shapeYaml["transform"] >> transform;
+                        shape->setLocalPose(transform);
+                    }
+                    else {
+                        assert(false);
+                    }
+                }
+            }
+#ifdef EDITOR
+            obj.rigidActor->setActorFlag(PxActorFlag::eDISABLE_SIMULATION, true);
+#endif
         }
     }
 }
 
-void worldSave() {
+void editorSave() {
 #ifdef EDITOR
     ryml::Tree yamlTree;
     ryml::NodeRef yamlRoot = yamlTree.rootref();
     yamlRoot |= ryml::MAP;
 
-    ryml::NodeRef cameraYaml = yamlRoot["editorCamera"];
-    cameraYaml |= ryml::MAP;
-    cameraYaml["position"] << editor.camera.position;
-    cameraYaml["pitchYaw"] << editor.camera.pitchYaw;
-    cameraYaml["moveSpeed"] << editor.camera.moveSpeed;
-
-    ryml::NodeRef editorCameraYaml = yamlRoot["editorEditCamera"];
+    ryml::NodeRef editorYaml = yamlRoot["editor"];
+    editorYaml |= ryml::MAP;
+    ryml::NodeRef editorCameraYaml = editorYaml["camera"];
     editorCameraYaml |= ryml::MAP;
-    editorCameraYaml["position"] << editor.editCamera.position;
-    editorCameraYaml["pitchYaw"] << editor.editCamera.pitchYaw;
-    editorCameraYaml["moveSpeed"] << editor.editCamera.moveSpeed;
+    editorCameraYaml["position"] << editor.camera.position;
+    editorCameraYaml["pitchYaw"] << editor.camera.pitchYaw;
+    editorCameraYaml["moveSpeed"] << editor.camera.moveSpeed;
+
+    ryml::NodeRef editorEditCameraYaml = editorYaml["editCamera"];
+    editorEditCameraYaml |= ryml::MAP;
+    editorEditCameraYaml["position"] << editor.editCamera.position;
+    editorEditCameraYaml["pitchYaw"] << editor.editCamera.pitchYaw;
+    editorEditCameraYaml["moveSpeed"] << editor.editCamera.moveSpeed;
 
     ryml::NodeRef assetsYaml = yamlRoot["assets"];
     assetsYaml |= ryml::MAP;
@@ -2893,42 +3214,7 @@ void worldSave() {
     for (Model& model : models) {
         ryml::NodeRef modelYaml = modelsYaml.append_child();
         modelYaml |= ryml::MAP;
-        modelYaml["model"] << model.filePath.string();
-        ryml::NodeRef shapesYaml = modelYaml["collisionShapes"];
-        shapesYaml |= ryml::SEQ, shapesYaml |= ryml::_WIP_STYLE_FLOW_SL;
-        for (PxShape* shape : model.collisionShapes) {
-            ryml::NodeRef shapeYaml = shapesYaml.append_child();
-            shapeYaml |= ryml::MAP;
-            const PxGeometry& geometry = shape->getGeometry();
-            PxGeometryType::Enum geometryType = geometry.getType();
-            if (geometryType == PxGeometryType::ePLANE) {
-                shapeYaml["type"] = "plane";
-                shapeYaml["transform"] << shape->getLocalPose();
-            } else if (geometryType == PxGeometryType::eBOX) {
-                shapeYaml["type"] = "box";
-                shapeYaml["extents"] << float3(((const PxBoxGeometry&)geometry).halfExtents);
-                shapeYaml["transform"] << shape->getLocalPose();
-            } else if (geometryType == PxGeometryType::eSPHERE) {
-                shapeYaml["type"] = "sphere";
-                shapeYaml["radius"] << ((const PxSphereGeometry&)geometry).radius;
-                shapeYaml["transform"] << shape->getLocalPose();
-            } else if (geometryType == PxGeometryType::eCAPSULE) {
-                shapeYaml["type"] = "capsule";
-                shapeYaml["radius"] << ((const PxCapsuleGeometry&)geometry).radius;
-                shapeYaml["halfHeight"] << ((const PxCapsuleGeometry&)geometry).halfHeight;
-                shapeYaml["transform"] << shape->getLocalPose();
-            } else if (geometryType == PxGeometryType::eCONVEXMESH) {
-                assert(false);
-                // PxConvexMeshGeometry physxConvexMesh = (const PxConvexMeshGeometry&)geometry;
-                // PxTransform transform = shape->getLocalPose();
-                // ryml::NodeRef convexMeshYaml = shapesYaml.append_child();
-                // convexMeshYaml |= ryml::MAP;
-                // convexMeshYaml["type"] = "convexMesh";
-                // convexMeshYaml["transform"] << transform;
-            } else {
-                assert(false);
-            }
-        }
+        modelYaml["file"] << model.filePath.string();
     }
 
     ryml::NodeRef skyboxYaml = yamlRoot["skybox"];
@@ -2966,18 +3252,88 @@ void worldSave() {
             PxActorType::Enum actorType = obj.rigidActor->getType();
             if (actorType == PxActorType::eRIGID_STATIC) {
                 rigidActorYaml["type"] << "static";
-            } else {
+            }
+            else if (actorType == PxActorType::eRIGID_DYNAMIC) {
+                rigidActorYaml["type"] << "dynamic";
+                rigidActorYaml["mass"] << ((PxRigidDynamic*)obj.rigidActor)->getMass();
+            }
+            else {
                 assert(false);
+            }
+            uint shapeCount = obj.rigidActor->getNbShapes();
+            if (shapeCount > 0) {
+                static std::vector<PxShape*> shapes;
+                shapes.resize(shapeCount);
+                obj.rigidActor->getShapes(shapes.data(), shapeCount);
+                ryml::NodeRef shapesYaml = rigidActorYaml["shapes"];
+                shapesYaml |= ryml::SEQ, shapesYaml |= ryml::_WIP_STYLE_FLOW_SL;
+                for (PxShape* shape : shapes) {
+                    ryml::NodeRef shapeYaml = shapesYaml.append_child();
+                    shapeYaml |= ryml::MAP;
+                    const PxGeometry& geometry = shape->getGeometry();
+                    PxGeometryType::Enum geometryType = geometry.getType();
+                    if (geometryType == PxGeometryType::ePLANE) {
+                        shapeYaml["type"] = "plane";
+                        shapeYaml["transform"] << shape->getLocalPose();
+                    }
+                    else if (geometryType == PxGeometryType::eBOX) {
+                        shapeYaml["type"] = "box";
+                        shapeYaml["HalfExtents"] << float3(((const PxBoxGeometry&)geometry).halfExtents);
+                        shapeYaml["transform"] << shape->getLocalPose();
+                    }
+                    else if (geometryType == PxGeometryType::eSPHERE) {
+                        shapeYaml["type"] = "sphere";
+                        shapeYaml["radius"] << ((const PxSphereGeometry&)geometry).radius;
+                        shapeYaml["transform"] << shape->getLocalPose();
+                    }
+                    else if (geometryType == PxGeometryType::eCAPSULE) {
+                        shapeYaml["type"] = "capsule";
+                        shapeYaml["radius"] << ((const PxCapsuleGeometry&)geometry).radius;
+                        shapeYaml["halfHeight"] << ((const PxCapsuleGeometry&)geometry).halfHeight;
+                        shapeYaml["transform"] << shape->getLocalPose();
+                    }
+                    else if (geometryType == PxGeometryType::eCONVEXMESH) {
+                        shapeYaml["type"] = "convexMesh";
+                        shapeYaml["transform"] << shape->getLocalPose();
+                    }
+                    else if (geometryType == PxGeometryType::eTRIANGLEMESH) {
+                        shapeYaml["type"] = "triangleMesh";
+                        shapeYaml["transform"] << shape->getLocalPose();
+                    }
+                    else if (geometryType == PxGeometryType::eCUSTOM) {
+                        PxCustomGeometry customGeometry = (const PxCustomGeometry&)geometry;
+                        if (customGeometry.callbacks->getCustomType() == PxCustomGeometryExt::CylinderCallbacks::TYPE()) {
+                            PxCustomGeometryExt::CylinderCallbacks* cylinderCallback = (PxCustomGeometryExt::CylinderCallbacks*)customGeometry.callbacks;
+                            shapeYaml["type"] = "cylinder";
+                            shapeYaml["radius"] << cylinderCallback->getRadius();
+                            shapeYaml["height"] << cylinderCallback->getHeight();
+                            shapeYaml["transform"] << shape->getLocalPose();
+                        }
+                        else if (customGeometry.callbacks->getCustomType() == PxCustomGeometryExt::ConeCallbacks::TYPE()) {
+                            PxCustomGeometryExt::ConeCallbacks* coneCallback = (PxCustomGeometryExt::ConeCallbacks*)customGeometry.callbacks;
+                            shapeYaml["type"] = "cone";
+                            shapeYaml["radius"] << coneCallback->getRadius();
+                            shapeYaml["height"] << coneCallback->getHeight();
+                            shapeYaml["transform"] << shape->getLocalPose();
+                        }
+                        else {
+                            assert(false);
+                        }
+                    }
+                    else {
+                        assert(false);
+                    }
+                    shape->release();
+                }
             }
         }
     }
-
     std::string yamlStr = ryml::emitrs_yaml<std::string>(yamlTree);
     fileWriteStr(worldFilePath, yamlStr);
 #endif
 }
 
-void worldReadSave(const std::filesystem::path& path) {
+void gameReadSave(const std::filesystem::path& path) {
 #ifndef EDITOR
     if (!std::filesystem::exists(path)) return;
 
@@ -2990,7 +3346,7 @@ void worldReadSave(const std::filesystem::path& path) {
 #endif
 }
 
-void worldWriteSave(const std::filesystem::path& path) {
+void gameSave(const std::filesystem::path& path) {
 #ifndef EDITOR
     ryml::Tree yamlTree;
     ryml::NodeRef yamlRoot = yamlTree.rootref();
@@ -3007,23 +3363,39 @@ void worldWriteSave(const std::filesystem::path& path) {
 
 void gameObjectRelease(GameObject& obj) {
     modelInstanceRelease(obj.modelInstance);
+    if (obj.rigidActor) {
+        obj.rigidActor->release();
+    }
 }
 
+void setRigidActorsVisualization(bool b) {
+    player.pxController->getActor()->setActorFlag(PxActorFlag::eVISUALIZATION, b);
+    for (GameObject& obj : gameObjects) {
+        if (obj.rigidActor) {
+            obj.rigidActor->setActorFlag(PxActorFlag::eVISUALIZATION, b);
+        }
+    }
+}
+
+#ifdef EDITOR
 void toggleBetweenEditorPlay() {
     editorActive = !editorActive;
+    windowHideCursor(!editorActive);
     player.transform = player.transformDefault;
     player.pxController->setFootPosition(player.transform.t.toPxVec3d());
-    playerCameraReset();
+    playerCameraReset(true);
     for (GameObject& obj : gameObjects) {
         obj.transform = obj.transformDefault;
         if (obj.rigidActor) {
             obj.rigidActor->setGlobalPose(obj.transform.toPxTransform());
+            obj.rigidActor->setActorFlag(PxActorFlag::eDISABLE_SIMULATION, editorActive);
+            if (!editorActive && obj.rigidActor->getType() == PxActorType::eRIGID_DYNAMIC) {
+                ((PxRigidDynamic*)obj.rigidActor)->wakeUp();
+            }
         }
     }
-    windowHideCursor(!editorActive);
 }
 
-#ifdef EDITOR
 void editorMainMenuBar() {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
@@ -3037,11 +3409,14 @@ void editorMainMenuBar() {
                     char filePath[256] = {};
                     OPENFILENAMEA openFileName = {.lStructSize = sizeof(openFileName), .hwndOwner = window.hwnd, .lpstrFile = filePath, .nMaxFile = sizeof(filePath)};
                     if (GetOpenFileNameA(&openFileName)) {
-                    } else {
+                    }
+                    else {
                         DWORD error = CommDlgExtendedError();
                         if (error == FNERR_BUFFERTOOSMALL) {
-                        } else if (error == FNERR_INVALIDFILENAME) {
-                        } else if (error == FNERR_SUBCLASSFAILURE) {
+                        }
+                        else if (error == FNERR_INVALIDFILENAME) {
+                        }
+                        else if (error == FNERR_SUBCLASSFAILURE) {
                         }
                     }
                 }
@@ -3055,10 +3430,12 @@ void editorMainMenuBar() {
             if (ImGui::MenuItem(hdr ? "HDR (On)" : "HDR (Off)")) {
                 hdr = !hdr;
                 d3dApplySettings();
-            } else if (ImGui::MenuItem("Windowed")) {
+            }
+            else if (ImGui::MenuItem("Windowed")) {
                 windowMode = WindowModeWindowed;
                 d3dApplySettings();
-            } else if (ImGui::MenuItem("Borderless Fullscreen")) {
+            }
+            else if (ImGui::MenuItem("Borderless Fullscreen")) {
                 windowMode = WindowModeBorderless;
                 d3dApplySettings();
             }
@@ -3084,24 +3461,20 @@ void editorMainMenuBar() {
         }
         if (ImGui::BeginMenu("View")) {
             if (ImGui::BeginMenu("Camera")) {
-                float speed = editor.camera.moveSpeed / scaleFactor;
-                float speedMax = editor.camera.moveSpeedMax / scaleFactor;
-                if (ImGui::SliderFloat("speed(meters)", &speed, 0.0f, speedMax)) {
-                    editor.camera.moveSpeed = speed * scaleFactor;
-                }
+                ImGui::SliderFloat("speed(meters)", &editor.camera.moveSpeed, 0, editor.camera.moveSpeedMax);
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("EditObjectCamera")) {
-                float speed = editor.editCamera.moveSpeed / scaleFactor;
-                float speedMax = editor.editCamera.moveSpeedMax / scaleFactor;
-                if (ImGui::SliderFloat("speed(meters)", &speed, 0.0f, speedMax)) {
-                    editor.editCamera.moveSpeed = speed * scaleFactor;
-                }
+                ImGui::SliderFloat("speed(meters)", &editor.editCamera.moveSpeed, 0, editor.editCamera.moveSpeedMax);
                 ImGui::EndMenu();
             }
             ImGui::Separator();
             ImGui::Checkbox("XRay", &editor.selectedObjectXRay);
             ImGui::Checkbox("RigidActors", &showRigidActorsGeometries);
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("render")) {
+            ImGui::Checkbox("pathTracer", &pathTracer);
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -3152,11 +3525,14 @@ void editorObjectsWindow() {
             if (ImGui::Button("Ok") || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
                 if (objectName[0] == '\0') {
                     ImGui::DebugLog("error: object name is empty\n");
-                } else if (!nameUnique()) {
+                }
+                else if (!nameUnique()) {
                     ImGui::DebugLog("error: object name \"%s\" already exists\n", objectName);
-                } else if (modelIndex >= models.size() || modelIndex < 0) {
+                }
+                else if (modelIndex >= models.size() || modelIndex < 0) {
                     ImGui::DebugLog("error: invalid modelIndex %d\n", modelIndex);
-                } else {
+                }
+                else {
                     GameObject gameObject = {.name = objectName, .modelInstance = modelInstanceInit(&models[modelIndex])};
                     gameObjects.push_back(std::move(gameObject));
                 }
@@ -3179,7 +3555,8 @@ void editorObjectsWindow() {
                     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                         objectName[0] = '\0';
                         editor.renameObjectIndex = UINT_MAX;
-                    } else if (ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+                    }
+                    else if (ImGui::IsKeyPressed(ImGuiKey_Enter)) {
                         auto uniqueName = [](GameObject& obj) {
                             for (GameObject& object : gameObjects) {
                                 if (object.name == objectName && &object != &obj) {
@@ -3190,15 +3567,18 @@ void editorObjectsWindow() {
                         };
                         if (objectName[0] == '\0') {
                             ImGui::DebugLog("error: object name empty\n");
-                        } else if (!uniqueName(obj)) {
+                        }
+                        else if (!uniqueName(obj)) {
                             ImGui::DebugLog("error: object name \"%s\" already exists\n", objectName);
-                        } else {
+                        }
+                        else {
                             obj.name = objectName;
                             objectName[0] = '\0';
                             editor.renameObjectIndex = UINT_MAX;
                         }
                     }
-                } else {
+                }
+                else {
                     if (ImGui::Selectable(obj.name.c_str(), editor.selectedObjectType == ObjectTypeGameObject && editor.selectedObjectIndex == objIndex, ImGuiSelectableFlags_AllowDoubleClick)) {
                         editor.selectedObjectType = ObjectTypeGameObject;
                         editor.selectedObjectIndex = objIndex;
@@ -3279,229 +3659,378 @@ bool transformImGui(PxTransform& pxTransform) {
     return false;
 }
 
-void editorModelPropertiesWindow() {
-    Model& model = models[editor.selectedModelIndex];
-    ImGui::Text("Model %s", model.filePathStr.c_str());
-    bool shapesNodeOpen = ImGui::TreeNode("CollisionShapes");
-    if (ImGui::BeginPopupContextItem()) {
-        if (ImGui::Button("new plane")) {
-            PxShape* shape = pxPhysics->createShape(PxPlaneGeometry(), *pxDefaultMaterial);
-            model.collisionShapes.push_back(shape);
-            ImGui::CloseCurrentPopup();
+void editorPropertiesPlayer() {
+    ImGui::Text("Player");
+    modelInstanceImGui(&player.modelInstance);
+    if (ImGui::TreeNode("Spawn")) {
+        if (transformImGui(player.transformDefault, true, true, true)) {
+            player.transform = player.transformDefault;
+            player.pxController->setFootPosition(player.transform.t.toPxVec3d());
         }
-        if (ImGui::Button("new box")) {
-            PxShape* shape = pxPhysics->createShape(PxBoxGeometry(1, 1, 1), *pxDefaultMaterial);
-            model.collisionShapes.push_back(shape);
-            ImGui::CloseCurrentPopup();
-        }
-        if (ImGui::Button("new sphere")) {
-            PxShape* shape = pxPhysics->createShape(PxSphereGeometry(1), *pxDefaultMaterial);
-            model.collisionShapes.push_back(shape);
-            ImGui::CloseCurrentPopup();
-        }
-        if (ImGui::Button("new capsule")) {
-            PxShape* shape = pxPhysics->createShape(PxCapsuleGeometry(1, 1), *pxDefaultMaterial);
-            model.collisionShapes.push_back(shape);
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
+        ImGui::TreePop();
     }
-    if (shapesNodeOpen) {
-        auto shapeToDelete = model.collisionShapes.end();
-        for (uint shapeIndex = 0; shapeIndex < model.collisionShapes.size(); shapeIndex++) {
-            PxShape* shape = model.collisionShapes[shapeIndex];
-            const PxGeometry& geometry = shape->getGeometry();
-            PxGeometryType::Enum geometryType = geometry.getType();
-            ImGui::PushID(shapeIndex);
-            bool open = false;
-            if (geometryType == PxGeometryType::ePLANE) {
-                open = ImGui::TreeNode("plane");
-            } else if (geometryType == PxGeometryType::eBOX) {
-                open = ImGui::TreeNode("box");
-            } else if (geometryType == PxGeometryType::eSPHERE) {
-                open = ImGui::TreeNode("sphere");
-            } else if (geometryType == PxGeometryType::eCAPSULE) {
-                open = ImGui::TreeNode("capsule");
-            } else {
-                assert(false);
-            }
-            if (ImGui::BeginPopupContextItem()) {
-                if (ImGui::Button("transform")) {
-                    editor.selectedModelCollisionShape = shape;
-                    ImGui::CloseCurrentPopup();
-                }
-                if (ImGui::Button("delete")) {
-                    shape->release();
-                    for (GameObject& obj : gameObjects) {
-                        if (obj.modelInstance.model == &model && obj.rigidActor) {
-                            obj.rigidActor->detachShape(*shape);
-                        }
-                    }
-                    shape = nullptr;
-                    editor.selectedModelCollisionShape = nullptr;
-                    shapeToDelete = model.collisionShapes.begin() + shapeIndex;
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::EndPopup();
-            }
-            if (open) {
-                if (shape) {
-                    if (geometryType == PxGeometryType::ePLANE) {
-                        PxPlaneGeometry plane = (const PxPlaneGeometry&)geometry;
-                    } else if (geometryType == PxGeometryType::eBOX) {
-                        PxBoxGeometry box = (const PxBoxGeometry&)geometry;
-                        if (ImGui::InputFloat3("extents", &box.halfExtents.x) && box.isValid()) {
-                            shape->setGeometry(box);
-                        }
-                    } else if (geometryType == PxGeometryType::eSPHERE) {
-                        PxSphereGeometry sphere = (const PxSphereGeometry&)geometry;
-                        if (ImGui::InputFloat("radius", &sphere.radius, 0, 0) && sphere.isValid()) {
-                            shape->setGeometry(sphere);
-                        }
-                    } else if (geometryType == PxGeometryType::eCAPSULE) {
-                        PxCapsuleGeometry capsule = (const PxCapsuleGeometry&)geometry;
-                        bool b0 = ImGui::InputFloat("radius", &capsule.radius, 0, 0) && capsule.isValid();
-                        bool b1 = ImGui::InputFloat("halfHeight", &capsule.halfHeight, 0, 0) && capsule.isValid();
-                        if (b0 || b1) {
-                            shape->setGeometry(capsule);
-                        }
-                    } else {
-                        assert(false);
-                    }
-                    PxTransform pxTransform = shape->getLocalPose();
-                    if (transformImGui(pxTransform)) {
-                        shape->setLocalPose(pxTransform);
-                    }
-                }
-                ImGui::TreePop();
-            }
-            ImGui::PopID();
+    if (ImGui::TreeNode("Locomotion")) {
+        ImGui::InputFloat("walkSpeed", &player.walkSpeed);
+        ImGui::InputFloat("runSpeed", &player.runSpeed);
+        ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("CapsuleController")) {
+        float radius = player.pxController->getRadius();
+        float height = player.pxController->getHeight();
+        float contactOffset = player.pxController->getContactOffset();
+        float stepOffset = player.pxController->getStepOffset();
+        if (ImGui::InputFloat("radius", &radius)) {
+            radius = std::clamp(radius, 0.0f, 10.0f);
+            player.pxController->setRadius(radius);
+            player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d());
         }
-        if (shapeToDelete != model.collisionShapes.end()) {
-            model.collisionShapes.erase(shapeToDelete);
+        if (ImGui::InputFloat("height", &height)) {
+            height = std::clamp(height, 0.0f, 10.0f);
+            player.pxController->setHeight(height);
+            player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d());
+        }
+        if (ImGui::InputFloat("contactOffset", &contactOffset)) {
+            contactOffset = std::clamp(contactOffset, 0.0f, 1.0f);
+            player.pxController->setContactOffset(contactOffset);
+            player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d());
+        }
+        if (ImGui::InputFloat("stepOffset", &stepOffset)) {
+            stepOffset = std::clamp(stepOffset, 0.0f, 1.0f);
+            player.pxController->setStepOffset(stepOffset);
+            player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d());
+        }
+        ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Animations")) {
+        Model* model = player.modelInstance.model;
+        if (model->animations.size() > 0) {
+            auto selectAnimation = [model](const char* label, uint* index) {
+                if (ImGui::BeginCombo(label, model->animations[*index].name.c_str())) {
+                    for (uint animationIndex = 0; animationIndex < model->animations.size(); animationIndex++) {
+                        if (ImGui::Selectable(model->animations[animationIndex].name.c_str())) {
+                            *index = animationIndex;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+            };
+            selectAnimation("idle", &player.idleAnimationIndex);
+            selectAnimation("walk", &player.walkAnimationIndex);
+            selectAnimation("run", &player.runAnimationIndex);
+            selectAnimation("jump", &player.jumpAnimationIndex);
         }
         ImGui::TreePop();
     }
 }
 
-void editorGameObjectPropertiesWindow() {
-    if (editor.selectedObjectType == ObjectTypePlayer) {
-        ImGui::Text("Player");
-        modelInstanceImGui(&player.modelInstance);
-        if (ImGui::TreeNode("Locomotion")) {
-            if (transformImGui(player.transformDefault, true, true, true)) {
-                player.transform = player.transformDefault;
-                player.pxController->setFootPosition(player.transform.t.toPxVec3d());
+void editorUpdateGameObjectTransformDefault(GameObject& obj, Transform t) {
+    obj.transformDefault = t;
+    obj.transform = t;
+    if (obj.rigidActor) {
+        obj.rigidActor->setGlobalPose(t.toPxTransform());
+        static std::vector<PxShape*> shapes;
+        shapes.resize(obj.rigidActor->getNbShapes());
+        obj.rigidActor->getShapes(shapes.data(), (uint)shapes.size());
+        for (PxShape* shape : shapes) {
+            const PxGeometry& geometry = shape->getGeometry();
+            if (geometry.getType() == PxGeometryType::eCONVEXMESH) {
+                shape->setGeometry(PxConvexMeshGeometry(((const PxConvexMeshGeometry&)geometry).convexMesh, PxMeshScale(t.s.toPxVec3())));
+                break;
             }
-            ImGui::TreePop();
-        }
-        if (ImGui::TreeNode("CapsuleController")) {
-            float radius = player.pxController->getRadius();
-            float height = player.pxController->getHeight();
-            float contactOffset = player.pxController->getContactOffset();
-            float stepOffset = player.pxController->getStepOffset();
-            if (ImGui::InputFloat("radius", &radius, 0, 0)) {
-                radius = std::clamp(radius, meters(0), meters(10));
-                player.pxController->setRadius(radius);
-                player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d());
-            }
-            if (ImGui::InputFloat("height", &height, 0, 0)) {
-                height = std::clamp(height, meters(0), meters(10));
-                player.pxController->setHeight(height);
-                player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d());
-            }
-            if (ImGui::InputFloat("contactOffset", &contactOffset, 0, 0)) {
-                contactOffset = std::clamp(contactOffset, meters(0), meters(1));
-                player.pxController->setContactOffset(contactOffset);
-                player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d());
-            }
-            if (ImGui::InputFloat("stepOffset", &stepOffset, 0, 0)) {
-                stepOffset = std::clamp(stepOffset, meters(0), meters(1));
-                player.pxController->setStepOffset(stepOffset);
-                player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d());
-            }
-            ImGui::TreePop();
-        }
-        if (ImGui::TreeNode("Animations")) {
-            Model* model = player.modelInstance.model;
-            if (model->animations.size() > 0) {
-                auto selectAnimation = [model](const char* label, uint* index) {
-                    if (ImGui::BeginCombo(label, model->animations[*index].name.c_str())) {
-                        for (uint animationIndex = 0; animationIndex < model->animations.size(); animationIndex++) {
-                            if (ImGui::Selectable(model->animations[animationIndex].name.c_str())) {
-                                *index = animationIndex;
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                };
-                selectAnimation("idle", &player.idleAnimationIndex);
-                selectAnimation("walk", &player.walkAnimationIndex);
-                selectAnimation("run", &player.runAnimationIndex);
-                selectAnimation("jump", &player.jumpAnimationIndex);
-            }
-            ImGui::TreePop();
         }
     }
-    if (editor.selectedObjectType == ObjectTypeGameObject) {
-        GameObject& obj = gameObjects[editor.selectedObjectIndex];
-        ImGui::Text("GameObject \"%s\"", obj.name.c_str());
-        modelInstanceImGui(&obj.modelInstance);
-        if (ImGui::TreeNode("Locomotion")) {
-            if (transformImGui(obj.transformDefault, true, true, true)) {
-                obj.transform = obj.transformDefault;
-                if (obj.rigidActor) obj.rigidActor->setGlobalPose(obj.transform.toPxTransform());
-            }
-            ImGui::TreePop();
+}
+
+void editorPropertiesGameObject() {
+    GameObject& obj = gameObjects[editor.selectedObjectIndex];
+    ImGui::Text("GameObject \"%s\"", obj.name.c_str());
+    modelInstanceImGui(&obj.modelInstance);
+    if (ImGui::TreeNode("Spawn")) {
+        Transform transform = obj.transformDefault;
+        if (transformImGui(transform, true, true, true)) {
+            editorUpdateGameObjectTransformDefault(obj, transform);
         }
-        bool rigidActorTreeOpen = ImGui::TreeNode("RigidActor");
-        if (ImGui::BeginPopupContextItem()) {
-            if (obj.rigidActor) {
-                if (ImGui::Button("delete")) {
-                    obj.rigidActor->release();
-                    obj.rigidActor = nullptr;
+        ImGui::TreePop();
+    }
+    bool rigidActorTreeOpen = ImGui::TreeNode("RigidActor");
+    if (ImGui::BeginPopupContextItem()) {
+        if (obj.rigidActor) {
+            if (ImGui::Button("delete")) {
+                obj.rigidActor->release();
+                obj.rigidActor = nullptr;
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        else {
+            if (ImGui::Button("new rigid static")) {
+                obj.rigidActor = pxPhysics->createRigidStatic(obj.transform.toPxTransform());
+                pxScene->addActor(*obj.rigidActor);
+                obj.rigidActor->setActorFlag(PxActorFlag::eDISABLE_SIMULATION, true);
+                ImGui::CloseCurrentPopup();
+            }
+            if (ImGui::Button("new rigid dynamic")) {
+                obj.rigidActor = pxPhysics->createRigidDynamic(obj.transform.toPxTransform());
+                pxScene->addActor(*obj.rigidActor);
+                obj.rigidActor->setActorFlag(PxActorFlag::eDISABLE_SIMULATION, true);
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::EndPopup();
+    }
+    if (rigidActorTreeOpen) {
+        if (obj.rigidActor) {
+            PxActorType::Enum actorType = obj.rigidActor->getType();
+            if (actorType == PxActorType::eRIGID_STATIC) {
+                ImGui::Text("Type: Static");
+            }
+            else if (actorType == PxActorType::eRIGID_DYNAMIC) {
+                ImGui::Text("Type: Dyanamic");
+                float mass = ((PxRigidDynamic*)obj.rigidActor)->getMass();
+                if (ImGui::InputFloat("mass", &mass)) {
+                    ((PxRigidDynamic*)obj.rigidActor)->setMass(mass);
+                }
+            }
+            else {
+                assert(false);
+            }
+            bool shapesNodeOpen = ImGui::TreeNode("shapes");
+            static std::vector<PxShape*> shapes;
+            shapes.resize(obj.rigidActor->getNbShapes());
+            obj.rigidActor->getShapes(shapes.data(), (uint)shapes.size());
+            if (ImGui::BeginPopupContextItem()) {
+                if (ImGui::Button("new plane")) {
+                    assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxPlaneGeometry(), *pxDefaultMaterial));
                     ImGui::CloseCurrentPopup();
                 }
-            } else {
-                if (ImGui::Button("new rigid static")) {
-                    obj.rigidActor = pxPhysics->createRigidStatic(PxTransform(PxIdentity));
-                    for (PxShape* shape : obj.modelInstance.model->collisionShapes) {
-                        obj.rigidActor->attachShape(*shape);
+                if (ImGui::Button("new box")) {
+                    assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxBoxGeometry(1, 1, 1), *pxDefaultMaterial));
+                    ImGui::CloseCurrentPopup();
+                }
+                if (ImGui::Button("new sphere")) {
+                    assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxSphereGeometry(1), *pxDefaultMaterial));
+                    ImGui::CloseCurrentPopup();
+                }
+                if (ImGui::Button("new capsule")) {
+                    assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxCapsuleGeometry(1, 1), *pxDefaultMaterial));
+                    ImGui::CloseCurrentPopup();
+                }
+                if (ImGui::Button("new cylinder")) {
+                    PxCustomGeometryExt::CylinderCallbacks* cylinder = new PxCustomGeometryExt::CylinderCallbacks(1, 0.5f, 0, 0);
+                    assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxCustomGeometry(*cylinder), *pxDefaultMaterial));
+                    ImGui::CloseCurrentPopup();
+                }
+                if (ImGui::Button("new cone")) {
+                    PxCustomGeometryExt::ConeCallbacks* cone = new PxCustomGeometryExt::ConeCallbacks(1, 1, 0, 0);
+                    assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxCustomGeometry(*cone), *pxDefaultMaterial));
+                    ImGui::CloseCurrentPopup();
+                }
+                if (ImGui::Button("new convex mesh")) {
+                    bool hasConvexMesh = false;
+                    for (PxShape* shape : shapes) {
+                        if (const PxGeometry& geometry = shape->getGeometry(); geometry.getType() == PxGeometryType::eCONVEXMESH) {
+                            hasConvexMesh = true;
+                            break;
+                        }
                     }
-                    pxScene->addActor(*obj.rigidActor);
-                    ImGui::CloseCurrentPopup();
-                }
-                if (ImGui::Button("new rigid dynamic")) {
-                    obj.rigidActor = pxPhysics->createRigidDynamic(PxTransform(PxIdentity));
-                    for (PxShape* shape : obj.modelInstance.model->collisionShapes) {
-                        obj.rigidActor->attachShape(*shape);
+                    if (hasConvexMesh) {
+                        ImGui::DebugLog("a convex mesh already exists\n");
                     }
-                    pxScene->addActor(*obj.rigidActor);
+                    else {
+                        if (obj.modelInstance.model->convexMesh) {
+                            assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxConvexMeshGeometry(obj.modelInstance.model->convexMesh, PxMeshScale(obj.transform.s.toPxVec3())), *pxDefaultMaterial));
+                        }
+                        else {
+                            if (modelGenerateConvexMesh(obj.modelInstance.model)) {
+                                assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxConvexMeshGeometry(obj.modelInstance.model->convexMesh, PxMeshScale(obj.transform.s.toPxVec3())), *pxDefaultMaterial));
+                            }
+                            else {
+                                ImGui::DebugLog("failed to generate convex mesh\n");
+                            }
+                        }
+                    }
                     ImGui::CloseCurrentPopup();
                 }
-            }
-            ImGui::EndPopup();
-        }
-        if (rigidActorTreeOpen) {
-            if (obj.rigidActor) {
-                PxActorType::Enum actorType = obj.rigidActor->getType();
-                if (actorType == PxActorType::eRIGID_STATIC) {
-                    ImGui::Text("Type: Static");
-                } else {
-                    assert(false);
+                if (actorType == PxActorType::eRIGID_STATIC && ImGui::Button("new triangle mesh")) {
+                    bool hasTriangleMesh = false;
+                    for (PxShape* shape : shapes) {
+                        if (const PxGeometry& geometry = shape->getGeometry(); geometry.getType() == PxGeometryType::eTRIANGLEMESH) {
+                            hasTriangleMesh = true;
+                            break;
+                        }
+                    }
+                    if (hasTriangleMesh) {
+                        ImGui::DebugLog("a triangle mesh already exists\n");
+                    }
+                    else {
+                        if (obj.modelInstance.model->triangleMesh) {
+                            assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxTriangleMeshGeometry(obj.modelInstance.model->triangleMesh, PxMeshScale(obj.transform.s.toPxVec3())), *pxDefaultMaterial));
+                        }
+                        else {
+                            if (modelGenerateTriangleMesh(obj.modelInstance.model)) {
+                                assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxTriangleMeshGeometry(obj.modelInstance.model->triangleMesh, PxMeshScale(obj.transform.s.toPxVec3())), *pxDefaultMaterial));
+                            }
+                            else {
+                                ImGui::DebugLog("failed to generate a triangle mesh\n");
+                            }
+                        }
+                    }
+                    ImGui::CloseCurrentPopup();
                 }
+                ImGui::EndPopup();
             }
-            ImGui::TreePop();
+            if (shapesNodeOpen) {
+                PxShape* shapeToDelete = nullptr;
+                for (uint shapeIndex = 0; shapeIndex < shapes.size(); shapeIndex++) {
+                    PxShape* shape = shapes[shapeIndex];
+                    const PxGeometry& geometry = shape->getGeometry();
+                    PxGeometryType::Enum geometryType = geometry.getType();
+                    ImGui::PushID(shapeIndex);
+                    bool open = false;
+                    if (geometryType == PxGeometryType::ePLANE) {
+                        open = ImGui::TreeNode("plane");
+                    }
+                    else if (geometryType == PxGeometryType::eBOX) {
+                        open = ImGui::TreeNode("box");
+                    }
+                    else if (geometryType == PxGeometryType::eSPHERE) {
+                        open = ImGui::TreeNode("sphere");
+                    }
+                    else if (geometryType == PxGeometryType::eCAPSULE) {
+                        open = ImGui::TreeNode("capsule");
+                    }
+                    else if (geometryType == PxGeometryType::eCUSTOM) {
+                        PxCustomGeometry customGeometry = (const PxCustomGeometry&)geometry;
+                        if (customGeometry.callbacks->getCustomType() == PxCustomGeometryExt::CylinderCallbacks::TYPE()) {
+                            open = ImGui::TreeNode("cylinder");
+                        }
+                        else if (customGeometry.callbacks->getCustomType() == PxCustomGeometryExt::ConeCallbacks::TYPE()) {
+                            open = ImGui::TreeNode("cone");
+                        }
+                    }
+                    else if (geometryType == PxGeometryType::eCONVEXMESH) {
+                        open = ImGui::TreeNode("convex mesh");
+                    }
+                    else if (geometryType == PxGeometryType::eTRIANGLEMESH) {
+                        open = ImGui::TreeNode("triangle mesh");
+                    }
+                    else {
+                        assert(false);
+                    }
+                    if (ImGui::BeginPopupContextItem()) {
+                        if (ImGui::Button("delete")) {
+                            shapeToDelete = shape;
+                            ImGui::CloseCurrentPopup();
+                        }
+                        ImGui::EndPopup();
+                    }
+                    if (open) {
+                        PxTransform pxTransform = shape->getLocalPose();
+                        if (geometryType == PxGeometryType::ePLANE) {
+                            if (transformImGui(pxTransform)) {
+                                shape->setLocalPose(pxTransform);
+                            }
+                        }
+                        else if (geometryType == PxGeometryType::eBOX) {
+                            PxBoxGeometry box = (const PxBoxGeometry&)geometry;
+                            if (ImGui::InputFloat3("extents", &box.halfExtents.x) && box.isValid()) {
+                                shape->setGeometry(box);
+                            }
+                            if (transformImGui(pxTransform)) {
+                                shape->setLocalPose(pxTransform);
+                            }
+                        }
+                        else if (geometryType == PxGeometryType::eSPHERE) {
+                            PxSphereGeometry sphere = (const PxSphereGeometry&)geometry;
+                            if (ImGui::InputFloat("radius", &sphere.radius) && sphere.isValid()) {
+                                shape->setGeometry(sphere);
+                            }
+                            if (transformImGui(pxTransform)) {
+                                shape->setLocalPose(pxTransform);
+                            }
+                        }
+                        else if (geometryType == PxGeometryType::eCAPSULE) {
+                            PxCapsuleGeometry capsule = (const PxCapsuleGeometry&)geometry;
+                            bool b0 = ImGui::InputFloat("radius", &capsule.radius) && capsule.isValid();
+                            bool b1 = ImGui::InputFloat("halfHeight", &capsule.halfHeight) && capsule.isValid();
+                            if (b0 || b1) {
+                                shape->setGeometry(capsule);
+                            }
+                            if (transformImGui(pxTransform)) {
+                                shape->setLocalPose(pxTransform);
+                            }
+                        }
+                        else if (geometryType == PxGeometryType::eCUSTOM) {
+                            PxCustomGeometry customGeometry = (const PxCustomGeometry&)geometry;
+                            if (customGeometry.callbacks->getCustomType() == PxCustomGeometryExt::CylinderCallbacks::TYPE()) {
+                                PxCustomGeometryExt::CylinderCallbacks* cylinderCallback = (PxCustomGeometryExt::CylinderCallbacks*)customGeometry.callbacks;
+                                float radius = cylinderCallback->getRadius();
+                                float height = cylinderCallback->getHeight();
+                                bool b0 = ImGui::InputFloat("radius", &radius);
+                                bool b1 = ImGui::InputFloat("height", &height);
+                                if (b0 || b1) {
+                                    cylinderCallback->setRadius(radius);
+                                    cylinderCallback->setHeight(height);
+                                    shape->setGeometry(PxCustomGeometry(*cylinderCallback));
+                                }
+                                if (transformImGui(pxTransform)) {
+                                    shape->setLocalPose(pxTransform);
+                                }
+                            }
+                            else if (customGeometry.callbacks->getCustomType() == PxCustomGeometryExt::ConeCallbacks::TYPE()) {
+                                PxCustomGeometryExt::ConeCallbacks* coneCallback = (PxCustomGeometryExt::ConeCallbacks*)customGeometry.callbacks;
+                                float radius = coneCallback->getRadius();
+                                float height = coneCallback->getHeight();
+                                bool b0 = ImGui::InputFloat("radius", &radius);
+                                bool b1 = ImGui::InputFloat("height", &height);
+                                if (b0 || b1) {
+                                    coneCallback->setRadius(radius);
+                                    coneCallback->setHeight(height);
+                                    shape->setGeometry(PxCustomGeometry(*coneCallback));
+                                }
+                                if (transformImGui(pxTransform)) {
+                                    shape->setLocalPose(pxTransform);
+                                }
+                            }
+                            else {
+                                assert(false);
+                            }
+                        }
+                        else if (geometryType == PxGeometryType::eCONVEXMESH) {
+                            PxConvexMeshGeometry convexMesh = (const PxConvexMeshGeometry&)geometry;
+                            if (transformImGui(pxTransform)) {
+                                shape->setLocalPose(pxTransform);
+                            }
+                        }
+                        else if (geometryType == PxGeometryType::eTRIANGLEMESH) {
+                            PxTriangleMeshGeometry triangleMesh = (const PxTriangleMeshGeometry&)geometry;
+                            if (transformImGui(pxTransform)) {
+                                shape->setLocalPose(pxTransform);
+                            }
+                        }
+                        else {
+                            assert(false);
+                        }
+                        ImGui::TreePop();
+                    }
+                    ImGui::PopID();
+                }
+                if (shapeToDelete) {
+                    obj.rigidActor->detachShape(*shapeToDelete);
+                }
+                ImGui::TreePop();
+            }
         }
+        ImGui::TreePop();
     }
 }
 
 void editorPropertiesWindow() {
     if (ImGui::Begin("Properties")) {
-        if (editor.mode == EditorModeEditModel) {
-            editorModelPropertiesWindow();
-        } else {
-            editorGameObjectPropertiesWindow();
+        if (editor.selectedObjectType == ObjectTypePlayer) {
+            editorPropertiesPlayer();
+        }
+        else if (editor.selectedObjectType == ObjectTypeGameObject) {
+            editorPropertiesGameObject();
         }
     }
     ImGui::End();
@@ -3541,18 +4070,14 @@ void editorAssetsWindow() {
         if (modelsTreeOpen) {
             for (uint modelIndex = 0; modelIndex < models.size(); modelIndex++) {
                 ImGui::PushID(modelIndex);
-                ImGui::Selectable(models[modelIndex].filePath.string().c_str());
-                if (ImGui::BeginPopupContextItem("selected model popup")) {
-                    if (ImGui::Selectable("Edit Model")) {
-                        editor.selectedModelIndex = modelIndex;
-                        editor.mode = EditorModeEditModel;
-                        ImGui::CloseCurrentPopup();
-                    }
-                    ImGui::EndPopup();
+                if (ImGui::Selectable(models[modelIndex].filePath.string().c_str(), editor.selectedModelIndex == modelIndex)) {
+                    editor.selectedModelIndex = modelIndex;
                 }
-                if (ImGui::BeginDragDropSource()) {
-                    ImGui::SetDragDropPayload("dragDropTypeModelIndex", (void*)&modelIndex, sizeof(modelIndex));
-                    ImGui::EndDragDropSource();
+                if (editor.mode == EditorModeFreeCam) {
+                    if (ImGui::BeginDragDropSource()) {
+                        ImGui::SetDragDropPayload("dragDropTypeModelIndex", (void*)&modelIndex, sizeof(modelIndex));
+                        ImGui::EndDragDropSource();
+                    }
                 }
                 ImGui::PopID();
             }
@@ -3620,10 +4145,11 @@ void editorAssetsWindow() {
             }
             float3 pos = XMVector3Unproject(XMVectorSet(ImGui::GetMousePos().x, ImGui::GetMousePos().y, 0, 0), 0, 0, (float)renderW, (float)renderH, 0.0f, 1.0f, cameraProjectMat, cameraViewMat, xmMatrixIdentity);
             float3 dir = (pos - editor.camera.position).normalize();
-            editor.dragDropGameObject.transformDefault.t = editor.camera.position + dir;
+            editor.dragDropGameObject.transformDefault.t = editor.camera.position + (dir * 10.0f);
             editor.dragDropGameObject.transform = editor.dragDropGameObject.transformDefault;
         }
-    } else if (editor.beginDragDropGameObject) {
+    }
+    else if (editor.beginDragDropGameObject) {
         editor.beginDragDropGameObject = false;
         gameObjects.push_back(editor.dragDropGameObject);
     }
@@ -3631,17 +4157,19 @@ void editorAssetsWindow() {
 
 void editorUpdate() {
     ZoneScopedN("editorUpdate");
-    if (d3d.collisionQueriesFenceValue > 0) {
-        d3dWaitForCollisionQueries();
+    if (d3d.collisionQueriesFence.value > 0) {
+        d3dWaitFence(&d3d.collisionQueriesFence);
         if (mouseSelectX != UINT_MAX && mouseSelectY != UINT_MAX) {
             uint mouseSelectInstanceIndex = d3d.collisionQueryResultsBufferPtr[0].instanceIndex;
             if (mouseSelectInstanceIndex == UINT_MAX) {
                 editor.selectedObjectType = ObjectTypeNone;
-            } else {
+            }
+            else {
                 BLASInstanceInfo& info = blasInstancesInfos[mouseSelectInstanceIndex];
                 if (info.objectType == editor.selectedObjectType && info.objectIndex == editor.selectedObjectIndex) {
                     editor.selectedObjectType = ObjectTypeNone;
-                } else {
+                }
+                else {
                     editor.selectedObjectType = info.objectType;
                     editor.selectedObjectIndex = info.objectIndex;
                 }
@@ -3649,11 +4177,11 @@ void editorUpdate() {
         }
     }
     {
-        pxAccumulatedTime += frameTime;
-        while (pxAccumulatedTime >= pxTimeStep) {
-            pxAccumulatedTime -= pxTimeStep;
+        pxTimeAccumulated += frameTime;
+        while (pxTimeAccumulated >= pxTimeStep) {
             pxScene->simulate(pxTimeStep);
             pxScene->fetchResults(true);
+            pxTimeAccumulated -= pxTimeStep;
         }
     }
     {
@@ -3669,46 +4197,17 @@ void editorUpdate() {
     mousePosPrev = mousePos;
 
     editorMainMenuBar();
-    ImGui::DockSpaceOverViewport(ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
+    ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
     editorObjectsWindow();
     editorPropertiesWindow();
     editorAssetsWindow();
 
-    if (editor.mode == EditorModeEditObject || editor.mode == EditorModeEditModel) {
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle) && !ImGui::GetIO().WantCaptureMouse) {
-            editor.editCamera.moving = true;
-            windowHideCursor(true);
-        }
-        if (editor.editCamera.moving && ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) {
-            editor.editCamera.moving = false;
-            windowHideCursor(false);
-        }
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-            if (editor.mode == EditorModeEditObject) {
-                player.pxController->getActor()->setActorFlag(PxActorFlag::eVISUALIZATION, true);
-                for (GameObject& obj : gameObjects) {
-                    if (obj.rigidActor) {
-                        obj.rigidActor->setActorFlag(PxActorFlag::eVISUALIZATION, true);
-                    }
-                }
-                if (editor.selectedObjectType == ObjectTypePlayer) {
-                    player.transform = player.transformDefault;
-                    player.pxController->setFootPosition(player.transform.t.toPxVec3d());
-                } else if (editor.selectedObjectType == ObjectTypeGameObject) {
-                    GameObject& obj = gameObjects[editor.selectedObjectIndex];
-                    obj.transform = obj.transformDefault;
-                    if (obj.rigidActor) {
-                        obj.rigidActor->setGlobalPose(obj.transform.toPxTransform());
-                    }
-                }
-            }
-            editor.mode = EditorModeFreeCam;
-        }
-    } else {
+    if (editor.mode == EditorModeFreeCam) {
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().WantCaptureMouse) {
             mouseSelectX = (uint)mousePos.x;
             mouseSelectY = (uint)mousePos.y;
-        } else {
+        }
+        else {
             mouseSelectX = UINT_MAX;
             mouseSelectY = UINT_MAX;
         }
@@ -3718,19 +4217,16 @@ void editorUpdate() {
         if (ImGui::BeginPopup("selected object popup")) {
             if (ImGui::Selectable("Edit Object")) {
                 editor.mode = EditorModeEditObject;
-                player.pxController->getActor()->setActorFlag(PxActorFlag::eVISUALIZATION, false);
-                for (GameObject& obj : gameObjects) {
-                    if (obj.rigidActor) {
-                        obj.rigidActor->setActorFlag(PxActorFlag::eVISUALIZATION, false);
-                    }
-                }
+                setRigidActorsVisualization(false);
                 if (editor.selectedObjectType == ObjectTypePlayer) {
                     player.transform.t = float3(0, 0, 0);
                     player.pxController->setFootPosition(PxVec3d(0, 0, 0));
                     player.pxController->getActor()->setActorFlag(PxActorFlag::eVISUALIZATION, true);
-                } else if (editor.selectedObjectType == ObjectTypeGameObject) {
+                }
+                else if (editor.selectedObjectType == ObjectTypeGameObject) {
                     GameObject& obj = gameObjects[editor.selectedObjectIndex];
                     obj.transform.t = float3(0, 0, 0);
+                    obj.transform.r = float4(0, 0, 0, 1);
                     if (obj.rigidActor) {
                         obj.rigidActor->setGlobalPose(PxTransform(PxIdentity));
                         obj.rigidActor->setActorFlag(PxActorFlag::eVISUALIZATION, true);
@@ -3760,11 +4256,36 @@ void editorUpdate() {
             editor.selectedObjectType = ObjectTypeNone;
         }
     }
+    else if (editor.mode == EditorModeEditObject) {
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle) && !ImGui::GetIO().WantCaptureMouse) {
+            editor.editCamera.moving = true;
+            windowHideCursor(true);
+        }
+        if (editor.editCamera.moving && ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) {
+            editor.editCamera.moving = false;
+            windowHideCursor(false);
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            setRigidActorsVisualization(true);
+            if (editor.selectedObjectType == ObjectTypePlayer) {
+                player.transform = player.transformDefault;
+                player.pxController->setFootPosition(player.transform.t.toPxVec3d());
+            }
+            else if (editor.selectedObjectType == ObjectTypeGameObject) {
+                GameObject& obj = gameObjects[editor.selectedObjectIndex];
+                obj.transform = obj.transformDefault;
+                if (obj.rigidActor) {
+                    obj.rigidActor->setGlobalPose(obj.transform.toPxTransform());
+                }
+            }
+            editor.mode = EditorModeFreeCam;
+        }
+    }
     {
         CameraEditor& camera = editor.mode == EditorModeFreeCam ? editor.camera : editor.editCamera;
         if (camera.moving || controllerStickMoved()) {
-            float pitch = (mouseDeltaRaw.y * mouseSensitivity - controller.rsY * controllerSensitivity) * frameTime;
-            float yaw = (mouseDeltaRaw.x * mouseSensitivity + controller.rsX * controllerSensitivity) * frameTime;
+            float pitch = (mouseDeltaRaw.y * mouseSensitivity) - (controller.rsY * controllerSensitivity * frameTime);
+            float yaw = (mouseDeltaRaw.x * mouseSensitivity) + (controller.rsX * controllerSensitivity * frameTime);
             float distance = frameTime * camera.moveSpeed;
             float3 translate = {-controller.lsX * distance, 0, controller.lsY * distance};
             if (ImGui::IsKeyDown(ImGuiKey_W)) translate.z = distance;
@@ -3779,7 +4300,7 @@ void editorUpdate() {
         {
             cameraViewMat = XMMatrixLookAtLH(camera.position.toXMVector(), camera.lookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
             cameraViewMatInverseTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, cameraViewMat));
-            cameraProjectMat = XMMatrixPerspectiveFovLH(radian(camera.fovVertical), (float)renderW / (float)renderH, centimeters(1), meters(1000));
+            cameraProjectMat = XMMatrixPerspectiveFovLH(radian(camera.fovVertical), (float)renderW / (float)renderH, 0.01f, 1000.0f);
             cameraViewProjectMat = XMMatrixMultiply(cameraViewMat, cameraProjectMat);
             cameraViewProjectMatInverse = XMMatrixInverse(nullptr, cameraViewProjectMat);
         }
@@ -3804,46 +4325,17 @@ void editorUpdate() {
         if (!ImGui::IsAnyItemActive() && !editor.camera.moving && !editor.editCamera.moving) {
             if (ImGui::IsKeyPressed(ImGuiKey_T)) {
                 editor.gizmoOperation = ImGuizmo::TRANSLATE;
-            } else if (ImGui::IsKeyPressed(ImGuiKey_R)) {
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_R)) {
                 editor.gizmoOperation = ImGuizmo::ROTATE;
-            } else if (ImGui::IsKeyPressed(ImGuiKey_S)) {
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_S)) {
                 editor.gizmoOperation = ImGuizmo::SCALE;
             }
         }
         return ImGuizmo::Manipulate((const float*)&cameraViewMat, (const float*)&cameraProjectMat, editor.gizmoOperation, editor.gizmoMode, (float*)transformMat);
     };
-    if (editor.mode == EditorModeEditObject) {
-        // if (editor.selectedObjectRigidActorShape) {
-        //     XMMatrix transformMat = Transform(editor.selectedObjectRigidActorShape->getLocalPose()).toMat();
-        //     if (transformGizmo(&transformMat)) {
-        //         Transform transform(transformMat);
-        //         const PxGeometry& pxGeometry = editor.selectedObjectRigidActorShape->getGeometry();
-        //         if (pxGeometry.getType() == PxGeometryType::eSPHERE) {
-        //             PxSphereGeometry newPxGeometry = (PxSphereGeometry&)pxGeometry;
-        //             float s = std::clamp((transform.s.x + transform.s.y + transform.s.z) / 3.0f, 0.98f, 1.02f);
-        //             newPxGeometry.radius *= s;
-        //             editor.selectedObjectRigidActorShape->setGeometry(newPxGeometry);
-        //         } else if (pxGeometry.getType() == PxGeometryType::ePLANE) {
-        //             PxPlaneGeometry newPxGeometry = (PxPlaneGeometry&)pxGeometry;
-        //             editor.selectedObjectRigidActorShape->setGeometry(newPxGeometry);
-        //         } else if (pxGeometry.getType() == PxGeometryType::eCAPSULE) {
-        //             PxCapsuleGeometry newPxGeometry = (PxCapsuleGeometry&)pxGeometry;
-        //             newPxGeometry.halfHeight *= std::clamp(transform.s.x, 0.98f, 1.02f);
-        //             newPxGeometry.radius *= std::clamp((transform.s.y + transform.s.z) / 2.0f, 0.98f, 1.02f);
-        //             editor.selectedObjectRigidActorShape->setGeometry(newPxGeometry);
-        //         } else if (pxGeometry.getType() == PxGeometryType::eBOX) {
-        //             PxBoxGeometry newPxGeometry = (PxBoxGeometry&)pxGeometry;
-        //             newPxGeometry.halfExtents.x *= std::clamp(transform.s.x, 0.98f, 1.02f);
-        //             newPxGeometry.halfExtents.y *= std::clamp(transform.s.y, 0.98f, 1.02f);
-        //             newPxGeometry.halfExtents.z *= std::clamp(transform.s.z, 0.98f, 1.02f);
-        //             editor.selectedObjectRigidActorShape->setGeometry(newPxGeometry);
-        //         } else {
-        //             assert(false);
-        //         }
-        //         editor.selectedObjectRigidActorShape->setLocalPose(Transform(transformMat).toPxTransform());
-        //     }
-        // }
-    } else {
+    if (editor.mode == EditorModeFreeCam) {
         if (editor.selectedObjectType == ObjectTypePlayer) {
             XMMatrix transformMat = player.transformDefault.toMat();
             if (transformGizmo(&transformMat)) {
@@ -3851,25 +4343,71 @@ void editorUpdate() {
                 player.transform = player.transformDefault;
                 player.pxController->setFootPosition(player.transform.t.toPxVec3d());
             }
-        } else if (editor.selectedObjectType == ObjectTypeGameObject && editor.selectedObjectIndex < gameObjects.size()) {
+        }
+        else if (editor.selectedObjectType == ObjectTypeGameObject && editor.selectedObjectIndex < gameObjects.size()) {
             GameObject& obj = gameObjects[editor.selectedObjectIndex];
             XMMatrix transformMat = obj.transformDefault.toMat();
             if (transformGizmo(&transformMat)) {
-                obj.transformDefault = Transform(transformMat);
-                obj.transform = obj.transformDefault;
-                if (obj.rigidActor) {
-                    obj.rigidActor->setGlobalPose(obj.transform.toPxTransform());
-                }
+                editorUpdateGameObjectTransformDefault(obj, Transform(transformMat));
             }
         }
     }
+    else if (editor.mode == EditorModeEditObject) {
+    }
+    // else if (editor.mode == EditorModeEditModel) {
+    //     if (editor.selectedModelCollisionShape) {
+    //         XMMatrix transformMat = Transform(editor.selectedModelCollisionShape->getLocalPose()).toMat();
+    //         if (transformGizmo(&transformMat)) {
+    //             Transform transform(transformMat);
+    //             const PxGeometry& pxGeometry = editor.selectedModelCollisionShape->getGeometry();
+    //             auto shapeSetGeometryAndTransform = [&](const PxGeometry& geometry, PxTransform transform) {
+    //                 editor.selectedModelTempRigidActor->detachShape(*editor.selectedModelCollisionShape);
+    //                 editor.selectedModelCollisionShape->setGeometry(geometry);
+    //                 editor.selectedModelCollisionShape->setLocalPose(transform);
+    //                 editor.selectedModelTempRigidActor->attachShape(*editor.selectedModelCollisionShape);
+    //                 modelShapesSyncGameObjects(&models[editor.selectedModelIndex]);
+    //             };
+    //             if (pxGeometry.getType() == PxGeometryType::ePLANE) {
+    //                 PxPlaneGeometry planeGeometry = (PxPlaneGeometry&)pxGeometry;
+    //                 shapeSetGeometryAndTransform(planeGeometry, Transform(transformMat).toPxTransform());
+    //             }
+    //             else if (pxGeometry.getType() == PxGeometryType::eBOX) {
+    //                 PxBoxGeometry boxGeometry = (PxBoxGeometry&)pxGeometry;
+    //                 boxGeometry.halfExtents.x *= std::clamp(transform.s.x, 0.98f, 1.02f);
+    //                 boxGeometry.halfExtents.y *= std::clamp(transform.s.y, 0.98f, 1.02f);
+    //                 boxGeometry.halfExtents.z *= std::clamp(transform.s.z, 0.98f, 1.02f);
+    //                 shapeSetGeometryAndTransform(boxGeometry, Transform(transformMat).toPxTransform());
+    //             }
+    //             else if (pxGeometry.getType() == PxGeometryType::eSPHERE) {
+    //                 PxSphereGeometry sphereGeometry = (PxSphereGeometry&)pxGeometry;
+    //                 float s = std::clamp((transform.s.x + transform.s.y + transform.s.z) / 3.0f, 0.98f, 1.02f);
+    //                 sphereGeometry.radius *= s;
+    //                 shapeSetGeometryAndTransform(sphereGeometry, Transform(transformMat).toPxTransform());
+    //             }
+    //             else if (pxGeometry.getType() == PxGeometryType::eCAPSULE) {
+    //                 PxCapsuleGeometry capsuleGeometry = (PxCapsuleGeometry&)pxGeometry;
+    //                 capsuleGeometry.halfHeight *= std::clamp(transform.s.x, 0.98f, 1.02f);
+    //                 capsuleGeometry.radius *= std::clamp((transform.s.y + transform.s.z) / 2.0f, 0.98f, 1.02f);
+    //                 shapeSetGeometryAndTransform(capsuleGeometry, Transform(transformMat).toPxTransform());
+    //             }
+    //             else if (pxGeometry.getType() == PxGeometryType::eCONVEXMESH) {
+    //                 PxConvexMeshGeometry convexMeshGeometry = (PxConvexMeshGeometry&)pxGeometry;
+    //                 shapeSetGeometryAndTransform(convexMeshGeometry, Transform(transformMat).toPxTransform());
+    //             }
+    //             else {
+    //                 assert(false);
+    //             }
+    //         }
+    //     }
+    // }
     {
         auto objIter = gameObjects.begin();
         while (objIter != gameObjects.end()) {
             if (objIter->toBeDeleted) {
                 gameObjectRelease(*objIter);
                 objIter = gameObjects.erase(objIter);
-            } else {
+            }
+            else {
                 objIter++;
             }
         }
@@ -3890,8 +4428,6 @@ void liveReloadFuncs() {
             CopyFileW(gameDLLPath.c_str(), gameDLLCopyPath.c_str(), false);
             gameDLL = LoadLibraryW(gameDLLCopyPath.c_str());
             assert(gameDLL);
-            // gameUpdateLive = (gameUpdateLiveProc)GetProcAddress(gameDLL, "gameUpdateLive");
-            // assert(gameUpdateLive);
         }
     }
 }
@@ -3900,41 +4436,29 @@ void gameUpdate() {
     ZoneScopedN("gameUpdate");
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !showMenu) {
         showMenu = true;
-    } else if (showMenu) {
+    }
+    else if (showMenu) {
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             showMenu = false;
-        } else {
+        }
+        else {
             return;
         }
     }
-    // if (d3d.collisionQueriesFenceValue > 0) {
-    //     d3dWaitForCollisionQueries();
-    //     CollisionQueryResult queryResult = d3d.collisionQueryResultsBufferPtr[1];
-    //     // std::string str = std::format("player Movement: {}\nqueryResultDistance: {}\nqueryResultInstance: {}\n", player.movement.toString(), queryResult.distance.toString(), queryResult.instanceIndex);
-    //     // ImGui::DebugLog("%s", str.c_str());
-    //     if (queryResult.instanceIndex == UINT_MAX) {
-    //         // ImGui::DebugLog("null\n");
-    //     } else {
-    //         TLASInstanceInfo& instanceInfo = tlasInstancesInfos[queryResult.instanceIndex];
-    //         if (instanceInfo.objectType == ObjectTypeGameObject) {
-    //             // ImGui::DebugLog("%s\n", gameObjects[instanceInfo.objectIndex].name.c_str());
-    //         } else {
-    //             // ImGui::DebugLog("wtf\n");
-    //         }
-    //     }
-    // }
     {
-        pxAccumulatedTime += frameTime;
-        while (pxAccumulatedTime >= pxTimeStep) {
-            pxAccumulatedTime -= pxTimeStep;
-            pxScene->simulate((float)pxTimeStep);
+        pxTimeAccumulated += frameTime;
+        while (pxTimeAccumulated >= pxTimeStep) {
+            pxScene->simulate(pxTimeStep);
             pxScene->fetchResults(true);
+            pxTimeAccumulated -= pxTimeStep;
         }
-    }
-    {
-        float pitch = (-mouseDeltaRaw.y * mouseSensitivity + controller.rsY * controllerSensitivity) * frameTime;
-        float yaw = (mouseDeltaRaw.x * mouseSensitivity + controller.rsX * controllerSensitivity) * frameTime;
-        playerCameraSetPitchYaw(player.camera.pitchYaw + float2(pitch, yaw));
+        for (GameObject& obj : gameObjects) {
+            if (obj.rigidActor && obj.rigidActor->getType() == PxActorType::eRIGID_DYNAMIC) {
+                PxTransform pxTransform = obj.rigidActor->getGlobalPose();
+                obj.transform.t = pxTransform.p;
+                obj.transform.r = pxTransform.q;
+            }
+        }
     }
     {
         float3 playerMoveDir(0, 0, 0);
@@ -3957,39 +4481,48 @@ void gameUpdate() {
         }
         if (playerMoveDir == float3(0, 0, 0)) {
             player.state = PlayerStateIdle;
-            player.movement = float3(0, 0, 0);
+            player.velocity = float3(0, 0, 0);
             player.modelInstance.animation = &player.modelInstance.model->animations[player.idleAnimationIndex];
-        } else {
+        }
+        else {
             if (!ImGui::IsKeyDown(ImGuiKey_LeftShift) && (controller.lsX * controller.lsX + controller.lsY * controller.lsY) < 0.6f) {
                 player.state = PlayerStateWalk;
-                player.movement = playerMoveDir * player.walkSpeed * frameTime;
+                player.velocity = playerMoveDir * player.walkSpeed;
                 player.modelInstance.animation = &player.modelInstance.model->animations[player.walkAnimationIndex];
-            } else {
+            }
+            else {
                 player.state = PlayerStateRun;
-                player.movement = playerMoveDir * player.runSpeed * frameTime;
+                player.velocity = playerMoveDir * player.runSpeed;
                 player.modelInstance.animation = &player.modelInstance.model->animations[player.runAnimationIndex];
             }
         }
-        if (player.movement != float3(0, 0, 0)) {
-            float3 playerOldPosition = player.transform.t;
-            player.pxController->move(player.movement.toPxVec3(), millimeters(1), frameTime, PxControllerFilters());
-            ImGui::DebugLog("%f %f %f\n", player.movement.x, player.movement.y, player.movement.z);
-            player.transform.t = float3(player.pxController->getFootPosition());
-            float3 movement = player.transform.t - playerOldPosition;
-            playerCameraTranslate(movement);
-            float angle = acosf(player.movement.normalize().dot(float3(0, 0, -1)));
-            if (player.movement.x > 0) angle = -angle;
+        player.velocity.y = -5.0f;
+
+        float3 playerOldPosition = player.transform.t;
+        player.pxController->move(player.velocity.toPxVec3() * frameTime, 0.001f, frameTime, PxControllerFilters());
+        player.transform.t = float3(player.pxController->getFootPosition());
+        playerCameraTranslate(player.transform.t - playerOldPosition);
+        if (player.velocity.x != 0.0f && player.velocity.y != 0.0f) {
+            float3 velocity(player.velocity.x, 0, player.velocity.z);
+            float angle = acosf(velocity.normalize().dot(float3(0, 0, -1)));
+            if (velocity.x > 0) angle = -angle;
             player.transform.r = float4(XMQuaternionRotationRollPitchYaw(0, angle, 0));
         }
     }
-    modelInstanceUpdateAnimation(&player.modelInstance, frameTime);
-    for (GameObject& obj : gameObjects) {
-        modelInstanceUpdateAnimation(&obj.modelInstance, frameTime);
+    {
+        modelInstanceUpdateAnimation(&player.modelInstance, frameTime);
+        for (GameObject& obj : gameObjects) {
+            modelInstanceUpdateAnimation(&obj.modelInstance, frameTime);
+        }
     }
     {
+        float pitch = (-mouseDeltaRaw.y * mouseSensitivity) + (controller.rsY * controllerSensitivity * frameTime);
+        float yaw = (mouseDeltaRaw.x * mouseSensitivity) + (controller.rsX * controllerSensitivity * frameTime);
+        playerCameraSetPitchYaw(player.camera.pitchYaw + float2(pitch, yaw));
+
         cameraViewMat = XMMatrixLookAtLH(player.camera.position.toXMVector(), player.camera.lookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
         cameraViewMatInverseTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, cameraViewMat));
-        cameraProjectMat = XMMatrixPerspectiveFovLH(radian(player.camera.fovVertical), (float)renderW / (float)renderH, centimeters(1), meters(1000));
+        cameraProjectMat = XMMatrixPerspectiveFovLH(radian(player.camera.fovVertical), (float)renderW / (float)renderH, 0.01f, 1000.0f);
         cameraViewProjectMat = XMMatrixMultiply(cameraViewMat, cameraProjectMat);
         cameraViewProjectMatInverse = XMMatrixInverse(nullptr, cameraViewProjectMat);
     }
@@ -4003,17 +4536,14 @@ void update() {
     if (ImGui::IsKeyDown(ImGuiKey_F4) && ImGui::IsKeyDown(ImGuiKey_LeftAlt)) {
         quit = true;
     }
-    debugSpheres.resize(0);
-    debugLines.resize(0);
-    debugTriangles.resize(0);
-
 #ifdef EDITOR
     if (ImGui::IsKeyPressed(ImGuiKey_P) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
         toggleBetweenEditorPlay();
     }
     if (editorActive) {
         editorUpdate();
-    } else {
+    }
+    else {
         gameUpdate();
     }
     {
@@ -4021,14 +4551,15 @@ void update() {
         if (editor.selectedObjectType == ObjectTypePlayer) {
             if (player.modelInstance.model->skeletonRootNode) {
                 XMMatrix playerTransformMat = (editor.mode == EditorModeEditObject) ? xmMatrixIdentity : player.transform.toMat();
-                XMMatrix transformMat = XMMatrixMultiply(XMMatrixMultiply(player.modelInstance.model->meshNodes[0]->globalTransform, XMMatrixScaling(scaleFactor, scaleFactor, -scaleFactor)), playerTransformMat);
+                XMMatrix transformMat = XMMatrixMultiply(XMMatrixMultiply(player.modelInstance.model->meshNodes[0]->globalTransform, XMMatrixScaling(1, 1, -1)), playerTransformMat);
                 modelInstanceGetSkeletonVisualization(&player.modelInstance, player.modelInstance.model->skeletonRootNode, transformMat);
             }
-        } else if (editor.selectedObjectType == ObjectTypeGameObject) {
+        }
+        else if (editor.selectedObjectType == ObjectTypeGameObject) {
             GameObject& gameObject = gameObjects[editor.selectedObjectIndex];
             if (gameObject.modelInstance.model->skeletonRootNode) {
                 XMMatrix objTransformMat = (editor.mode == EditorModeEditObject) ? xmMatrixIdentity : gameObject.transform.toMat();
-                XMMatrix transformMat = XMMatrixMultiply(XMMatrixMultiply(gameObject.modelInstance.model->meshNodes[0]->globalTransform, XMMatrixScaling(scaleFactor, scaleFactor, -scaleFactor)), objTransformMat);
+                XMMatrix transformMat = XMMatrixMultiply(XMMatrixMultiply(gameObject.modelInstance.model->meshNodes[0]->globalTransform, XMMatrixScaling(1, 1, -1)), objTransformMat);
                 modelInstanceGetSkeletonVisualization(&gameObject.modelInstance, gameObject.modelInstance.model->skeletonRootNode, transformMat);
             }
         }
@@ -4037,21 +4568,24 @@ void update() {
     gameUpdate();
 #endif
     {
+        debugSpheres.resize(0);
+        debugLines.resize(0);
+        debugTriangles.resize(0);
+    }
+    if (showRigidActorsGeometries) {
         ZoneScopedN("RigidActorsVisualization");
-        if (showRigidActorsGeometries) {
-            const PxRenderBuffer& physxRenderBuffer = pxScene->getRenderBuffer();
-            for (PxU32 i = 0; i < physxRenderBuffer.getNbPoints(); i++) {
-                const PxDebugPoint& pxPoint = physxRenderBuffer.getPoints()[i];
-                debugSpheres.push_back(Sphere{.center = float3(pxPoint.pos), .radius = centimeters(2), .color = 0xffffffff});
-            }
-            for (PxU32 i = 0; i < physxRenderBuffer.getNbLines(); i++) {
-                const PxDebugLine& pxLine = physxRenderBuffer.getLines()[i];
-                debugLines.push_back(Line{.p0 = float3(pxLine.pos0), .p1 = float3(pxLine.pos1), .radius = centimeters(1), .color = 0xffffffff});
-            }
-            for (PxU32 i = 0; i < physxRenderBuffer.getNbTriangles(); i++) {
-                const PxDebugTriangle& pxTriangle = physxRenderBuffer.getTriangles()[i];
-                debugTriangles.push_back(Triangle{.p0 = float3(pxTriangle.pos0), .p1 = float3(pxTriangle.pos1), .p2 = float3(pxTriangle.pos2), .color = 0xffffffff});
-            }
+        const PxRenderBuffer& physxRenderBuffer = pxScene->getRenderBuffer();
+        for (PxU32 i = 0; i < physxRenderBuffer.getNbPoints(); i++) {
+            const PxDebugPoint& pxPoint = physxRenderBuffer.getPoints()[i];
+            debugSpheres.push_back(Sphere{.center = float3(pxPoint.pos), .radius = 0.02f, .color = 0xffffffff});
+        }
+        for (PxU32 i = 0; i < physxRenderBuffer.getNbLines(); i++) {
+            const PxDebugLine& pxLine = physxRenderBuffer.getLines()[i];
+            debugLines.push_back(Line{.p0 = float3(pxLine.pos0), .p1 = float3(pxLine.pos1), .radius = 0.01f, .color = 0xffffffff});
+        }
+        for (PxU32 i = 0; i < physxRenderBuffer.getNbTriangles(); i++) {
+            const PxDebugTriangle& pxTriangle = physxRenderBuffer.getTriangles()[i];
+            debugTriangles.push_back(Triangle{.p0 = float3(pxTriangle.pos0), .p1 = float3(pxTriangle.pos1), .p2 = float3(pxTriangle.pos2), .color = 0xffffffff});
         }
     }
 
@@ -4081,45 +4615,58 @@ D3D12_DISPATCH_RAYS_DESC fillRayTracingShaderTable(ID3D12Resource* buffer, uint8
 
 void d3dRender() {
     ZoneScopedN("d3dRender");
-    blasInstancesBuildInfos.resize(0);
+    blasInstancesDescs.resize(0);
     blasInstancesInfos.resize(0);
     blasGeometriesInfos.resize(0);
-
     d3d.stagingBufferOffset = 0;
     d3d.constantsBufferOffset = 0;
     d3d.cbvSrvUavDescriptorCount = 0;
-    {
-        ZoneScopedN("d3dWaitForRender");
-        d3dWaitForRender();
-    }
-    assert(SUCCEEDED(d3d.graphicsCmdAllocator->Reset()));
-    assert(SUCCEEDED(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
+    d3dCmdListReset();
     d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap);
-    {
-        D3D12_SHADER_RESOURCE_VIEW_DESC renderTextureSRVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = 1}};
-        D3D12_UNORDERED_ACCESS_VIEW_DESC renderTextureUAVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
-        D3D12_UNORDERED_ACCESS_VIEW_DESC depthTextureUAVDesc = {.Format = d3d.depthTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
-        D3D12_UNORDERED_ACCESS_VIEW_DESC motionVectorTextureUAVDesc = {.Format = d3d.motionVectorTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
-        D3D12_CONSTANT_BUFFER_VIEW_DESC renderInfoCBVDesc = {.BufferLocation = d3d.constantsBuffer->GetResource()->GetGPUVirtualAddress(), .SizeInBytes = align((uint)sizeof(struct RenderInfo), D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT)};
-        D3D12_SHADER_RESOURCE_VIEW_DESC tlasViewDesc = {.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .RaytracingAccelerationStructure = {.Location = d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress()}};
-        D3D12_SHADER_RESOURCE_VIEW_DESC tlasInstancesInfosDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.blasInstancesInfosBuffer->GetSize() / sizeof(struct BLASInstanceInfo)), .StructureByteStride = sizeof(struct BLASInstanceInfo)}};
-        D3D12_SHADER_RESOURCE_VIEW_DESC blasGeometriesInfosDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.blasGeometriesInfosBuffer->GetSize() / sizeof(struct BLASGeometryInfo)), .StructureByteStride = sizeof(struct BLASGeometryInfo)}};
-        D3D12_SHADER_RESOURCE_VIEW_DESC collisionQueriesDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.NumElements = (uint)(d3d.collisionQueriesBuffer->GetSize() / sizeof(struct CollisionQuery)), .StructureByteStride = sizeof(struct CollisionQuery)}};
-        D3D12_UNORDERED_ACCESS_VIEW_DESC collisionQueryResultsDesc = {.ViewDimension = D3D12_UAV_DIMENSION_BUFFER, .Buffer = {.NumElements = (uint)(d3d.collisionQueryResultsBuffer->GetSize() / sizeof(struct CollisionQueryResult)), .StructureByteStride = sizeof(struct CollisionQueryResult)}};
-
-        D3DDescriptor renderTextureSRVDescriptor = d3dAppendSRVDescriptor(&renderTextureSRVDesc, d3d.renderTexture->GetResource());
-        D3DDescriptor renderTextureUAVDescriptor = d3dAppendUAVDescriptor(&renderTextureUAVDesc, d3d.renderTexture->GetResource());
-        D3DDescriptor depthTextureUAVDescriptor = d3dAppendUAVDescriptor(&depthTextureUAVDesc, d3d.depthTexture->GetResource());
-        D3DDescriptor motionVectorTextureUAVDescriptor = d3dAppendUAVDescriptor(&motionVectorTextureUAVDesc, d3d.motionVectorTexture->GetResource());
-        D3DDescriptor renderInfoDescriptor = d3dAppendCBVDescriptor(&renderInfoCBVDesc);
-        D3DDescriptor tlasDescriptor = d3dAppendSRVDescriptor(&tlasViewDesc, nullptr);
-        D3DDescriptor tlasInstancesInfosDescriptor = d3dAppendSRVDescriptor(&tlasInstancesInfosDesc, d3d.blasInstancesInfosBuffer->GetResource());
-        D3DDescriptor blasGeometriesInfosDescriptor = d3dAppendSRVDescriptor(&blasGeometriesInfosDesc, d3d.blasGeometriesInfosBuffer->GetResource());
-        D3DDescriptor skyboxTextureDescriptor = d3dAppendSRVDescriptor(nullptr, skybox->hdriTexture->GetResource());
-        D3DDescriptor imguiImageDescriptor = d3dAppendSRVDescriptor(nullptr, d3d.imguiTexture->GetResource());
-        D3DDescriptor directWriteImageDescriptor = d3dAppendSRVDescriptor(nullptr, d3d.directWriteTexture->GetResource());
-        D3DDescriptor collisionQueriesDescriptor = d3dAppendSRVDescriptor(&collisionQueriesDesc, d3d.collisionQueriesBuffer->GetResource());
-        D3DDescriptor collisionQueryResultsDescriptor = d3dAppendUAVDescriptor(&collisionQueryResultsDesc, d3d.collisionQueryResultsUAVBuffer->GetResource());
+    for (Model& model : models) {
+        for (ModelNode* meshNode : model.meshNodes) {
+            meshNode->mesh->descriptorsHeapOffset = d3d.cbvSrvUavDescriptorCount;
+            for (const ModelPrimitive& primitive : meshNode->mesh->primitives) {
+                D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.verticesBufferOffset, .NumElements = primitive.verticesCount, .StructureByteStride = sizeof(struct Vertex)}};
+                D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.indicesBufferOffset, .NumElements = primitive.indicesCount, .StructureByteStride = sizeof(uint)}};
+                d3dAppendSRVDescriptor(&vertexBufferDesc, meshNode->mesh->verticesBuffer->GetResource());
+                d3dAppendSRVDescriptor(&indexBufferDesc, meshNode->mesh->indicesBuffer->GetResource());
+                if (primitive.material) {
+                    blasGeometriesInfos.push_back(BLASGeometryInfo{.emissive = primitive.material->emissive, .metallic = primitive.material->metallic, .baseColor = primitive.material->baseColor.xyz(), .roughness = primitive.material->roughness});
+                    if (primitive.material->emissiveTexture) {
+                        d3dAppendSRVDescriptor(&primitive.material->emissiveTexture->image->srvDesc, primitive.material->emissiveTexture->image->gpuData->GetResource());
+                    }
+                    else {
+                        d3dAppendSRVDescriptor(&d3d.defaultEmissiveTextureSRVDesc, d3d.defaultEmissiveTexture->GetResource());
+                    }
+                    if (primitive.material->baseColorTexture) {
+                        d3dAppendSRVDescriptor(&primitive.material->baseColorTexture->image->srvDesc, primitive.material->baseColorTexture->image->gpuData->GetResource());
+                    }
+                    else {
+                        d3dAppendSRVDescriptor(&d3d.defaultBaseColorTextureSRVDesc, d3d.defaultBaseColorTexture->GetResource());
+                    }
+                    if (primitive.material->metallicRoughnessTexture) {
+                        d3dAppendSRVDescriptor(&primitive.material->metallicRoughnessTexture->image->srvDesc, primitive.material->metallicRoughnessTexture->image->gpuData->GetResource());
+                    }
+                    else {
+                        d3dAppendSRVDescriptor(&d3d.defaultMetallicRoughnessTextureSRVDesc, d3d.defaultMetallicRoughnessTexture->GetResource());
+                    }
+                    if (primitive.material->normalTexture) {
+                        d3dAppendSRVDescriptor(&primitive.material->normalTexture->image->srvDesc, primitive.material->normalTexture->image->gpuData->GetResource());
+                    }
+                    else {
+                        d3dAppendSRVDescriptor(&d3d.defaultNormalTextureSRVDesc, d3d.defaultNormalTexture->GetResource());
+                    }
+                }
+                else {
+                    blasGeometriesInfos.push_back(BLASGeometryInfo{.emissive = {0.0f, 0.0f, 0.0f}, .metallic = 0.0f, .baseColor = {0.7f, 0.7f, 0.7f}, .roughness = 0.7f});
+                    d3dAppendSRVDescriptor(&d3d.defaultEmissiveTextureSRVDesc, d3d.defaultEmissiveTexture->GetResource());
+                    d3dAppendSRVDescriptor(&d3d.defaultBaseColorTextureSRVDesc, d3d.defaultBaseColorTexture->GetResource());
+                    d3dAppendSRVDescriptor(&d3d.defaultMetallicRoughnessTextureSRVDesc, d3d.defaultMetallicRoughnessTexture->GetResource());
+                    d3dAppendSRVDescriptor(&d3d.defaultNormalTextureSRVDesc, d3d.defaultNormalTexture->GetResource());
+                }
+            }
+        }
     }
     {
         RenderInfo renderInfo = {
@@ -4209,14 +4756,7 @@ void d3dRender() {
         ZoneScopedN("TLAS build");
         PIXSetMarker(d3d.graphicsCmdList, 0, "TLAS build");
 #ifdef EDITOR
-        if (editor.mode == EditorModeEditObject) {
-            if (editor.selectedObjectType == ObjectTypePlayer) {
-                modelInstanceAddBLASInstancesToTLAS(player.modelInstance, player.transform.toMat(), ObjectTypePlayer, 0, 0, 0);
-            } else if (editor.selectedObjectType == ObjectTypeGameObject) {
-                GameObject& obj = gameObjects[editor.selectedObjectIndex];
-                modelInstanceAddBLASInstancesToTLAS(obj.modelInstance, obj.transform.toMat(), ObjectTypeGameObject, editor.selectedObjectIndex, 0, 0);
-            }
-        } else {
+        if (editor.mode == EditorModeFreeCam) {
             modelInstanceAddBLASInstancesToTLAS(player.modelInstance, player.transform.toMat(), ObjectTypePlayer, 0, 0, 0);
             for (uint objIndex = 0; objIndex < gameObjects.size(); objIndex++) {
                 GameObject& obj = gameObjects[objIndex];
@@ -4226,15 +4766,24 @@ void d3dRender() {
                 modelInstanceAddBLASInstancesToTLAS(editor.dragDropGameObject.modelInstance, editor.dragDropGameObject.transform.toMat(), ObjectTypeGameObject, UINT_MAX, 0, 0);
             }
         }
+        else if (editor.mode == EditorModeEditObject) {
+            if (editor.selectedObjectType == ObjectTypePlayer) {
+                modelInstanceAddBLASInstancesToTLAS(player.modelInstance, player.transform.toMat(), ObjectTypePlayer, 0, 0, 0);
+            }
+            else if (editor.selectedObjectType == ObjectTypeGameObject) {
+                GameObject& obj = gameObjects[editor.selectedObjectIndex];
+                modelInstanceAddBLASInstancesToTLAS(obj.modelInstance, obj.transform.toMat(), ObjectTypeGameObject, editor.selectedObjectIndex, 0, 0);
+            }
+        }
         for (Sphere& sphere : debugSpheres) {
-            float s = sphere.radius / scaleFactor;
+            float s = sphere.radius;
             XMMatrix transformMat = XMMatrixAffineTransformation(XMVectorSet(s, s, s, 0), xmVectorZero, xmQuatIdentity, sphere.center.toXMVector());
             modelInstanceAddBLASInstancesToTLAS(modelInstanceSphere, transformMat, ObjectTypeNone, 0, BLASInstanceFlagForcedColor, 0xff000000);
         }
         for (Line& line : debugLines) {
             float3 dir = line.p1 - line.p0;
-            float s = line.radius / scaleFactor;
-            float sY = dir.length() / scaleFactor;
+            float s = line.radius;
+            float sY = dir.length();
             float4 r = quaternionBetween(float3(0, 0.01f, 0), dir);
             XMMatrix transformMat = XMMatrixAffineTransformation(XMVectorSet(s, sY, s, 0), xmVectorZero, r.toXMVector(), line.p0.toXMVector());
             modelInstanceAddBLASInstancesToTLAS(modelInstanceCube, transformMat, ObjectTypeNone, 0, BLASInstanceFlagForcedColor, 0xff000000);
@@ -4259,29 +4808,32 @@ void d3dRender() {
             modelInstanceAddBLASInstancesToTLAS(modelInstanceCylinder, transformMat, ObjectTypeOthers, 0, BLASInstanceFlagForcedColor, 0xff000000);
         }
 #endif
-        assert(vectorSizeof(blasInstancesBuildInfos) < d3d.blasInstancesBuildInfosBuffer->GetSize());
+        assert(vectorSizeof(blasInstancesDescs) < d3d.blasInstancesBuildInfosBuffer->GetSize());
         assert(vectorSizeof(blasInstancesInfos) < d3d.blasInstancesInfosBuffer->GetSize());
         assert(vectorSizeof(blasGeometriesInfos) < d3d.blasGeometriesInfosBuffer->GetSize());
-        memcpy(d3d.blasInstancesBuildInfosBufferPtr, blasInstancesBuildInfos.data(), vectorSizeof(blasInstancesBuildInfos));
+        memcpy(d3d.blasInstancesBuildInfosBufferPtr, blasInstancesDescs.data(), vectorSizeof(blasInstancesDescs));
         memcpy(d3d.blasInstancesInfosBufferPtr, blasInstancesInfos.data(), vectorSizeof(blasInstancesInfos));
         memcpy(d3d.blasGeometriesInfosBufferPtr, blasGeometriesInfos.data(), vectorSizeof(blasGeometriesInfos));
+        {
+            ZoneScopedN("BuildRaytracingAccelerationStructure");
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS tlasInputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL, .NumDescs = (uint)blasInstancesDescs.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .InstanceDescs = d3d.blasInstancesBuildInfosBuffer->GetResource()->GetGPUVirtualAddress()};
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
+            d3d.device->GetRaytracingAccelerationStructurePrebuildInfo(&tlasInputs, &prebuildInfo);
+            assert(prebuildInfo.ResultDataMaxSizeInBytes < d3d.tlasBuffer->GetSize());
+            assert(prebuildInfo.ScratchDataSizeInBytes < d3d.tlasScratchBuffer->GetSize());
 
-        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS tlasInputs = {.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL, .NumDescs = (uint)blasInstancesBuildInfos.size(), .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY, .InstanceDescs = d3d.blasInstancesBuildInfosBuffer->GetResource()->GetGPUVirtualAddress()};
-        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo;
-        d3d.device->GetRaytracingAccelerationStructurePrebuildInfo(&tlasInputs, &prebuildInfo);
-        assert(prebuildInfo.ResultDataMaxSizeInBytes < d3d.tlasBuffer->GetSize());
-        assert(prebuildInfo.ScratchDataSizeInBytes < d3d.tlasScratchBuffer->GetSize());
-
-        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress(), .Inputs = tlasInputs, .ScratchAccelerationStructureData = d3d.tlasScratchBuffer->GetResource()->GetGPUVirtualAddress()};
-        d3d.graphicsCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
-        D3D12_RESOURCE_BARRIER tlasBarrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = d3d.tlasBuffer->GetResource()}};
-        d3d.graphicsCmdList->ResourceBarrier(1, &tlasBarrier);
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {.DestAccelerationStructureData = d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress(), .Inputs = tlasInputs, .ScratchAccelerationStructureData = d3d.tlasScratchBuffer->GetResource()->GetGPUVirtualAddress()};
+            d3d.graphicsCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+            D3D12_RESOURCE_BARRIER tlasBarrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = d3d.tlasBuffer->GetResource()}};
+            d3d.graphicsCmdList->ResourceBarrier(1, &tlasBarrier);
+        }
     }
 #ifdef EDITOR
     {
         if (mouseSelectX == UINT_MAX) {
             d3d.collisionQueriesBufferPtr[0] = {.rayDesc = {.origin = {0, 0, 0}, .min = 0, .dir = {0, 0, 0}, .max = 0}};
-        } else {
+        }
+        else {
             XMFloat4x4 viewMat;
             XMFloat4x4 projMat;
             XMStoreFloat4x4(&viewMat, cameraViewMatInverseTranspose);
@@ -4295,11 +4847,8 @@ void d3dRender() {
             d3d.collisionQueriesBufferPtr[0] = {.rayDesc = rayDesc, .instanceInclusionMask = 0xff & ~ObjectTypeNone};
         }
 
-        D3D12_RESOURCE_BARRIER collisionQueryResultsBarriers[2] = {
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS, .StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE}},
-        };
-        d3d.graphicsCmdList->ResourceBarrier(1, &collisionQueryResultsBarriers[0]);
+        D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsUAVBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}};
+        d3d.graphicsCmdList->ResourceBarrier(1, &barrier);
 
         void* missIDs[1] = {d3d.collisionQueryMissID};
         void* hitGroupIDs[1] = {d3d.collisionQueryHitGroupID};
@@ -4310,39 +4859,87 @@ void d3dRender() {
         PIXSetMarker(d3d.graphicsCmdList, 0, "collisionQuery");
         d3d.graphicsCmdList->SetPipelineState1(d3d.collisionQueryPSO);
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.collisionQueryRootSig);
+        d3d.graphicsCmdList->SetComputeRootShaderResourceView(0, d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress());
+        d3d.graphicsCmdList->SetComputeRootShaderResourceView(1, d3d.collisionQueriesBuffer->GetResource()->GetGPUVirtualAddress());
+        d3d.graphicsCmdList->SetComputeRootUnorderedAccessView(2, d3d.collisionQueryResultsUAVBuffer->GetResource()->GetGPUVirtualAddress());
         d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
 
-        d3d.graphicsCmdList->ResourceBarrier(1, &collisionQueryResultsBarriers[1]);
+        std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+        d3d.graphicsCmdList->ResourceBarrier(1, &barrier);
         d3d.graphicsCmdList->CopyBufferRegion(d3d.collisionQueryResultsBuffer->GetResource(), 0, d3d.collisionQueryResultsUAVBuffer->GetResource(), 0, d3d.collisionQueryResultsBuffer->GetSize());
 
-        assert(SUCCEEDED(d3d.graphicsCmdList->Close()));
-        d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
-        d3d.collisionQueriesFenceValue += 1;
-        d3d.graphicsQueue->Signal(d3d.collisionQueriesFence, d3d.collisionQueriesFenceValue);
+        d3dCmdListExecute();
+        d3dSignalFence(&d3d.collisionQueriesFence);
         assert(SUCCEEDED(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
         d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap);
     }
 #endif
-    {
-        void* missIDs[2] = {d3d.renderScenePrimaryRayMissID, d3d.renderSceneSecondaryRayMissID};
-        void* hitGroupIDs[2] = {d3d.renderScenePrimaryRayHitGroupID, d3d.renderSceneSecondaryRayHitGroupID};
+    if (pathTracer) {
+        void* rayMissIDs[] = {d3d.pathTracerRayMissID};
+        void* rayHitGroupIDs[] = {d3d.pathTracerRayHitGroupID};
+        D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantsBuffer->GetResource(), d3d.constantsBufferPtr, &d3d.constantsBufferOffset, d3d.pathTracerRayGenID, rayMissIDs, rayHitGroupIDs);
+        dispatchDesc.Width = renderW, dispatchDesc.Height = renderH, dispatchDesc.Depth = 1;
+        assert(d3d.constantsBufferOffset < d3d.constantsBuffer->GetSize());
+
+        D3D12_RESOURCE_BARRIER transitions[] = {
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.renderTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
+            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.depthTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
+        };
+        d3d.graphicsCmdList->ResourceBarrier(countof(transitions), transitions);
+
+        PIXSetMarker(d3d.graphicsCmdList, 0, "pathTracer");
+        d3d.graphicsCmdList->SetPipelineState1(d3d.pathTracerPSO);
+        d3d.graphicsCmdList->SetComputeRootSignature(d3d.pathTracerRootSig);
+        d3d.graphicsCmdList->SetComputeRoot32BitConstants(0, 1, &d3d.renderAccumulationCount, 0);
+        d3d.graphicsCmdList->SetComputeRootConstantBufferView(1, d3d.constantsBuffer->GetResource()->GetGPUVirtualAddress());
+        d3d.graphicsCmdList->SetComputeRootShaderResourceView(2, d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress());
+        d3d.graphicsCmdList->SetComputeRootShaderResourceView(3, d3d.blasInstancesInfosBuffer->GetResource()->GetGPUVirtualAddress());
+        d3d.graphicsCmdList->SetComputeRootShaderResourceView(4, d3d.blasGeometriesInfosBuffer->GetResource()->GetGPUVirtualAddress());
+        D3D12_UNORDERED_ACCESS_VIEW_DESC renderTextureUAVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
+        D3D12_UNORDERED_ACCESS_VIEW_DESC renderAccumulationTextureUAVDesc = {.Format = d3d.renderAccumulationTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
+        D3D12_UNORDERED_ACCESS_VIEW_DESC depthTextureUAVDesc = {.Format = d3d.depthTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
+        D3DDescriptor renderTextureUAVDescriptor = d3dAppendUAVDescriptor(&renderTextureUAVDesc, d3d.renderTexture->GetResource());
+        D3DDescriptor renderAccumulationTextureUAVDescriptor = d3dAppendUAVDescriptor(&renderAccumulationTextureUAVDesc, d3d.renderAccumulationTexture->GetResource());
+        D3DDescriptor depthTextureUAVDescriptor = d3dAppendUAVDescriptor(&depthTextureUAVDesc, d3d.depthTexture->GetResource());
+        D3DDescriptor skyboxTextureDescriptor = d3dAppendSRVDescriptor(nullptr, skybox->hdriTexture->GetResource());
+        d3d.graphicsCmdList->SetComputeRootDescriptorTable(5, renderTextureUAVDescriptor.gpuHandle);
+        d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
+
+        std::swap(transitions[0].Transition.StateBefore, transitions[0].Transition.StateAfter);
+        std::swap(transitions[1].Transition.StateBefore, transitions[1].Transition.StateAfter);
+        d3d.graphicsCmdList->ResourceBarrier(countof(transitions), transitions);
+    }
+    else {
+        void* missIDs[] = {d3d.renderScenePrimaryRayMissID, d3d.renderSceneSecondaryRayMissID};
+        void* hitGroupIDs[] = {d3d.renderScenePrimaryRayHitGroupID, d3d.renderSceneSecondaryRayHitGroupID};
         D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantsBuffer->GetResource(), d3d.constantsBufferPtr, &d3d.constantsBufferOffset, d3d.renderSceneRayGenID, missIDs, hitGroupIDs);
         dispatchDesc.Width = renderW, dispatchDesc.Height = renderH, dispatchDesc.Depth = 1;
         assert(d3d.constantsBufferOffset < d3d.constantsBuffer->GetSize());
 
-        D3D12_RESOURCE_BARRIER barriers[] = {
+        D3D12_RESOURCE_BARRIER transitions[] = {
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.renderTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.depthTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
         };
-        d3d.graphicsCmdList->ResourceBarrier(countof(barriers), barriers);
+        d3d.graphicsCmdList->ResourceBarrier(countof(transitions), transitions);
 
         PIXSetMarker(d3d.graphicsCmdList, 0, "renderScene");
         d3d.graphicsCmdList->SetPipelineState1(d3d.renderScenePSO);
         d3d.graphicsCmdList->SetComputeRootSignature(d3d.renderSceneRootSig);
+        d3d.graphicsCmdList->SetComputeRootConstantBufferView(0, d3d.constantsBuffer->GetResource()->GetGPUVirtualAddress());
+        d3d.graphicsCmdList->SetComputeRootShaderResourceView(1, d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress());
+        d3d.graphicsCmdList->SetComputeRootShaderResourceView(2, d3d.blasInstancesInfosBuffer->GetResource()->GetGPUVirtualAddress());
+        d3d.graphicsCmdList->SetComputeRootShaderResourceView(3, d3d.blasGeometriesInfosBuffer->GetResource()->GetGPUVirtualAddress());
+        D3D12_UNORDERED_ACCESS_VIEW_DESC renderTextureUAVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
+        D3D12_UNORDERED_ACCESS_VIEW_DESC depthTextureUAVDesc = {.Format = d3d.depthTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
+        D3DDescriptor renderTextureUAVDescriptor = d3dAppendUAVDescriptor(&renderTextureUAVDesc, d3d.renderTexture->GetResource());
+        D3DDescriptor depthTextureUAVDescriptor = d3dAppendUAVDescriptor(&depthTextureUAVDesc, d3d.depthTexture->GetResource());
+        D3DDescriptor skyboxTextureDescriptor = d3dAppendSRVDescriptor(nullptr, skybox->hdriTexture->GetResource());
+        d3d.graphicsCmdList->SetComputeRootDescriptorTable(4, renderTextureUAVDescriptor.gpuHandle);
         d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
 
-        D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.depthTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS, .StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
-        d3d.graphicsCmdList->ResourceBarrier(1, &barrier);
+        std::swap(transitions[0].Transition.StateBefore, transitions[0].Transition.StateAfter);
+        std::swap(transitions[1].Transition.StateBefore, transitions[1].Transition.StateAfter);
+        d3d.graphicsCmdList->ResourceBarrier(countof(transitions), transitions);
     }
     if (showMenu) {
         PIXSetMarker(d3d.graphicsCmdList, 0, "directWrite");
@@ -4360,12 +4957,11 @@ void d3dRender() {
     }
     {
         uint swapChainBackBufferIndex = d3d.swapChain->GetCurrentBackBufferIndex();
-        D3D12_RESOURCE_BARRIER imageTransitions[] = {
+        D3D12_RESOURCE_BARRIER transitions[] = {
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.swapChainImages[swapChainBackBufferIndex], .StateBefore = D3D12_RESOURCE_STATE_PRESENT, .StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET}},
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.directWriteTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.renderTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
         };
-        d3d.graphicsCmdList->ResourceBarrier(countof(imageTransitions), imageTransitions);
+        d3d.graphicsCmdList->ResourceBarrier(countof(transitions), transitions);
         d3d.graphicsCmdList->OMSetRenderTargets(1, &d3d.swapChainImageRTVDescriptors[swapChainBackBufferIndex], false, nullptr);
         D3D12_VIEWPORT viewport = {0, 0, (float)renderW, (float)renderH, 0, 1};
         RECT scissor = {0, 0, (long)renderW, (long)renderH};
@@ -4380,6 +4976,10 @@ void d3dRender() {
             if (hdr) compositeFlags |= CompositeFlagHDR;
             if (showMenu) compositeFlags |= CompositeFlagDirectWrite;
             d3d.graphicsCmdList->SetGraphicsRoot32BitConstant(0, compositeFlags, 0);
+            D3D12_SHADER_RESOURCE_VIEW_DESC renderTextureSRVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = 1}};
+            D3DDescriptor renderTextureSRVDescriptor = d3dAppendSRVDescriptor(&renderTextureSRVDesc, d3d.renderTexture->GetResource());
+            D3DDescriptor directWriteImageDescriptor = d3dAppendSRVDescriptor(nullptr, d3d.directWriteTexture->GetResource());
+            d3d.graphicsCmdList->SetGraphicsRootDescriptorTable(1, renderTextureSRVDescriptor.gpuHandle);
             d3d.graphicsCmdList->DrawInstanced(3, 1, 0, 0);
         }
         {
@@ -4388,12 +4988,12 @@ void d3dRender() {
             float blendFactor[] = {0, 0, 0, 0};
             d3d.graphicsCmdList->OMSetBlendFactor(blendFactor);
             d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.imguiRootSig);
-            uint constants[3] = {renderW, renderH, hdr};
+            int constants[3] = {renderW, renderH, hdr};
             d3d.graphicsCmdList->SetGraphicsRoot32BitConstants(0, countof(constants), constants, 0);
+            D3DDescriptor imguiImageDescriptor = d3dAppendSRVDescriptor(nullptr, d3d.imguiTexture->GetResource());
+            d3d.graphicsCmdList->SetGraphicsRootDescriptorTable(1, imguiImageDescriptor.gpuHandle);
             D3D12_VERTEX_BUFFER_VIEW vertBufferView = {d3d.imguiVertexBuffer->GetResource()->GetGPUVirtualAddress(), (uint)d3d.imguiVertexBuffer->GetSize(), sizeof(ImDrawVert)};
             D3D12_INDEX_BUFFER_VIEW indexBufferView = {d3d.imguiIndexBuffer->GetResource()->GetGPUVirtualAddress(), (uint)d3d.imguiIndexBuffer->GetSize(), DXGI_FORMAT_R32_UINT};
-            assert(SUCCEEDED(d3d.imguiVertexBuffer->GetResource()->Map(0, nullptr, (void**)&d3d.imguiVertexBufferPtr)));
-            assert(SUCCEEDED(d3d.imguiIndexBuffer->GetResource()->Map(0, nullptr, (void**)&d3d.imguiIndexBufferPtr)));
             d3d.graphicsCmdList->IASetVertexBuffers(0, 1, &vertBufferView);
             d3d.graphicsCmdList->IASetIndexBuffer(&indexBufferView);
             uint vertBufferOffset = 0;
@@ -4420,22 +5020,23 @@ void d3dRender() {
                 assert(indexBufferOffset < d3d.imguiIndexBuffer->GetSize());
             }
         }
-        std::swap(imageTransitions[0].Transition.StateBefore, imageTransitions[0].Transition.StateAfter);
-        std::swap(imageTransitions[1].Transition.StateBefore, imageTransitions[1].Transition.StateAfter);
-        d3d.graphicsCmdList->ResourceBarrier(2, imageTransitions);
+        std::swap(transitions[0].Transition.StateBefore, transitions[0].Transition.StateAfter);
+        std::swap(transitions[1].Transition.StateBefore, transitions[1].Transition.StateAfter);
+        d3d.graphicsCmdList->ResourceBarrier(countof(transitions), transitions);
     }
     {
         ZoneScopedN("ExecuteCommandLists");
-        assert(SUCCEEDED(d3d.graphicsCmdList->Close()));
-        d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
+        d3dCmdListExecute();
     }
     {
         ZoneScopedN("Present");
         assert(SUCCEEDED(d3d.swapChain->Present(0, 0)));
     }
-    d3d.renderDoneFenceValue += 1;
-    d3d.graphicsQueue->Signal(d3d.renderDoneFence, d3d.renderDoneFenceValue);
-    std::swap(d3d.renderTexture, d3d.renderTexturePrevFrame);
+    {
+        d3dSignalFence(&d3d.renderFence);
+        d3dWaitFence(&d3d.renderFence);
+        std::swap(d3d.renderTexture, d3d.renderTexturePrevFrame);
+    }
 }
 
 ImGuiKey virtualKeytoImGuiKey(WPARAM wparam) {
@@ -4557,14 +5158,24 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
     default: {
         result = DefWindowProcA(hwnd, eventType, wParam, lParam);
     } break;
+    case WM_ACTIVATEAPP: {
+#ifdef EDITOR
+        editor.camera.moving = false;
+        windowHideCursor(false);
+#endif
+    } break;
     case WM_SHOWWINDOW:
     case WM_SIZE:
     case WM_MOVE: {
         uint prevRenderW = renderW;
         uint prevRenderH = renderH;
         windowUpdateSizes();
+        if (renderW == 0 || renderH == 0) {
+            renderW = prevRenderW;
+            renderH = prevRenderH;
+        }
         if (d3d.swapChain && renderW > 0 && renderH > 0 && (prevRenderW != renderW || prevRenderH != renderH)) {
-            d3dWaitForRender();
+            d3dWaitFence(&d3d.renderFence);
             for (ID3D12Resource* image : d3d.swapChainImages) {
                 image->Release();
             }
@@ -4576,21 +5187,41 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
                 d3d.device->CreateRenderTargetView(*image, nullptr, d3d.swapChainImageRTVDescriptors[imageIndex]);
             }
             {
+                D3D12_RESOURCE_DESC renderTextureDesc = d3d.renderTexture->GetResource()->GetDesc();
+                D3D12_RESOURCE_DESC renderTexturePrevFrameDesc = d3d.renderTexturePrevFrame->GetResource()->GetDesc();
+                D3D12_RESOURCE_DESC renderAccumulationTextureDesc = d3d.renderAccumulationTexture->GetResource()->GetDesc();
+                D3D12_RESOURCE_DESC depthTextureDesc = d3d.depthTexture->GetResource()->GetDesc();
+                D3D12_RESOURCE_DESC motionVectorTextureDesc = d3d.motionVectorTexture->GetResource()->GetDesc();
+                D3D12_RESOURCE_DESC directWriteTextureDesc = d3d.directWriteTexture->GetResource()->GetDesc();
+
                 d3d.renderTexture->Release();
                 d3d.renderTexturePrevFrame->Release();
-                D3D12_RESOURCE_DESC renderTextureDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = renderW, .Height = renderH, .DepthOrArraySize = 1, .MipLevels = 1, .Format = d3d.renderTextureFormat, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+                d3d.renderAccumulationTexture->Release();
+                d3d.depthTexture->Release();
+                d3d.motionVectorTexture->Release();
+                d3d.directWriteTexture->Release();
+
+                renderTextureDesc.Width = renderW, renderTextureDesc.Height = renderH;
+                renderTexturePrevFrameDesc.Width = renderW, renderTexturePrevFrameDesc.Height = renderH;
+                renderAccumulationTextureDesc.Width = renderW, renderAccumulationTextureDesc.Height = renderH;
+                depthTextureDesc.Width = renderW, depthTextureDesc.Height = renderH;
+                motionVectorTextureDesc.Width = renderW, motionVectorTextureDesc.Height = renderH;
+                directWriteTextureDesc.Width = renderW, directWriteTextureDesc.Height = renderH;
+
                 D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
                 assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr)));
-                assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexturePrevFrame, {}, nullptr)));
+                assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &renderTexturePrevFrameDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexturePrevFrame, {}, nullptr)));
+                assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &renderAccumulationTextureDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &d3d.renderAccumulationTexture, {}, nullptr)));
+                assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &depthTextureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.depthTexture, {}, nullptr)));
+                assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &motionVectorTextureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.motionVectorTexture, {}, nullptr)));
+                D3D12_CLEAR_VALUE clearValue = {.Format = DXGI_FORMAT_R8G8B8A8_UNORM, .Color = {0.0f, 0.0f, 0.0f, 0.0f}};
+                assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &directWriteTextureDesc, D3D12_RESOURCE_STATE_RENDER_TARGET, &clearValue, &d3d.directWriteTexture, {}, nullptr)));
+
                 d3d.renderTexture->GetResource()->SetName(L"renderTexture");
                 d3d.renderTexturePrevFrame->GetResource()->SetName(L"renderTexturePrevFrame");
-            }
-            {
-                d3d.directWriteTexture->Release();
-                D3D12_CLEAR_VALUE clearValue = {.Format = DXGI_FORMAT_R8G8B8A8_UNORM, .Color = {0.0f, 0.0f, 0.0f, 0.0f}};
-                D3D12MA::ALLOCATION_DESC allocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-                D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = renderW, .Height = renderH, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}, .Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
-                assert(SUCCEEDED(d3d.allocator->CreateResource(&allocDesc, &resourceDesc, D3D12_RESOURCE_STATE_RENDER_TARGET, &clearValue, &d3d.directWriteTexture, {}, nullptr)));
+                d3d.renderAccumulationTexture->GetResource()->SetName(L"renderAccumulationTexture");
+                d3d.depthTexture->GetResource()->SetName(L"depthTexture");
+                d3d.motionVectorTexture->GetResource()->SetName(L"motionVectorTexture");
                 d3d.directWriteTexture->GetResource()->SetName(L"directWriteTexture");
             }
         }
@@ -4628,7 +5259,8 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
             if (rawInput->header.dwType == RIM_TYPEMOUSE) {
                 mouseDeltaRaw.x += rawInput->data.mouse.lLastX;
                 mouseDeltaRaw.y += rawInput->data.mouse.lLastY;
-            } else if (rawInput->header.dwType == RIM_TYPEHID && rawInput->header.hDevice == controllerDualSenseHID) {
+            }
+            else if (rawInput->header.dwType == RIM_TYPEHID && rawInput->header.hDevice == controllerDualSenseHID) {
                 for (uint packetIndex = 0; packetIndex < rawInput->data.hid.dwCount; packetIndex++) {
                     // controller.getStateDualSense(&rawInput->data.hid.bRawData[rawInput->data.hid.dwSizeHid * packetIndex], rawInput->data.hid.dwSizeHid);
                 }
@@ -4674,7 +5306,7 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
     dlssInit();
     physxInit();
     worldInit("assets/worlds/world.yaml");
-    worldReadSave(saveDir / "save.yaml");
+    gameReadSave(saveDir / "save.yaml");
     loadSimpleAssets();
     assert(QueryPerformanceFrequency(&perfFrequency));
     while (!quit) {
@@ -4696,8 +5328,8 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
         QueryPerformanceCounter(&perfCounterEnd);
         frameTime = (float)((double)(perfCounterEnd.QuadPart - perfCounterStart.QuadPart) / (double)perfFrequency.QuadPart);
     }
-    worldSave();
-    worldWriteSave(saveDir / "save.yaml");
+    editorSave();
+    gameSave(saveDir / "save.yaml");
     settingsSave(saveDir / "settings.yaml");
     return EXIT_SUCCESS;
 }

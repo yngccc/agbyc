@@ -2,6 +2,9 @@ SortIncludes: false
 ColumnLimit: 0
 IndentWidth: 4
 PointerAlignment: Left
+BreakBeforeBraces: Custom
+BraceWrapping:
+  BeforeElse : true
 BinPackArguments: True
 BinPackParameters: True
 AllowAllParametersOfDeclarationOnNextLine: True

@@ -18,4 +18,3 @@
 
 #define TRACY_ENABLE
 #include <tracy/tracyclient.cpp>
-
