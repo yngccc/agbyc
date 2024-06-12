@@ -460,12 +460,11 @@ struct Arena {
     }
 };
 
-#include "structsHLSL.h"
+#include "hlsl/shared.h"
 
 enum WindowMode {
     WindowModeWindowed,
-    WindowModeBorderless,
-    WindowModeFullscreen
+    WindowModeFullscreen,
 };
 
 struct Settings {
@@ -473,18 +472,11 @@ struct Settings {
     uint32 windowX = 0, windowY = 0;
     uint32 windowW = 1920, windowH = 1080;
     uint32 renderW = 1920, renderH = 1080;
-    DXGI_RATIONAL refreshRate = {60, 1};
     bool hdr = false;
 };
 
 struct Window {
     HWND hwnd;
-};
-
-struct DisplayMode {
-    uint32 resolutionW;
-    uint32 resolutionH;
-    std::vector<DXGI_RATIONAL> refreshRates;
 };
 
 struct D3DDescriptor {
@@ -500,9 +492,7 @@ struct D3DFence {
 
 struct D3D {
     IDXGIFactory7* dxgiFactory;
-    IDXGIOutput6* dxgiOutput;
     IDXGIAdapter4* dxgiAdapter;
-    std::vector<DisplayMode> displayModes;
     ID3D12Device5* device;
 
     ID3D12CommandQueue* graphicsQueue;
@@ -547,6 +537,7 @@ struct D3D {
     D3D12MA::Allocation* renderAccumulationTexture;
     const DXGI_FORMAT renderAccumulationTextureFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
     uint renderAccumulationCount;
+    const uint renderAccumulationCountMax = 10000;
 
     D3D12MA::Allocation* depthTexture;
     const DXGI_FORMAT depthTextureFormat = DXGI_FORMAT_R32_FLOAT;
@@ -554,10 +545,8 @@ struct D3D {
     D3D12MA::Allocation* motionVectorTexture;
     const DXGI_FORMAT motionVectorTextureFormat = DXGI_FORMAT_R32G32_FLOAT;
 
-    D3D12MA::Allocation* directWriteTexture;
-    const DXGI_FORMAT directWriteTextureFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-
     D3D12MA::Allocation* imguiTexture;
+    const DXGI_FORMAT imguiTextureFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     D3D12MA::Allocation* imguiVertexBuffer;
     D3D12MA::Allocation* imguiIndexBuffer;
     uint8* imguiVertexBufferPtr;
@@ -619,28 +608,6 @@ struct D3D {
 
     ID3D12PipelineState* imguiPSO;
     ID3D12RootSignature* imguiRootSig;
-};
-
-struct DirectWrite {
-    ID3D11Device* d3d11Device;
-    ID3D11DeviceContext* d3d11DeviceContext;
-    ID3D11On12Device* d3d11On12Device;
-    IDXGIDevice* dxgiDevice;
-
-    IDWriteFactory* dWriteFactory;
-    IDWriteTextFormat* dWriteTextFormat;
-    ID2D1SolidColorBrush* dWriteColorBrush;
-
-    ID2D1Factory3* d2dFactory;
-    ID2D1Device1* d2dDevice;
-    ID2D1DeviceContext1* d2dDeviceContext;
-
-    ID3D11Resource* image;
-    IDXGISurface* imageSurface;
-    ID2D1Bitmap1* imageRenderTarget;
-
-    // ID2D1HwndRenderTarget* d2dRenderTarget;
-    // ID2D1SolidColorBrush* d2dBrush;
 };
 
 struct Sphere {
@@ -914,36 +881,69 @@ struct Editor {
     std::stack<EditorUndo> undos;
 };
 
-static bool quit = false;
-static LARGE_INTEGER perfFrequency = {};
-static LARGE_INTEGER perfCounterStart = {};
-static LARGE_INTEGER perfCounterEnd = {};
-static uint64 frameCount = 0;
-static float frameTime = 0;
+// GLOBALS
+static std::filesystem::path exeDir = [] {
+    wchar_t buf[512];
+    DWORD n = GetModuleFileNameW(nullptr, buf, countof(buf));
+    assert(n < countof(buf));
+    std::filesystem::path path(buf);
+    return path.parent_path();
+}();
+
+static std::filesystem::path saveDir = [] {
+    wchar_t* documentFolderPathStr;
+    HRESULT result = SHGetKnownFolderPath(FOLDERID_SavedGames, KF_FLAG_DEFAULT, nullptr, &documentFolderPathStr);
+    assert(result == S_OK);
+    std::filesystem::path documentFolderPath(documentFolderPathStr);
+    CoTaskMemFree(documentFolderPathStr);
+    documentFolderPath = documentFolderPath / "AGBY_GAME_SAVES";
+    std::error_code err;
+    bool createSuccess = std::filesystem::create_directory(documentFolderPath, err);
+    if (!createSuccess) {
+        assert(std::filesystem::exists(documentFolderPath));
+    }
+    return documentFolderPath;
+}();
+
+static std::filesystem::path worldFilePath = exeDir / "assets/worlds/world.yaml";
+static std::filesystem::path gameSavePath = saveDir / "save.yaml";
+static std::filesystem::path settingsPath = saveDir / "settings.yaml";
+
+static bool quit;
+static LARGE_INTEGER perfFrequency;
+static LARGE_INTEGER perfCounterStart;
+static LARGE_INTEGER perfCounterEnd;
+static uint64 frameCount;
+static float frameTime;
 static uint mouseSelectX = UINT_MAX;
 static uint mouseSelectY = UINT_MAX;
-static int2 mouseDeltaRaw = {0, 0};
-static float mouseWheel = 0;
+static int2 mouseDeltaRaw;
+static float mouseWheel;
 static float mouseSensitivity = 0.001f;
 static float controllerSensitivity = 2.0f;
 
+static HRESULT setDPIAwareness = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+static int screenW = GetSystemMetrics(SM_CXSCREEN);
+static int screenH = GetSystemMetrics(SM_CYSCREEN);
 static WindowMode windowMode = WindowModeWindowed;
 static int windowX = 0, windowY = 0;
 static int windowW = 1920, windowH = 1080;
 static int renderW = 1920, renderH = 1080;
 static DXGI_RATIONAL refreshRate = {60, 1};
-static bool hdr = false;
-static Window window = {};
-static D3D d3d = {};
-static DirectWrite directWrite = {};
-static Controller controller = {};
+static bool hdr;
+static Window window;
+
+static D3D d3d;
+static IGameInput* gameInput;
+static Controller controller;
 static float controllerDeadZone = 0.25f;
 static HANDLE controllerDualSenseHID;
 
-static NVSDK_NGX_Parameter* ngxParameter = nullptr;
-static int dlssAvaliable = false;
+static ImFont* imguiFont;
 
-static std::filesystem::path worldFilePath;
+static NVSDK_NGX_Parameter* ngxParameter;
+static int dlssAvaliable;
+
 static std::vector<Skybox> skyboxes = [] { std::vector<Skybox> skyboxes; skyboxes.reserve(16); return skyboxes; }();
 static std::vector<Model> models = [] { std::vector<Model> models; models.reserve(1024); return models; }();
 static Skybox* skybox;
@@ -991,30 +991,7 @@ static Editor editor;
 static bool editorActive = true;
 #endif
 
-static std::filesystem::path exeDir = [] {
-    wchar_t buf[512];
-    DWORD n = GetModuleFileNameW(nullptr, buf, countof(buf));
-    assert(n < countof(buf));
-    std::filesystem::path path(buf);
-    return path.parent_path();
-}();
-
-static std::filesystem::path saveDir = [] {
-    wchar_t* documentFolderPathStr;
-    HRESULT result = SHGetKnownFolderPath(FOLDERID_SavedGames, KF_FLAG_DEFAULT, nullptr, &documentFolderPathStr);
-    assert(result == S_OK);
-    std::filesystem::path documentFolderPath(documentFolderPathStr);
-    CoTaskMemFree(documentFolderPathStr);
-    documentFolderPath = documentFolderPath / "AGBY_GAME_SAVES";
-    std::error_code err;
-    bool createSuccess = std::filesystem::create_directory(documentFolderPath, err);
-    if (!createSuccess) {
-        assert(std::filesystem::exists(documentFolderPath));
-    }
-    return documentFolderPath;
-}();
-
-void settingsInit(const std::filesystem::path& settingsPath) {
+void settingsInit() {
     if (std::filesystem::is_regular_file(settingsPath)) {
         std::string yamlStr = fileReadStr(settingsPath);
         ryml::Tree yamlTree = ryml::parse_in_arena(ryml::to_csubstr(yamlStr));
@@ -1027,7 +1004,7 @@ void settingsInit(const std::filesystem::path& settingsPath) {
     }
 }
 
-void settingsSave(const std::filesystem::path& settingsPath) {
+void settingsSave() {
     ryml::Tree yamlTree;
     ryml::NodeRef yamlRoot = yamlTree.rootref();
     yamlRoot |= ryml::MAP;
@@ -1054,8 +1031,6 @@ void windowUpdateSizes() {
 }
 
 void windowInit() {
-    assert(SUCCEEDED(SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE)));
-
     HMODULE instanceHandle = GetModuleHandle(nullptr);
     WNDCLASSA windowClass = {};
     windowClass.style = CS_HREDRAW | CS_VREDRAW;
@@ -1068,8 +1043,7 @@ void windowInit() {
     windowClass.lpszClassName = "windowClassName";
     assert(RegisterClassA(&windowClass));
 
-    DWORD windowStyle = WS_OVERLAPPEDWINDOW;
-    window.hwnd = CreateWindowExA(0, windowClass.lpszClassName, nullptr, windowStyle, windowX, windowY, windowW, windowH, nullptr, nullptr, instanceHandle, nullptr);
+    window.hwnd = CreateWindowExA(0, windowClass.lpszClassName, nullptr, WS_OVERLAPPEDWINDOW, windowX, windowY, windowW, windowH, nullptr, nullptr, instanceHandle, nullptr);
     assert(window.hwnd);
 
     windowUpdateSizes();
@@ -1128,10 +1102,15 @@ void imguiInit() {
     // ImGui::StyleColorsClassic();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = _strdup((exeDir / "imgui.ini").string().c_str());
-    assert(io.Fonts->AddFontDefault());
-    io.FontGlobalScale = (float)GetSystemMetrics(SM_CYSCREEN) / 1080.0f;
+    // assert(io.Fonts->AddFontDefault());
+    imguiFont = io.Fonts->AddFontFromFileTTF((exeDir / "assets/fonts/NotoSerif.ttf").string().c_str(), 50);
+    io.FontGlobalScale = (float)screenH / 3000.0f;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 }
+
+void gameInputInit() {
+    assert(GameInputCreate(&gameInput) == S_OK);
+};
 
 void controllerApplyDeadZone(Controller* c) {
     float lDistance = sqrtf(c->lsX * c->lsX + c->lsY * c->lsY);
@@ -1172,39 +1151,39 @@ std::string controllerToString() {
     return s;
 }
 
-// void controllerGetStateDualSense(uint8* packet, uint packetSize) {
-//     controller = {};
-//     uint n = (packetSize == 64) ? 0 : 1;
-//     controller.lsX = (packet[n + 1] / 255.0f) * 2.0f - 1.0f;
-//     controller.lsY = -((packet[n + 2] / 255.0f) * 2.0f - 1.0f);
-//     controller.rsX = (packet[n + 3] / 255.0f) * 2.0f - 1.0f;
-//     controller.rsY = -((packet[n + 4] / 255.0f) * 2.0f - 1.0f);
-//     controller.lt = packet[n + 5] / 255.0f;
-//     controller.rt = packet[n + 6] / 255.0f;
-//     switch (packet[n + 8] & 0x0f) {
-//     case 0x0: controller.up = true; break;
-//     case 0x1: controller.up = controller.right = true; break;
-//     case 0x2: controller.right = true; break;
-//     case 0x3: controller.down = controller.right = true; break;
-//     case 0x4: controller.down = true; break;
-//     case 0x5: controller.down = controller.left = true; break;
-//     case 0x6: controller.left = true; break;
-//     case 0x7: controller.up = controller.left = true; break;
-//     }
-//     controller.x = packet[n + 8] & 0x10;
-//     controller.a = packet[n + 8] & 0x20;
-//     controller.b = packet[n + 8] & 0x40;
-//     controller.y = packet[n + 8] & 0x80;
-//     controller.lb = packet[n + 9] & 0x01;
-//     controller.rb = packet[n + 9] & 0x02;
-//     controller.back = packet[n + 9] & 0x10;
-//     controller.start = packet[n + 9] & 0x20;
-//     controller.ls = packet[n + 9] & 0x40;
-//     controller.rs = packet[n + 9] & 0x80;
-//     controllerApplyDeadZone();
-// }
+Controller controllerGetStateDualSense(uint8* packet, uint packetSize) {
+    Controller c = {};
+    uint n = (packetSize == 64) ? 0 : 1;
+    c.lsX = (packet[n + 1] / 255.0f) * 2.0f - 1.0f;
+    c.lsY = -((packet[n + 2] / 255.0f) * 2.0f - 1.0f);
+    c.rsX = (packet[n + 3] / 255.0f) * 2.0f - 1.0f;
+    c.rsY = -((packet[n + 4] / 255.0f) * 2.0f - 1.0f);
+    c.lt = packet[n + 5] / 255.0f;
+    c.rt = packet[n + 6] / 255.0f;
+    switch (packet[n + 8] & 0x0f) {
+    case 0x0: c.up = true; break;
+    case 0x1: c.up = c.right = true; break;
+    case 0x2: c.right = true; break;
+    case 0x3: c.down = c.right = true; break;
+    case 0x4: c.down = true; break;
+    case 0x5: c.down = c.left = true; break;
+    case 0x6: c.left = true; break;
+    case 0x7: c.up = c.left = true; break;
+    }
+    c.x = packet[n + 8] & 0x10;
+    c.a = packet[n + 8] & 0x20;
+    c.b = packet[n + 8] & 0x40;
+    c.y = packet[n + 8] & 0x80;
+    c.lb = packet[n + 9] & 0x01;
+    c.rb = packet[n + 9] & 0x02;
+    c.back = packet[n + 9] & 0x10;
+    c.start = packet[n + 9] & 0x20;
+    c.ls = packet[n + 9] & 0x40;
+    c.rs = packet[n + 9] & 0x80;
+    return c;
+}
 
-void controllerGetStateXInput() {
+Controller controllerGetStateXInput() {
     Controller c = {};
     XINPUT_STATE state;
     if (XInputGetState(0, &state) == ERROR_SUCCESS) {
@@ -1228,22 +1207,63 @@ void controllerGetStateXInput() {
         c.lsY = state.Gamepad.sThumbLY / 32767.0f;
         c.rsX = state.Gamepad.sThumbRX / 32767.0f;
         c.rsY = state.Gamepad.sThumbRY / 32767.0f;
-        controllerApplyDeadZone(&c);
-        if (controller.back && c.back) c.backDownDuration = controller.backDownDuration + frameTime;
-        if (controller.start && c.start) c.startDownDuration = controller.startDownDuration + frameTime;
-        if (controller.a && c.a) c.aDownDuration = controller.aDownDuration + frameTime;
-        if (controller.b && c.b) c.bDownDuration = controller.bDownDuration + frameTime;
-        if (controller.x && c.x) c.xDownDuration = controller.xDownDuration + frameTime;
-        if (controller.y && c.y) c.yDownDuration = controller.yDownDuration + frameTime;
-        if (controller.up && c.up) c.upDownDuration = controller.upDownDuration + frameTime;
-        if (controller.down && c.down) c.downDownDuration = controller.downDownDuration + frameTime;
-        if (controller.left && c.left) c.leftDownDuration = controller.leftDownDuration + frameTime;
-        if (controller.right && c.right) c.rightDownDuration = controller.rightDownDuration + frameTime;
-        if (controller.lb && c.lb) c.lbDownDuration = controller.lbDownDuration + frameTime;
-        if (controller.rb && c.rb) c.rbDownDuration = controller.rbDownDuration + frameTime;
-        if (controller.ls && c.ls) c.lsDownDuration = controller.lsDownDuration + frameTime;
-        if (controller.rs && c.rs) c.rsDownDuration = controller.rsDownDuration + frameTime;
     }
+    return c;
+}
+
+Controller controllerGetStateGameInput() {
+    Controller c = {};
+    IGameInputReading* reading;
+    if (SUCCEEDED(gameInput->GetCurrentReading(GameInputKindGamepad, nullptr, &reading))) {
+        // IGameInputDevice *device;
+        // reading->GetDevice(&device);
+        // const GameInputDeviceInfo* info = device->GetDeviceInfo();
+        GameInputGamepadState state;
+        reading->GetGamepadState(&state);
+        reading->Release();
+        c.back = state.buttons & GameInputGamepadMenu;
+        c.start = state.buttons & GameInputGamepadView;
+        c.a = state.buttons & GameInputGamepadA;
+        c.b = state.buttons & GameInputGamepadB;
+        c.x = state.buttons & GameInputGamepadX;
+        c.y = state.buttons & GameInputGamepadY;
+        c.up = state.buttons & GameInputGamepadDPadUp;
+        c.down = state.buttons & GameInputGamepadDPadDown;
+        c.left = state.buttons & GameInputGamepadDPadLeft;
+        c.right = state.buttons & GameInputGamepadDPadRight;
+        c.lb = state.buttons & GameInputGamepadLeftShoulder;
+        c.rb = state.buttons & GameInputGamepadRightShoulder;
+        c.lt = state.leftTrigger / 255.0f;
+        c.rt = state.rightTrigger / 255.0f;
+        c.ls = state.buttons & GameInputGamepadLeftThumbstick;
+        c.rs = state.buttons & GameInputGamepadRightThumbstick;
+        c.lsX = state.leftThumbstickX / 32767.0f;
+        c.lsY = state.leftThumbstickY / 32767.0f;
+        c.rsX = state.rightThumbstickX / 32767.0f;
+        c.rsY = state.rightThumbstickY / 32767.0f;
+    }
+    return c;
+}
+
+void controllerGetState() {
+    Controller c = controllerGetStateXInput();
+    // Controller c = controllerGetStateGameInput();
+    //  Controller c = controllerGetStateDualSense();
+    controllerApplyDeadZone(&c);
+    if (controller.back && c.back) c.backDownDuration = controller.backDownDuration + frameTime;
+    if (controller.start && c.start) c.startDownDuration = controller.startDownDuration + frameTime;
+    if (controller.a && c.a) c.aDownDuration = controller.aDownDuration + frameTime;
+    if (controller.b && c.b) c.bDownDuration = controller.bDownDuration + frameTime;
+    if (controller.x && c.x) c.xDownDuration = controller.xDownDuration + frameTime;
+    if (controller.y && c.y) c.yDownDuration = controller.yDownDuration + frameTime;
+    if (controller.up && c.up) c.upDownDuration = controller.upDownDuration + frameTime;
+    if (controller.down && c.down) c.downDownDuration = controller.downDownDuration + frameTime;
+    if (controller.left && c.left) c.leftDownDuration = controller.leftDownDuration + frameTime;
+    if (controller.right && c.right) c.rightDownDuration = controller.rightDownDuration + frameTime;
+    if (controller.lb && c.lb) c.lbDownDuration = controller.lbDownDuration + frameTime;
+    if (controller.rb && c.rb) c.rbDownDuration = controller.rbDownDuration + frameTime;
+    if (controller.ls && c.ls) c.lsDownDuration = controller.lsDownDuration + frameTime;
+    if (controller.rs && c.rs) c.rsDownDuration = controller.rsDownDuration + frameTime;
     controller = c;
 }
 
@@ -1273,11 +1293,13 @@ D3D12MA::Allocation* d3dCreateImage(const D3D12MA::ALLOCATION_DESC& allocDesc, D
         assert(UpdateSubresources(cmdList, image->GetResource(), d3d.stagingBuffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, imageMipsData) == requiredSize);
         d3d.stagingBufferOffset += (uint)requiredSize;
     }
-    D3D12_RESOURCE_BARRIER transition = {
-        .Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-        .Transition = {.pResource = image->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = stateAfter},
-    };
-    cmdList->ResourceBarrier(1, &transition);
+    if (stateAfter != D3D12_RESOURCE_STATE_COPY_DEST) {
+        D3D12_RESOURCE_BARRIER transition = {
+            .Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+            .Transition = {.pResource = image->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = stateAfter},
+        };
+        cmdList->ResourceBarrier(1, &transition);
+    }
     return image;
 }
 
@@ -1387,10 +1409,10 @@ void d3dInit() {
         // debug->SetEnableSynchronizedCommandQueueValidation(true);
     }
 
-    DXGI_ADAPTER_DESC dxgiAdapterDesc = {};
-    DXGI_OUTPUT_DESC1 dxgiOutputDesc = {};
     assert(SUCCEEDED(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&d3d.dxgiFactory))));
     assert(SUCCEEDED(d3d.dxgiFactory->EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&d3d.dxgiAdapter))));
+    DXGI_ADAPTER_DESC dxgiAdapterDesc = {};
+    assert(SUCCEEDED(d3d.dxgiAdapter->GetDesc(&dxgiAdapterDesc)));
     assert(SUCCEEDED(D3D12CreateDevice(d3d.dxgiAdapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&d3d.device))));
     if (debug) {
         ID3D12InfoQueue1* infoQueue;
@@ -1398,9 +1420,11 @@ void d3dInit() {
         assert(SUCCEEDED(d3d.device->QueryInterface(IID_PPV_ARGS(&infoQueue))));
         assert(SUCCEEDED(infoQueue->RegisterMessageCallback(d3dMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &callbackCookie)));
     }
-    assert(SUCCEEDED(d3d.dxgiAdapter->GetDesc(&dxgiAdapterDesc)));
-    assert(SUCCEEDED(d3d.dxgiAdapter->EnumOutputs(0, (IDXGIOutput**)&d3d.dxgiOutput)));
-    assert(SUCCEEDED(d3d.dxgiOutput->GetDesc1(&dxgiOutputDesc)));
+    IDXGIOutput6* dxgiOutput;
+    DXGI_OUTPUT_DESC1 dxgiOutputDesc = {};
+    assert(SUCCEEDED(d3d.dxgiAdapter->EnumOutputs(0, (IDXGIOutput**)&dxgiOutput)));
+    assert(SUCCEEDED(dxgiOutput->GetDesc1(&dxgiOutputDesc)));
+    dxgiOutput->Release();
     hdr = (dxgiOutputDesc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
     {
         D3D12_FEATURE_DATA_D3D12_OPTIONS resourceBindingTier = {};
@@ -1439,30 +1463,6 @@ void d3dInit() {
         // assert(SUCCEEDED(d3d.transferCmdList->Close()));
     }
     {
-        uint dxgiModeCount = 0;
-        d3d.dxgiOutput->GetDisplayModeList(d3d.swapChainFormat, 0, &dxgiModeCount, nullptr);
-        std::vector<DXGI_MODE_DESC> dxgiModes(dxgiModeCount);
-        d3d.dxgiOutput->GetDisplayModeList(d3d.swapChainFormat, 0, &dxgiModeCount, dxgiModes.data());
-        for (DXGI_MODE_DESC& dxgiMode : dxgiModes) {
-            bool hasResolution = false;
-            for (DisplayMode& displayMode : d3d.displayModes) {
-                if (displayMode.resolutionW == dxgiMode.Width && displayMode.resolutionH == dxgiMode.Height) {
-                    hasResolution = true;
-                    bool hasRefreshRate = false;
-                    for (DXGI_RATIONAL& refreshRate : displayMode.refreshRates) {
-                        if (refreshRate.Numerator == dxgiMode.RefreshRate.Numerator && refreshRate.Denominator == dxgiMode.RefreshRate.Denominator) {
-                            hasRefreshRate = true;
-                            break;
-                        }
-                    }
-                    if (!hasRefreshRate) {
-                        displayMode.refreshRates.push_back(dxgiMode.RefreshRate);
-                    }
-                    break;
-                }
-            }
-            if (!hasResolution) d3d.displayModes.push_back(DisplayMode{dxgiMode.Width, dxgiMode.Height, {dxgiMode.RefreshRate}});
-        }
         DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {
             .Width = (uint)renderW,
             .Height = (uint)renderH,
@@ -1473,7 +1473,6 @@ void d3dInit() {
             .Scaling = DXGI_SCALING_NONE,
             .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
             .AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED,
-            .Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH,
         };
         assert(SUCCEEDED(d3d.dxgiFactory->CreateSwapChainForHwnd(d3d.graphicsQueue, window.hwnd, &swapChainDesc, nullptr, nullptr, (IDXGISwapChain1**)&d3d.swapChain)));
 
@@ -1484,7 +1483,7 @@ void d3dInit() {
             assert(SUCCEEDED(d3d.swapChain->GetBuffer(imageIndex, IID_PPV_ARGS(image))));
             (*image)->SetName(std::format(L"swapChain{}", imageIndex).c_str());
         }
-        // d3d.dxgiFactory->MakeWindowAssociation(window.hwnd, DXGI_MWA_NO_WINDOW_CHANGES); // disable alt-enter
+        d3d.dxgiFactory->MakeWindowAssociation(window.hwnd, DXGI_MWA_NO_WINDOW_CHANGES); // disable alt-enter
     }
     {
         D3D12_DESCRIPTOR_HEAP_DESC rtvDescriptorHeapDesc = {.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV, .NumDescriptors = 16, .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE};
@@ -1580,14 +1579,9 @@ void d3dInit() {
             uint8* imguiTextureData;
             int imguiTextureWidth, imguiTextureHeight;
             ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&imguiTextureData, &imguiTextureWidth, &imguiTextureHeight);
-            D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint64)imguiTextureWidth, .Height = (uint)imguiTextureHeight, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
+            D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint64)imguiTextureWidth, .Height = (uint)imguiTextureHeight, .DepthOrArraySize = 1, .MipLevels = 1, .Format = d3d.imguiTextureFormat, .SampleDesc = {.Count = 1}};
             D3D12_SUBRESOURCE_DATA data = {.pData = imguiTextureData, .RowPitch = imguiTextureWidth * 4, .SlicePitch = imguiTextureWidth * imguiTextureHeight * 4};
             d3d.imguiTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, nullptr, desc, &data, d3d.graphicsCmdList, L"imguiTexture", D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        }
-        {
-            D3D12_CLEAR_VALUE clearValue = {.Format = DXGI_FORMAT_R8G8B8A8_UNORM, .Color = {0.0f, 0.0f, 0.0f, 0.0f}};
-            D3D12_RESOURCE_DESC desc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint)renderW, .Height = (uint)renderH, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}, .Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
-            d3d.directWriteTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, &clearValue, desc, nullptr, d3d.graphicsCmdList, L"directWriteTexture", D3D12_RESOURCE_STATE_RENDER_TARGET);
         }
         {
             uint8_4 defaultEmissiveTextureData[4] = {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}};
@@ -1789,34 +1783,29 @@ void d3dCompileShaders() {
 }
 
 void d3dApplySettings() {
-    DXGI_OUTPUT_DESC1 dxgiOutputDesc = {};
-    assert(SUCCEEDED(d3d.dxgiOutput->GetDesc1(&dxgiOutputDesc)));
+    IDXGIOutput6* dxgiOutput;
+    DXGI_OUTPUT_DESC1 dxgiOutputDesc;
+    assert(SUCCEEDED(d3d.swapChain->GetContainingOutput((IDXGIOutput**)&dxgiOutput)));
+    assert(SUCCEEDED(dxgiOutput->GetDesc1(&dxgiOutputDesc)));
+    dxgiOutput->Release();
     if (hdr && dxgiOutputDesc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) {
         assert(SUCCEEDED(d3d.swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)));
     }
     else {
         assert(SUCCEEDED(d3d.swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)));
     }
+    static RECT windowRect = [] {  RECT r; assert(GetWindowRect(window.hwnd, &r)); return r; }();
     if (windowMode == WindowModeWindowed) {
-        assert(SUCCEEDED(d3d.swapChain->SetFullscreenState(false, nullptr)));
-        DWORD dwStyle = GetWindowLong(window.hwnd, GWL_STYLE);
-        MONITORINFO mi = {.cbSize = sizeof(mi)};
-        assert(GetMonitorInfo(MonitorFromWindow(window.hwnd, MONITOR_DEFAULTTOPRIMARY), &mi));
-        assert(SetWindowLong(window.hwnd, GWL_STYLE, dwStyle | WS_OVERLAPPEDWINDOW) != 0);
-        assert(SetWindowPos(window.hwnd, NULL, windowX, windowY, windowW, windowH, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED));
-    }
-    else if (windowMode == WindowModeBorderless) {
-        assert(SUCCEEDED(d3d.swapChain->SetFullscreenState(false, nullptr)));
-        DWORD dwStyle = GetWindowLong(window.hwnd, GWL_STYLE);
-        MONITORINFO mi = {.cbSize = sizeof(mi)};
-        assert(GetMonitorInfo(MonitorFromWindow(window.hwnd, MONITOR_DEFAULTTOPRIMARY), &mi));
-        assert(SetWindowLong(window.hwnd, GWL_STYLE, dwStyle & ~WS_OVERLAPPEDWINDOW) != 0);
-        assert(SetWindowPos(window.hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_NOOWNERZORDER | SWP_FRAMECHANGED));
+        assert(SetWindowLong(window.hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW) != 0);
+        assert(SetWindowPos(window.hwnd, HWND_NOTOPMOST, windowRect.left, windowRect.top, windowRect.right - windowRect.left, windowRect.bottom - windowRect.top, SWP_FRAMECHANGED | SWP_NOACTIVATE));
+        ShowWindow(window.hwnd, SW_NORMAL);
     }
     else if (windowMode == WindowModeFullscreen) {
-        DXGI_MODE_DESC dxgiMode = {.Width = (uint)windowW, .Height = (uint)windowH, .RefreshRate = refreshRate, .Format = d3d.swapChainFormat};
-        assert(SUCCEEDED(d3d.swapChain->ResizeTarget(&dxgiMode)));
-        assert(SUCCEEDED(d3d.swapChain->SetFullscreenState(true, nullptr)));
+        assert(GetWindowRect(window.hwnd, &windowRect));
+        assert(SetWindowLong(window.hwnd, GWL_STYLE, GetWindowLong(window.hwnd, GWL_STYLE) & ~(WS_CAPTION | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU | WS_THICKFRAME)));
+        RECT rect = dxgiOutputDesc.DesktopCoordinates;
+        assert(SetWindowPos(window.hwnd, HWND_TOP, rect.left, rect.top, rect.right, rect.bottom, SWP_FRAMECHANGED | SWP_NOACTIVATE));
+        ShowWindow(window.hwnd, SW_MAXIMIZE);
     }
 }
 
@@ -1852,27 +1841,6 @@ D3DDescriptor d3dAppendUAVDescriptor(D3D12_UNORDERED_ACCESS_VIEW_DESC* unordered
     d3d.device->CreateUnorderedAccessView(resource, nullptr, unorderedAccessViewDesc, cpuHandle);
     d3d.cbvSrvUavDescriptorCount++;
     return {cpuHandle, gpuHandle};
-}
-
-void directWriteInit() {
-    assert(SUCCEEDED(D3D11On12CreateDevice(d3d.device, D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, (IUnknown**)&d3d.graphicsQueue, 1, 0, &directWrite.d3d11Device, &directWrite.d3d11DeviceContext, nullptr)));
-    assert(SUCCEEDED(directWrite.d3d11Device->QueryInterface(IID_PPV_ARGS(&directWrite.d3d11On12Device))));
-    assert(SUCCEEDED(directWrite.d3d11On12Device->QueryInterface(IID_PPV_ARGS(&directWrite.dxgiDevice))));
-    assert(SUCCEEDED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &directWrite.d2dFactory)));
-    assert(SUCCEEDED(directWrite.d2dFactory->CreateDevice(directWrite.dxgiDevice, &directWrite.d2dDevice)));
-    assert(SUCCEEDED(directWrite.d2dDevice->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &directWrite.d2dDeviceContext)));
-    assert(SUCCEEDED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown**)&directWrite.dWriteFactory)));
-    assert(SUCCEEDED(directWrite.dWriteFactory->CreateTextFormat(L"Verdana", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 50.0f, L"en-us", &directWrite.dWriteTextFormat)));
-    assert(SUCCEEDED(directWrite.dWriteTextFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)));
-    assert(SUCCEEDED(directWrite.dWriteTextFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)));
-    assert(SUCCEEDED(directWrite.d2dDeviceContext->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White, 1.0f), &directWrite.dWriteColorBrush)));
-
-    D3D11_RESOURCE_FLAGS flags = {.BindFlags = D3D11_BIND_RENDER_TARGET};
-    assert(SUCCEEDED(directWrite.d3d11On12Device->CreateWrappedResource(d3d.directWriteTexture->GetResource(), &flags, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET, IID_PPV_ARGS(&directWrite.image))));
-    assert(SUCCEEDED(directWrite.image->QueryInterface(IID_PPV_ARGS(&directWrite.imageSurface))));
-    float dpi = (float)GetDpiForWindow(window.hwnd);
-    D2D1_BITMAP_PROPERTIES1 bitmapProperties = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), dpi, dpi);
-    assert(SUCCEEDED(directWrite.d2dDeviceContext->CreateBitmapFromDxgiSurface(directWrite.imageSurface, &bitmapProperties, &directWrite.imageRenderTarget)));
 }
 
 void dlssInit() {
@@ -2672,7 +2640,7 @@ void modelInstanceImGui(ModelInstance* modelInstance) {
 }
 
 void modelInstanceUpdateAnimation(ModelInstance* modelInstance, double time) {
-    if (!modelInstance->animation) return;
+    if (!modelInstance->animation || pathTracer) return;
 
     modelInstance->animationTime += time;
     if (modelInstance->animationTime > modelInstance->animation->timeLength) {
@@ -2989,13 +2957,11 @@ void operator<<(ryml::NodeRef n, float4 v) { n |= ryml::SEQ, n |= ryml::_WIP_STY
 void operator<<(ryml::NodeRef n, Transform t) { n |= ryml::SEQ, n |= ryml::_WIP_STYLE_FLOW_SL, n.append_child() << t.s.x, n.append_child() << t.s.y, n.append_child() << t.s.z, n.append_child() << t.r.x, n.append_child() << t.r.y, n.append_child() << t.r.z, n.append_child() << t.r.w, n.append_child() << t.t.x, n.append_child() << t.t.y, n.append_child() << t.t.z; }
 void operator<<(ryml::NodeRef n, PxTransform t) { n |= ryml::SEQ, n |= ryml::_WIP_STYLE_FLOW_SL, n.append_child() << t.q.x, n.append_child() << t.q.y, n.append_child() << t.q.z, n.append_child() << t.q.w, n.append_child() << t.p.x, n.append_child() << t.p.y, n.append_child() << t.p.z; }
 
-void worldInit(const std::filesystem::path& path) {
-    if (!std::filesystem::exists(exeDir / path)) assert(false);
-
-    std::string yamlStr = fileReadStr(exeDir / path);
+void worldInit() {
+    if (!std::filesystem::exists(worldFilePath)) assert(false);
+    std::string yamlStr = fileReadStr(worldFilePath);
     ryml::Tree yamlTree = ryml::parse_in_arena(ryml::to_csubstr(yamlStr));
     ryml::ConstNodeRef yamlRoot = yamlTree.rootref();
-    worldFilePath = path;
 
 #ifdef EDITOR
     if (ryml::ConstNodeRef editorYaml = yamlRoot.find_child("editor"); editorYaml.valid()) {
@@ -3278,7 +3244,7 @@ void editorSave() {
                     }
                     else if (geometryType == PxGeometryType::eBOX) {
                         shapeYaml["type"] = "box";
-                        shapeYaml["HalfExtents"] << float3(((const PxBoxGeometry&)geometry).halfExtents);
+                        shapeYaml["halfExtents"] << float3(((const PxBoxGeometry&)geometry).halfExtents);
                         shapeYaml["transform"] << shape->getLocalPose();
                     }
                     else if (geometryType == PxGeometryType::eSPHERE) {
@@ -3333,7 +3299,7 @@ void editorSave() {
 #endif
 }
 
-void gameReadSave(const std::filesystem::path& path) {
+void gameReadSave() {
 #ifndef EDITOR
     if (!std::filesystem::exists(path)) return;
 
@@ -3346,7 +3312,7 @@ void gameReadSave(const std::filesystem::path& path) {
 #endif
 }
 
-void gameSave(const std::filesystem::path& path) {
+void gameSave() {
 #ifndef EDITOR
     ryml::Tree yamlTree;
     ryml::NodeRef yamlRoot = yamlTree.rootref();
@@ -3357,7 +3323,7 @@ void gameSave(const std::filesystem::path& path) {
     playerYaml["transform"] << player.transform;
 
     std::string yamlStr = ryml::emitrs_yaml<std::string>(yamlTree);
-    fileWriteStr(path, yamlStr);
+    fileWriteStr(gameSavePath, yamlStr);
 #endif
 }
 
@@ -3435,27 +3401,9 @@ void editorMainMenuBar() {
                 windowMode = WindowModeWindowed;
                 d3dApplySettings();
             }
-            else if (ImGui::MenuItem("Borderless Fullscreen")) {
-                windowMode = WindowModeBorderless;
+            else if (ImGui::MenuItem("Fullscreen")) {
+                windowMode = WindowModeFullscreen;
                 d3dApplySettings();
-            }
-            ImGui::SeparatorEx(ImGuiSeparatorFlags_Horizontal);
-            ImGui::Text("Exclusive Fullscreen");
-            for (DisplayMode& mode : d3d.displayModes) {
-                std::string text = std::format("{}x{}", mode.resolutionW, mode.resolutionH);
-                if (ImGui::BeginMenu(text.c_str())) {
-                    for (DXGI_RATIONAL& refreshRate : mode.refreshRates) {
-                        text = std::format("{:.2f}hz", (float)refreshRate.Numerator / (float)refreshRate.Denominator);
-                        if (ImGui::MenuItem(text.c_str())) {
-                            windowMode = WindowModeFullscreen;
-                            windowW = mode.resolutionW;
-                            windowH = mode.resolutionH;
-                            refreshRate = refreshRate;
-                            d3dApplySettings();
-                        }
-                    }
-                    ImGui::EndMenu();
-                }
             }
             ImGui::EndMenu();
         }
@@ -3474,7 +3422,9 @@ void editorMainMenuBar() {
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("render")) {
-            ImGui::Checkbox("pathTracer", &pathTracer);
+            if (ImGui::Checkbox("pathTracer", &pathTracer)) {
+                d3d.renderAccumulationCount = 0;
+            }
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -4296,6 +4246,11 @@ void editorUpdate() {
             if (ImGui::IsKeyDown(ImGuiKey_E)) translate.y = -distance;
             editorCameraRotate(camera, float2(pitch, yaw));
             editorCameraTranslate(camera, translate);
+            if (pitch != 0 || yaw != 0 || translate != float3(0, 0, 0)) {
+                if (pathTracer) {
+                    d3d.renderAccumulationCount = 0;
+                }
+            }
         }
         {
             cameraViewMat = XMMatrixLookAtLH(camera.position.toXMVector(), camera.lookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
@@ -4432,16 +4387,33 @@ void liveReloadFuncs() {
     }
 }
 
+void imguiGameMenu() {
+    ImGuiIO& imguiIO = ImGui::GetIO();
+    ImVec2 windowSize = imguiIO.DisplaySize;
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(windowSize);
+    ImGuiWindowFlags windowFlags =
+        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoInputs;
+    ImGui::Begin("GameMenuWindow", nullptr, windowFlags);
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    imguiFont->RenderText(drawList, imguiFont->FontSize, ImVec2(windowSize.x * 0.2f, windowSize.y * 0.2f), 0xff0000ff, ImVec4(0, 0, windowSize.x, windowSize.y), "test test test", nullptr);
+    ImGui::End();
+}
+
 void gameUpdate() {
     ZoneScopedN("gameUpdate");
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !showMenu) {
+    if (!showMenu && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         showMenu = true;
+        windowHideCursor(false);
     }
     else if (showMenu) {
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             showMenu = false;
+            windowHideCursor(true);
         }
         else {
+            imguiGameMenu();
             return;
         }
     }
@@ -4588,7 +4560,6 @@ void update() {
             debugTriangles.push_back(Triangle{.p0 = float3(pxTriangle.pos0), .p1 = float3(pxTriangle.pos1), .p2 = float3(pxTriangle.pos2), .color = 0xffffffff});
         }
     }
-
     ImGui::ShowDebugLogWindow();
     ImGui::Render();
 }
@@ -4676,6 +4647,13 @@ void d3dRender() {
             .cameraViewProjectMat = cameraViewProjectMat,
             .cameraViewProjectMatInverse = cameraViewProjectMatInverse,
         };
+        if (pathTracer) {
+            d3d.renderAccumulationCount += 1;
+            if (d3d.renderAccumulationCount > d3d.renderAccumulationCountMax) {
+                d3d.renderAccumulationCount = d3d.renderAccumulationCountMax;
+            }
+            renderInfo.accumulationFrameCount = d3d.renderAccumulationCount;
+        }
         assert(d3d.constantsBufferOffset == 0);
         memcpy(d3d.constantsBufferPtr + d3d.constantsBufferOffset, &renderInfo, sizeof(renderInfo));
         d3d.constantsBufferOffset += sizeof(renderInfo);
@@ -4875,39 +4853,38 @@ void d3dRender() {
     }
 #endif
     if (pathTracer) {
-        void* rayMissIDs[] = {d3d.pathTracerRayMissID};
-        void* rayHitGroupIDs[] = {d3d.pathTracerRayHitGroupID};
-        D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantsBuffer->GetResource(), d3d.constantsBufferPtr, &d3d.constantsBufferOffset, d3d.pathTracerRayGenID, rayMissIDs, rayHitGroupIDs);
-        dispatchDesc.Width = renderW, dispatchDesc.Height = renderH, dispatchDesc.Depth = 1;
-        assert(d3d.constantsBufferOffset < d3d.constantsBuffer->GetSize());
+        if (d3d.renderAccumulationCount < d3d.renderAccumulationCountMax) {
+            void* rayMissIDs[] = {d3d.pathTracerRayMissID};
+            void* rayHitGroupIDs[] = {d3d.pathTracerRayHitGroupID};
+            D3D12_DISPATCH_RAYS_DESC dispatchDesc = fillRayTracingShaderTable(d3d.constantsBuffer->GetResource(), d3d.constantsBufferPtr, &d3d.constantsBufferOffset, d3d.pathTracerRayGenID, rayMissIDs, rayHitGroupIDs);
+            dispatchDesc.Width = renderW, dispatchDesc.Height = renderH, dispatchDesc.Depth = 1;
+            assert(d3d.constantsBufferOffset < d3d.constantsBuffer->GetSize());
 
-        D3D12_RESOURCE_BARRIER transitions[] = {
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.renderTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.depthTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
-        };
-        d3d.graphicsCmdList->ResourceBarrier(countof(transitions), transitions);
+            D3D12_RESOURCE_BARRIER transitions[] = {
+                {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.renderTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
+                {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.depthTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}},
+            };
+            d3d.graphicsCmdList->ResourceBarrier(countof(transitions), transitions);
 
-        PIXSetMarker(d3d.graphicsCmdList, 0, "pathTracer");
-        d3d.graphicsCmdList->SetPipelineState1(d3d.pathTracerPSO);
-        d3d.graphicsCmdList->SetComputeRootSignature(d3d.pathTracerRootSig);
-        d3d.graphicsCmdList->SetComputeRoot32BitConstants(0, 1, &d3d.renderAccumulationCount, 0);
-        d3d.graphicsCmdList->SetComputeRootConstantBufferView(1, d3d.constantsBuffer->GetResource()->GetGPUVirtualAddress());
-        d3d.graphicsCmdList->SetComputeRootShaderResourceView(2, d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress());
-        d3d.graphicsCmdList->SetComputeRootShaderResourceView(3, d3d.blasInstancesInfosBuffer->GetResource()->GetGPUVirtualAddress());
-        d3d.graphicsCmdList->SetComputeRootShaderResourceView(4, d3d.blasGeometriesInfosBuffer->GetResource()->GetGPUVirtualAddress());
-        D3D12_UNORDERED_ACCESS_VIEW_DESC renderTextureUAVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
-        D3D12_UNORDERED_ACCESS_VIEW_DESC renderAccumulationTextureUAVDesc = {.Format = d3d.renderAccumulationTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
-        D3D12_UNORDERED_ACCESS_VIEW_DESC depthTextureUAVDesc = {.Format = d3d.depthTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
-        D3DDescriptor renderTextureUAVDescriptor = d3dAppendUAVDescriptor(&renderTextureUAVDesc, d3d.renderTexture->GetResource());
-        D3DDescriptor renderAccumulationTextureUAVDescriptor = d3dAppendUAVDescriptor(&renderAccumulationTextureUAVDesc, d3d.renderAccumulationTexture->GetResource());
-        D3DDescriptor depthTextureUAVDescriptor = d3dAppendUAVDescriptor(&depthTextureUAVDesc, d3d.depthTexture->GetResource());
-        D3DDescriptor skyboxTextureDescriptor = d3dAppendSRVDescriptor(nullptr, skybox->hdriTexture->GetResource());
-        d3d.graphicsCmdList->SetComputeRootDescriptorTable(5, renderTextureUAVDescriptor.gpuHandle);
-        d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
+            PIXSetMarker(d3d.graphicsCmdList, 0, "pathTracer");
+            d3d.graphicsCmdList->SetPipelineState1(d3d.pathTracerPSO);
+            d3d.graphicsCmdList->SetComputeRootSignature(d3d.pathTracerRootSig);
+            d3d.graphicsCmdList->SetComputeRootConstantBufferView(0, d3d.constantsBuffer->GetResource()->GetGPUVirtualAddress());
+            d3d.graphicsCmdList->SetComputeRootShaderResourceView(1, d3d.tlasBuffer->GetResource()->GetGPUVirtualAddress());
+            d3d.graphicsCmdList->SetComputeRootShaderResourceView(2, d3d.blasInstancesInfosBuffer->GetResource()->GetGPUVirtualAddress());
+            d3d.graphicsCmdList->SetComputeRootShaderResourceView(3, d3d.blasGeometriesInfosBuffer->GetResource()->GetGPUVirtualAddress());
+            D3D12_UNORDERED_ACCESS_VIEW_DESC renderTextureUAVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
+            D3D12_UNORDERED_ACCESS_VIEW_DESC renderAccumulationTextureUAVDesc = {.Format = d3d.renderAccumulationTextureFormat, .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0, .PlaneSlice = 0}};
+            D3DDescriptor renderTextureUAVDescriptor = d3dAppendUAVDescriptor(&renderTextureUAVDesc, d3d.renderTexture->GetResource());
+            D3DDescriptor renderAccumulationTextureUAVDescriptor = d3dAppendUAVDescriptor(&renderAccumulationTextureUAVDesc, d3d.renderAccumulationTexture->GetResource());
+            D3DDescriptor skyboxTextureDescriptor = d3dAppendSRVDescriptor(nullptr, skybox->hdriTexture->GetResource());
+            d3d.graphicsCmdList->SetComputeRootDescriptorTable(4, renderTextureUAVDescriptor.gpuHandle);
+            d3d.graphicsCmdList->DispatchRays(&dispatchDesc);
 
-        std::swap(transitions[0].Transition.StateBefore, transitions[0].Transition.StateAfter);
-        std::swap(transitions[1].Transition.StateBefore, transitions[1].Transition.StateAfter);
-        d3d.graphicsCmdList->ResourceBarrier(countof(transitions), transitions);
+            std::swap(transitions[0].Transition.StateBefore, transitions[0].Transition.StateAfter);
+            std::swap(transitions[1].Transition.StateBefore, transitions[1].Transition.StateAfter);
+            d3d.graphicsCmdList->ResourceBarrier(countof(transitions), transitions);
+        }
     }
     else {
         void* missIDs[] = {d3d.renderScenePrimaryRayMissID, d3d.renderSceneSecondaryRayMissID};
@@ -4941,25 +4918,10 @@ void d3dRender() {
         std::swap(transitions[1].Transition.StateBefore, transitions[1].Transition.StateAfter);
         d3d.graphicsCmdList->ResourceBarrier(countof(transitions), transitions);
     }
-    if (showMenu) {
-        PIXSetMarker(d3d.graphicsCmdList, 0, "directWrite");
-        D2D1_RECT_F textRect = D2D1::RectF(0.0f, 0.0f, (float)renderW, (float)renderH);
-        static const WCHAR text[] = L"Options\nExit to Main Menu\nExit to Desktop\n";
-        directWrite.d3d11On12Device->AcquireWrappedResources(&directWrite.image, 1);
-        directWrite.d2dDeviceContext->SetTarget(directWrite.imageRenderTarget);
-        directWrite.d2dDeviceContext->BeginDraw();
-        directWrite.d2dDeviceContext->Clear(D2D1_COLOR_F{0.0f, 0.0f, 0.0f, 0.0f});
-        directWrite.d2dDeviceContext->SetTransform(D2D1::Matrix3x2F::Identity());
-        directWrite.d2dDeviceContext->DrawTextW(text, _countof(text) - 1, directWrite.dWriteTextFormat, &textRect, directWrite.dWriteColorBrush);
-        directWrite.d2dDeviceContext->EndDraw();
-        directWrite.d3d11On12Device->ReleaseWrappedResources(&directWrite.image, 1);
-        directWrite.d3d11DeviceContext->Flush();
-    }
     {
         uint swapChainBackBufferIndex = d3d.swapChain->GetCurrentBackBufferIndex();
         D3D12_RESOURCE_BARRIER transitions[] = {
             {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.swapChainImages[swapChainBackBufferIndex], .StateBefore = D3D12_RESOURCE_STATE_PRESENT, .StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET}},
-            {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.directWriteTexture->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET, .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE}},
         };
         d3d.graphicsCmdList->ResourceBarrier(countof(transitions), transitions);
         d3d.graphicsCmdList->OMSetRenderTargets(1, &d3d.swapChainImageRTVDescriptors[swapChainBackBufferIndex], false, nullptr);
@@ -4974,11 +4936,9 @@ void d3dRender() {
             d3d.graphicsCmdList->SetGraphicsRootSignature(d3d.compositeRootSig);
             uint32 compositeFlags = 0;
             if (hdr) compositeFlags |= CompositeFlagHDR;
-            if (showMenu) compositeFlags |= CompositeFlagDirectWrite;
             d3d.graphicsCmdList->SetGraphicsRoot32BitConstant(0, compositeFlags, 0);
             D3D12_SHADER_RESOURCE_VIEW_DESC renderTextureSRVDesc = {.Format = d3d.renderTextureFormat, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = 1}};
             D3DDescriptor renderTextureSRVDescriptor = d3dAppendSRVDescriptor(&renderTextureSRVDesc, d3d.renderTexture->GetResource());
-            D3DDescriptor directWriteImageDescriptor = d3dAppendSRVDescriptor(nullptr, d3d.directWriteTexture->GetResource());
             d3d.graphicsCmdList->SetGraphicsRootDescriptorTable(1, renderTextureSRVDescriptor.gpuHandle);
             d3d.graphicsCmdList->DrawInstanced(3, 1, 0, 0);
         }
@@ -5020,8 +4980,7 @@ void d3dRender() {
                 assert(indexBufferOffset < d3d.imguiIndexBuffer->GetSize());
             }
         }
-        std::swap(transitions[0].Transition.StateBefore, transitions[0].Transition.StateAfter);
-        std::swap(transitions[1].Transition.StateBefore, transitions[1].Transition.StateAfter);
+        for (auto& transition : transitions) std::swap(transition.Transition.StateBefore, transition.Transition.StateAfter);
         d3d.graphicsCmdList->ResourceBarrier(countof(transitions), transitions);
     }
     {
@@ -5179,7 +5138,7 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
             for (ID3D12Resource* image : d3d.swapChainImages) {
                 image->Release();
             }
-            assert(SUCCEEDED(d3d.swapChain->ResizeBuffers(countof(d3d.swapChainImages), renderW, renderH, d3d.swapChainFormat, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH)));
+            assert(SUCCEEDED(d3d.swapChain->ResizeBuffers(countof(d3d.swapChainImages), renderW, renderH, d3d.swapChainFormat, 0)));
             for (uint imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
                 ID3D12Resource** image = &d3d.swapChainImages[imageIndex];
                 assert(SUCCEEDED(d3d.swapChain->GetBuffer(imageIndex, IID_PPV_ARGS(image))));
@@ -5192,21 +5151,18 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
                 D3D12_RESOURCE_DESC renderAccumulationTextureDesc = d3d.renderAccumulationTexture->GetResource()->GetDesc();
                 D3D12_RESOURCE_DESC depthTextureDesc = d3d.depthTexture->GetResource()->GetDesc();
                 D3D12_RESOURCE_DESC motionVectorTextureDesc = d3d.motionVectorTexture->GetResource()->GetDesc();
-                D3D12_RESOURCE_DESC directWriteTextureDesc = d3d.directWriteTexture->GetResource()->GetDesc();
 
                 d3d.renderTexture->Release();
                 d3d.renderTexturePrevFrame->Release();
                 d3d.renderAccumulationTexture->Release();
                 d3d.depthTexture->Release();
                 d3d.motionVectorTexture->Release();
-                d3d.directWriteTexture->Release();
 
                 renderTextureDesc.Width = renderW, renderTextureDesc.Height = renderH;
                 renderTexturePrevFrameDesc.Width = renderW, renderTexturePrevFrameDesc.Height = renderH;
                 renderAccumulationTextureDesc.Width = renderW, renderAccumulationTextureDesc.Height = renderH;
                 depthTextureDesc.Width = renderW, depthTextureDesc.Height = renderH;
                 motionVectorTextureDesc.Width = renderW, motionVectorTextureDesc.Height = renderH;
-                directWriteTextureDesc.Width = renderW, directWriteTextureDesc.Height = renderH;
 
                 D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
                 assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr)));
@@ -5214,15 +5170,12 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
                 assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &renderAccumulationTextureDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &d3d.renderAccumulationTexture, {}, nullptr)));
                 assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &depthTextureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.depthTexture, {}, nullptr)));
                 assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &motionVectorTextureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.motionVectorTexture, {}, nullptr)));
-                D3D12_CLEAR_VALUE clearValue = {.Format = DXGI_FORMAT_R8G8B8A8_UNORM, .Color = {0.0f, 0.0f, 0.0f, 0.0f}};
-                assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &directWriteTextureDesc, D3D12_RESOURCE_STATE_RENDER_TARGET, &clearValue, &d3d.directWriteTexture, {}, nullptr)));
 
                 d3d.renderTexture->GetResource()->SetName(L"renderTexture");
                 d3d.renderTexturePrevFrame->GetResource()->SetName(L"renderTexturePrevFrame");
                 d3d.renderAccumulationTexture->GetResource()->SetName(L"renderAccumulationTexture");
                 d3d.depthTexture->GetResource()->SetName(L"depthTexture");
                 d3d.motionVectorTexture->GetResource()->SetName(L"motionVectorTexture");
-                d3d.directWriteTexture->GetResource()->SetName(L"directWriteTexture");
             }
         }
     } break;
@@ -5293,20 +5246,20 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
 
 int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) {
     assert(SetCurrentDirectoryW(exeDir.c_str()));
-    settingsInit(saveDir / "settings.yaml");
+    settingsInit();
     windowInit();
     windowShow();
 #ifndef EDITOR
     windowHideCursor(true);
 #endif
     imguiInit();
+    gameInputInit();
     d3dInit();
     d3dApplySettings();
-    directWriteInit();
     dlssInit();
     physxInit();
-    worldInit("assets/worlds/world.yaml");
-    gameReadSave(saveDir / "save.yaml");
+    worldInit();
+    gameReadSave();
     loadSimpleAssets();
     assert(QueryPerformanceFrequency(&perfFrequency));
     while (!quit) {
@@ -5315,7 +5268,7 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
         liveReloadFuncs();
         mouseDeltaRaw = {0, 0};
         mouseWheel = 0;
-        controllerGetStateXInput();
+        controllerGetState();
         MSG windowMsg;
         while (PeekMessageA(&windowMsg, (HWND)window.hwnd, 0, 0, PM_REMOVE)) {
             TranslateMessage(&windowMsg);
@@ -5329,7 +5282,7 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
         frameTime = (float)((double)(perfCounterEnd.QuadPart - perfCounterStart.QuadPart) / (double)perfFrequency.QuadPart);
     }
     editorSave();
-    gameSave(saveDir / "save.yaml");
-    settingsSave(saveDir / "settings.yaml");
+    gameSave();
+    settingsSave();
     return EXIT_SUCCESS;
 }

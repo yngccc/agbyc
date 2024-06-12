@@ -1,5 +1,4 @@
-#include "shared.hlsli"
-#include "../structsHLSL.h"
+#include "shared.h"
 
 #define rootSig \
 "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT)," \

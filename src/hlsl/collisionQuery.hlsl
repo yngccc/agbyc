@@ -1,5 +1,4 @@
-#include "shared.hlsli"
-#include "../structsHLSL.h"
+#include "shared.h"
 
 GlobalRootSignature
 globalRootSig = { 

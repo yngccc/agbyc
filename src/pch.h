@@ -16,6 +16,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <memory_resource>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -32,11 +33,10 @@
 #include <d3dx12.h>
 #include <dxgi1_6.h>
 #include <dxgidebug.h>
-#include <d3d11on12.h>
-#include <dwrite.h>
 #include <d2d1_3.h>
 #include <pix3.h>
 #include <xinput.h>
+#include <gameInput.h>
 
 #define _XM_SSE4_INTRINSICS_
 #include <directxmath.h>
@@ -80,3 +80,8 @@ using DirectX::XMQuaternionRotationRollPitchYaw;
 #endif
 
 using namespace physx;
+
+#include <intrin.h>
+#pragma intrinsic(_umul128)
+#include "hashTable/unordered_dense.h"
+

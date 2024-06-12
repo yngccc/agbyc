@@ -1,5 +1,4 @@
-#include "shared.hlsli"
-#include "../structsHLSL.h"
+#include "shared.h"
 
 GlobalRootSignature
 globalRootSig = {
@@ -9,7 +8,7 @@ globalRootSig = {
 	"StaticSampler(s0, filter = FILTER_ANISOTROPIC, addressU = TEXTURE_ADDRESS_MIRROR, addressV = TEXTURE_ADDRESS_MIRROR, mipLODBias = 0, maxAnisotropy = 16)"
 };
 
-RWTexture2D<float4> renderTexture : register(u0);
+RWTexture2D<float3> renderTexture : register(u0);
 RWTexture2D<float> depthTexture : register(u1);
 ConstantBuffer<RenderInfo> renderInfo : register(b0);
 RaytracingAccelerationStructure bvh : register(t0);
@@ -37,16 +36,16 @@ struct SecondaryRayPayload {
 
 [shader("raygeneration")]
 void rayGen() {
-    uint2 imageSize = DispatchRaysDimensions().xy;
+    uint2 resolution = DispatchRaysDimensions().xy;
     uint2 pixelIndex = DispatchRaysIndex().xy;
-    float2 pixelCoord = ((float2(pixelIndex) + 0.5f) / float2(imageSize)) * 2.0f - 1.0f;
+    float2 pixelCoord = ((float2(pixelIndex) + 0.5) / float2(resolution)) * 2.0 - 1.0;
 
     RayDesc primaryRay = pinholeCameraRay(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjectMat);
     PrimaryRayPayload primaryRayPayload;
     primaryRayPayload.color = float3(0, 0, 0);
     primaryRayPayload.depth = 0;
     TraceRay(bvh, RAY_FLAG_NONE, 0xff, 0, 0, 0, primaryRay, primaryRayPayload);
-    renderTexture[pixelIndex] = float4(primaryRayPayload.color, 0);
+    renderTexture[pixelIndex] = primaryRayPayload.color;
     depthTexture[pixelIndex] = primaryRayPayload.depth;
 }
 
@@ -114,7 +113,8 @@ void primaryRayClosestHit(inout PrimaryRayPayload payload, in BuiltInTriangleInt
     
     SecondaryRayPayload rayPayload;
     RayDesc shadowRay;
-    shadowRay.Origin = position + normal * 0.008;
+    shadowRay.Origin = offsetRay(position, triangleGeometryNormal(p0, p1, p2));
+    //shadowRay.Origin = offsetRayShadow(position, p0, p1, p2, n0, n1, n2, trigAttribs.barycentrics.x, trigAttribs.barycentrics.y, 1.0 - trigAttribs.barycentrics.x - trigAttribs.barycentrics.y);
     shadowRay.TMin = 0.0f;
     shadowRay.TMax = 1000.0f;
     shadowRay.Direction = lightDir;
