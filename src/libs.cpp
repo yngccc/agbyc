@@ -2,6 +2,8 @@
 
 #include <cgltf/cgltf.cpp>
 
+#include <ufbx/ufbx.c>
+
 #include <stb/stb_image.cpp>
 #include <stb/stb_image_write.cpp>
 

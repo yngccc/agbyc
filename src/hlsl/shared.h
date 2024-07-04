@@ -1,9 +1,11 @@
 #ifndef __cplusplus
-#define PI 3.14159265358979323846
+
+#define E 2.71828182845904523536f
+#define PI 3.14159265358979323846f
 #define FLT_MAX 3.402823466e+38F
 #define UINT_MAX 0xffffffff
-#define RADIAN(d) (d * (PI / 180.0))
-#define DEGREE(r) (r * (180.0 / PI))
+#define RADIAN(d) (d * (PI / 180.0f))
+#define DEGREE(r) (r * (180.0f / PI))
 
 #define HDR_SCALE_FACTOR (80.0f / 10000.0f)
 
@@ -22,7 +24,7 @@ uint initRNG(uint2 pixel, uint2 resolution, uint frame) {
 }
 
 float uintToFloat(uint x) {
-    return asfloat(0x3f800000 | (x >> 9)) - 1.f;
+    return asfloat(0x3f800000 | (x >> 9)) - 1.0f;
 }
 
 uint xorshift(inout uint rngState) {
@@ -37,9 +39,9 @@ float rand(inout uint rngState) {
 }
 
 float srgbToLinear(float e) {
-    if (e <= 0.04045)
-        return e / 12.92;
-    return pow((e + 0.055) / 1.055, 2.4);
+    if (e <= 0.04045f)
+        return e / 12.92f;
+    return pow((e + 0.055f) / 1.055f, 2.4f);
 }
 
 float3 srgbToLinear(float3 srgb) {
@@ -47,9 +49,9 @@ float3 srgbToLinear(float3 srgb) {
 }
 
 float linearToSRGB(float e) {
-    if (e <= 0.0031308)
-        return e * 12.92;
-    return 1.055 * pow(e, 1.0 / 2.4) - 0.055;
+    if (e <= 0.0031308f)
+        return e * 12.92f;
+    return 1.055f * pow(e, 1.0f / 2.4f) - 0.055f;
 }
 
 float3 linearToSRGB(float3 rgb) {
@@ -57,11 +59,11 @@ float3 linearToSRGB(float3 rgb) {
 }
 
 float linearToPQ(float e) {
-    const float m1 = 0.1593017578125;
-    const float m2 = 78.84375;
-    const float c1 = 0.8359375;
-    const float c2 = 18.8515625;
-    const float c3 = 18.6875;
+    const float m1 = 0.1593017578125f;
+    const float m2 = 78.84375f;
+    const float c1 = 0.8359375f;
+    const float c2 = 18.8515625f;
+    const float c3 = 18.6875f;
     float ym1 = pow(e, m1);
     return pow((c1 + c2 * ym1) / (1.0 + c3 * ym1), m2);
 }
@@ -72,19 +74,27 @@ float3 linearToPQ(float3 rgb) {
 
 float3 bt709To2020(float3 rgb) {
     const float3x3 mat = {
-        0.6274, 0.3293, 0.0433,
-		0.0691, 0.9195, 0.0114,
-		0.0164, 0.0880, 0.8956
+        0.6274f, 0.3293f, 0.0433f,
+		0.0691f, 0.9195f, 0.0114f,
+		0.0164f, 0.0880f, 0.8956f
     };
     return mul(mat, rgb);
 }
 
+float luminance(float3 rgb) {
+    return dot(rgb, float3(0.2126f, 0.7152f, 0.0722f));
+}
+
+float luminance_bt2020(float3 rgb) {
+    return dot(rgb, float3(0.2627f, 0.6780f, 0.0593f));
+}
+
 float3 intToColor(int i) {
-	uint hash = jenkinsHash(i);
-	float r = ((hash >> 0) & 0xFF) / 255.0f;
-	float g = ((hash >> 8) & 0xFF) / 255.0f;
-	float b = ((hash >> 16) & 0xFF) / 255.0f;
-	return float3(r, g, b);
+    uint hash = jenkinsHash(i);
+    float r = ((hash >> 0) & 0xFF) / 255.0f;
+    float g = ((hash >> 8) & 0xFF) / 255.0f;
+    float b = ((hash >> 16) & 0xFF) / 255.0f;
+    return float3(r, g, b);
 }
 
 float2 barycentricsLerp(in float2 barycentrics, in float2 vertAttrib0, in float2 vertAttrib1, in float2 vertAttrib2) {
@@ -97,6 +107,12 @@ float3 barycentricsLerp(in float2 barycentrics, in float3 vertAttrib0, in float3
 
 bool barycentricsOnEdge(in float2 barycentrics, in float edgeThickness) {
     return (barycentrics.x < edgeThickness) || (barycentrics.y < edgeThickness) || ((1.0 - barycentrics.x - barycentrics.y) < edgeThickness);
+}
+
+float2 equirectangularMapping(float3 dir) {
+    float theta = atan2(dir.z, dir.x);
+    float phi = acos(dir.y);
+    return float2((theta + PI) / (2.0f * PI), phi / PI);
 }
 
 float2 octWrap(float2 v) {
@@ -172,28 +188,63 @@ void anisotropicEllipseAxes(in float3 p, in float3 f, in float3 d, in float rayC
                             in float2 txcoord0, in float2 txcoord1, in float2 txcoord2,
                             in float2 interpolatedTexCoordsAtIntersection,
                             out float2 texGradient1, out float2 texGradient2) {
-    // compute ellipse axes
     float3 a1 = d - dot(f, d) * f;
     float3 p1 = a1 - dot(d, a1) * d;
-    a1 *= rayConeRadiusAtIntersection / max(0.0001, length(p1));
+    a1 *= rayConeRadiusAtIntersection / max(0.0001f, length(p1));
     
     float3 a2 = cross(f, a1);
     float3 p2 = a2 - dot(d, a2) * d;
-    a2 *= rayConeRadiusAtIntersection / max(0.0001, length(p2));
+    a2 *= rayConeRadiusAtIntersection / max(0.0001f, length(p2));
     
-    // compute texture coordinate gradients
     float3 eP, delta = p - position0;
     float3 e1 = position1 - position0;
     float3 e2 = position2 - position0;
-    float oneOverAreaTriangle = 1.0 / dot(f, cross(e1, e2));
+    float oneOverAreaTriangle = 1.0f / dot(f, cross(e1, e2));
     eP = delta + a1;
     float u1 = dot(f, cross(eP, e2)) * oneOverAreaTriangle;
     float v1 = dot(f, cross(e1, eP)) * oneOverAreaTriangle;
-    texGradient1 = (1.0 - u1 - v1) * txcoord0 + u1 * txcoord1 + v1 * txcoord2 - interpolatedTexCoordsAtIntersection;
+    texGradient1 = (1.0f - u1 - v1) * txcoord0 + u1 * txcoord1 + v1 * txcoord2 - interpolatedTexCoordsAtIntersection;
     eP = delta + a2;
     float u2 = dot(f, cross(eP, e2)) * oneOverAreaTriangle;
     float v2 = dot(f, cross(e1, eP)) * oneOverAreaTriangle;
-    texGradient2 = (1.0 - u2 - v2) * txcoord0 + u2 * txcoord1 + v2 * txcoord2 - interpolatedTexCoordsAtIntersection;
+    texGradient2 = (1.0f - u2 - v2) * txcoord0 + u2 * txcoord1 + v2 * txcoord2 - interpolatedTexCoordsAtIntersection;
+}
+
+// Z up
+float3 sampleHemisphereCosineWeighted(in float2 u, out float pdf) {
+	float a = sqrt(u.x);
+	float b = (2.0f * PI) * u.y;
+	float3 result = float3(a * cos(b), a * sin(b), sqrt(1.0 - u.x));
+	pdf = result.z / PI;
+	return result;
+}
+
+float3 sampleHemisphereCosineWeighted(in float2 u) {
+	float a = sqrt(u.x);
+	float b = (2.0f * PI) * u.y;
+	float3 result = float3(a * cos(b), a * sin(b), sqrt(1.0 - u.x));
+	return result;
+}
+
+// input vector must be normalized
+float4 getRotationToZAxis(in float3 input) {
+	if (input.z < -0.99999f) return float4(1.0f, 0.0f, 0.0f, 0.0f);
+	return normalize(float4(input.y, -input.x, 0.0f, 1.0f + input.z));
+}
+
+// Input vector must be normalized
+float4 getRotationFromZAxis(in float3 input) {
+	if (input.z < -0.99999f) return float4(1.0f, 0.0f, 0.0f, 0.0f);
+	return normalize(float4(-input.y, input.x, 0.0f, 1.0f + input.z));
+}
+
+float4 invertRotation(in float4 q) {
+	return float4(-q.x, -q.y, -q.z, q.w);
+}
+
+float3 rotatePoint(in float4 q, in float3 v) {
+	const float3 qAxis = float3(q.x, q.y, q.z);
+	return 2.0f * dot(qAxis, v) * qAxis + (q.w * q.w - dot(qAxis, qAxis)) * v + 2.0f * q.w * cross(qAxis, v);
 }
 #endif
 
@@ -291,7 +342,8 @@ struct RenderInfo {
     XMMatrix cameraProjectMat;
     XMMatrix cameraViewProjectMat;
     XMMatrix cameraViewProjectMatInverse;
-    uint accumulationFrameCount;
+    XMMatrix cameraViewProjectMatPrevFrame;
+    uint pathTracerAccumulationFrameCount;
     uint padding[3];
 #else
     float4x4 cameraViewMat;
@@ -299,7 +351,8 @@ struct RenderInfo {
     float4x4 cameraProjectMat;
     float4x4 cameraViewProjectMat;
     float4x4 cameraViewProjectMatInverse;
-    uint accumulationFrameCount;
+    float4x4 cameraViewProjectMatPrevFrame;
+    uint pathTracerAccumulationFrameCount;
     uint padding[3];
 #endif
 };
@@ -318,29 +371,33 @@ enum BLASInstanceFlag : uint {
 
 struct BLASInstanceInfo {
 #ifdef __cplusplus
-    uint descriptorsHeapOffset;
     uint blasGeometriesOffset;
     uint flags;
     uint color;
     ObjectType objectType;
     uint objectIndex;
+    uint padding[3];
+    XMMatrix transformMatPrevFrame;
 #else
-    uint descriptorsHeapOffset;
     uint blasGeometriesOffset;
     uint flags;
     uint color;
     ObjectType objectType;
     uint objectIndex;
+    uint padding[3];
+    float4x4 transformMatPrevFrame;
 #endif
 };
 
 struct BLASGeometryInfo {
 #ifdef __cplusplus
+    uint descriptorsHeapOffset;
     float3 emissive;
     float metallic;
     float3 baseColor;
     float roughness;
 #else
+    uint descriptorsHeapOffset;
     float3 emissive;
     float metallic;
     float3 baseColor;
@@ -372,10 +429,12 @@ struct CollisionQuery {
 struct CollisionQueryResult {
 #ifdef __cplusplus
     float3 distance;
-    uint32 instanceIndex;
+    ObjectType objectType;
+    uint objectIndex;
 #else
     float3 distance;
-    uint instanceIndex;
+    ObjectType objectType;
+    uint objectIndex;
 #endif
 };
 
