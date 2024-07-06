@@ -1,6 +1,7 @@
 SortIncludes: false
 ColumnLimit: 0
 IndentWidth: 4
+IndentCaseLabels: True
 PointerAlignment: Left
 BreakBeforeBraces: Custom
 BraceWrapping:

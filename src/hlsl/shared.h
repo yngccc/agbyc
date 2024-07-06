@@ -89,7 +89,11 @@ float luminance_bt2020(float3 rgb) {
     return dot(rgb, float3(0.2627f, 0.6780f, 0.0593f));
 }
 
-float3 intToColor(int i) {
+float3 uintToColor(uint color) {
+    return float3(color & 0xff000000, color & 0x00ff0000, color & 0x0000ff00);;
+}
+
+float3 hashIntToColor(int i) {
     uint hash = jenkinsHash(i);
     float r = ((hash >> 0) & 0xFF) / 255.0f;
     float g = ((hash >> 8) & 0xFF) / 255.0f;
@@ -344,7 +348,6 @@ struct RenderInfo {
     XMMatrix cameraViewProjectMatInverse;
     XMMatrix cameraViewProjectMatPrevFrame;
     uint pathTracerAccumulationFrameCount;
-    uint padding[3];
 #else
     float4x4 cameraViewMat;
     float4x4 cameraViewMatInverseTranspose;
@@ -353,7 +356,6 @@ struct RenderInfo {
     float4x4 cameraViewProjectMatInverse;
     float4x4 cameraViewProjectMatPrevFrame;
     uint pathTracerAccumulationFrameCount;
-    uint padding[3];
 #endif
 };
 
@@ -376,32 +378,32 @@ struct BLASInstanceInfo {
     uint color;
     ObjectType objectType;
     uint objectIndex;
-    uint padding[3];
-    XMMatrix transformMatPrevFrame;
+    XMFloat3x3 transformNormalMat;
+    XMFloat4x3 transformMatPrevFrame;
 #else
     uint blasGeometriesOffset;
     uint flags;
     uint color;
     ObjectType objectType;
     uint objectIndex;
-    uint padding[3];
-    float4x4 transformMatPrevFrame;
+    float3x3 transformNormalMat;
+    float3x4 transformMatPrevFrame;
 #endif
 };
 
 struct BLASGeometryInfo {
 #ifdef __cplusplus
     uint descriptorsHeapOffset;
-    float3 emissive;
-    float metallic;
-    float3 baseColor;
-    float roughness;
+    float3 emissiveFactor;
+    float metallicFactor;
+    float3 baseColorFactor;
+    float roughnessFactor;
 #else
     uint descriptorsHeapOffset;
-    float3 emissive;
-    float metallic;
-    float3 baseColor;
-    float roughness;
+    float3 emissiveFactor;
+    float metallicFactor;
+    float3 baseColorFactor;
+    float roughnessFactor;
 #endif
 };
 
@@ -418,11 +420,9 @@ struct CollisionQuery {
 #ifdef __cplusplus
     RayDesc rayDesc;
     uint32 instanceInclusionMask;
-    uint32 padding[3];
 #else
     RayDesc rayDesc;
     uint instanceInclusionMask;
-    uint padding[3];
 #endif
 };
 

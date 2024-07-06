@@ -75,7 +75,7 @@ void rayGen() {
         Texture2D<float3> metallicRoughnessTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 4)];
         Texture2D<float3> normalTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 5)];
         
-        float3 baseColor = baseColorTexture.SampleLevel(textureSampler, payload.uv, 0) * blasGeometryInfo.baseColor;
+        float3 baseColor = baseColorTexture.SampleLevel(textureSampler, payload.uv, 0) * blasGeometryInfo.baseColorFactor;
         float4 rotation = getRotationFromZAxis(shadingNormal);
         float3 sampleDirection = sampleHemisphereCosineWeighted(float2(rand(rngState), rand(rngState)));
         sampleDirection = rotatePoint(rotation, sampleDirection);

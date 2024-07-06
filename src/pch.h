@@ -48,6 +48,8 @@
 
 typedef DirectX::XMMATRIX XMMatrix;
 typedef DirectX::XMVECTOR XMVector;
+typedef DirectX::XMFLOAT3X3 XMFloat3x3;
+typedef DirectX::XMFLOAT4X3 XMFloat4x3;
 typedef DirectX::XMFLOAT4X4 XMFloat4x4;
 using DirectX::XMVectorSet;
 using DirectX::XMVectorGetX;
@@ -67,6 +69,14 @@ using DirectX::XMMatrixScaling;
 using DirectX::XMMatrixAffineTransformation;
 using DirectX::XMMatrixLookAtLH;
 using DirectX::XMMatrixPerspectiveFovLH;
+using DirectX::XMMatrixInverse;
+using DirectX::XMMatrixTranspose;
+using DirectX::XMStoreFloat3x3;
+using DirectX::XMStoreFloat4x3;
+using DirectX::XMStoreFloat4x4;
+using DirectX::XMLoadFloat3x3;
+using DirectX::XMLoadFloat4x3;
+using DirectX::XMLoadFloat4x4;
 using DirectX::XMQuaternionSlerp;
 using DirectX::XMQuaternionNormalize;
 using DirectX::XMQuaternionRotationRollPitchYaw;

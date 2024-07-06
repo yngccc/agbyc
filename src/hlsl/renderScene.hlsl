@@ -1,6 +1,7 @@
 #include "shared.h"
 
-GlobalRootSignature globalRootSig = {
+GlobalRootSignature
+globalRootSig = {
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED),"
     "CBV(b0), SRV(t0), SRV(t1), SRV(t2),"
     "DescriptorTable(UAV(u0), UAV(u1), UAV(u2), SRV(t3)),"
@@ -71,38 +72,61 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
     Vertex v0 = vertices[indices[NonUniformResourceIndex(triangleIndex)]];
     Vertex v1 = vertices[indices[NonUniformResourceIndex(triangleIndex + 1)]];
     Vertex v2 = vertices[indices[NonUniformResourceIndex(triangleIndex + 2)]];
-    float3x4 transform = ObjectToWorld3x4();
-    float3x3 normalTransform = float3x3(transform[0].xyz, transform[1].xyz, transform[2].xyz);
-    float3 p0 = mul(transform, float4(v0.position, 1));
-    float3 p1 = mul(transform, float4(v1.position, 1));
-    float3 p2 = mul(transform, float4(v2.position, 1));
-    float3 n0 = normalize(mul(normalTransform, v0.normal));
-    float3 n1 = normalize(mul(normalTransform, v1.normal));
-    float3 n2 = normalize(mul(normalTransform, v2.normal));
+    float3 p0 = mul(ObjectToWorld3x4(), float4(v0.position, 1));
+    float3 p1 = mul(ObjectToWorld3x4(), float4(v1.position, 1));
+    float3 p2 = mul(ObjectToWorld3x4(), float4(v2.position, 1));
+    float3 b0 = normalize(cross(v0.normal, v0.tangent.xyz) * v0.tangent.w);
+    float3 b1 = normalize(cross(v1.normal, v1.tangent.xyz) * v1.tangent.w);
+    float3 b2 = normalize(cross(v2.normal, v2.tangent.xyz) * v2.tangent.w);
+    
     float3 position = barycentricsLerp(trigAttribs.barycentrics, p0, p1, p2);
-    float3 shadingNormal = normalize(barycentricsLerp(trigAttribs.barycentrics, n0, n1, n2));
+    float3 normal = barycentricsLerp(trigAttribs.barycentrics, v0.normal, v1.normal, v2.normal);
+    normal = normalize(mul(blasInstanceInfo.transformNormalMat, normal));
+    float3 tangent = barycentricsLerp(trigAttribs.barycentrics, v0.tangent.xyz, v1.tangent.xyz, v2.tangent.xyz);
+    tangent = normalize(mul(blasInstanceInfo.transformNormalMat, tangent));
+    float3 bitangent = barycentricsLerp(trigAttribs.barycentrics, b0, b1, b2);
+    bitangent = normalize(mul(blasInstanceInfo.transformNormalMat, bitangent));
     float3 geometryNormal = triangleGeometryNormal(p0, p1, p2);
-    if (dot(geometryNormal, -WorldRayDirection()) < 0.0f) geometryNormal = -geometryNormal;
-    if (dot(geometryNormal, shadingNormal) < 0.0f) shadingNormal = -shadingNormal;
+    if (dot(geometryNormal, -WorldRayDirection()) < 0.0) {
+        geometryNormal = -geometryNormal;
+    }
+    if (dot(geometryNormal, normal) < 0.0) {
+        normal = -normal;
+        tangent = -tangent;
+        bitangent = -bitangent;
+    }
     float2 uv = barycentricsLerp(trigAttribs.barycentrics, v0.uv, v1.uv, v2.uv);
         
     uint baseColorTextureWidth, baseColorTextureHeight;
     baseColorTexture.GetDimensions(baseColorTextureWidth, baseColorTextureHeight);
-    float fovy = RADIAN(50.0f);
-    float alpha = atan(2.0f * tan(fovy * 0.5f) / (float)baseColorTextureHeight);
+    float2 texGrad1, texGrad2;
+    float fovy = RADIAN(50.0);
+    float alpha = atan(2.0 * tan(fovy * 0.5) / (float)baseColorTextureHeight);
     float radius = RayTCurrent() * tan(alpha);
-    float2 texGradient1, texGradient2;
-    anisotropicEllipseAxes(position, shadingNormal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGradient1, texGradient2);
-
+    anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGrad1, texGrad2);
+    float3 baseColor = baseColorTexture.SampleGrad(textureSampler, uv, texGrad1, texGrad2);
+    
+    uint normalTextureWidth, normalTextureHeight;
+    normalTexture.GetDimensions(normalTextureWidth, normalTextureHeight);
+    if (normalTextureHeight != baseColorTextureHeight) {
+        float alpha = atan(2.0f * tan(fovy * 0.5) / (float)normalTextureHeight);
+        float radius = RayTCurrent() * tan(alpha);
+        anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGrad1, texGrad2);
+    }
+    float3 normalMapXYZ = normalTexture.SampleGrad(textureSampler, uv, texGrad1, texGrad2);
+    normalMapXYZ = normalize(normalMapXYZ * 2.0 - 1.0);
+    float3x3 tbnMat = transpose(float3x3(tangent, bitangent, normal));
+    normal = normalize(mul(tbnMat, normalMapXYZ));
+    
     if (blasInstanceInfo.flags & BLASInstanceFlagForcedColor) {
-        float3 baseColor = float3(blasInstanceInfo.color & 0xff000000, blasInstanceInfo.color & 0x00ff0000, blasInstanceInfo.color & 0x0000ff00);
-        payload.color += baseColor;
+        payload.color += uintToColor(blasInstanceInfo.color);
     }
     else {
         float3 lightDir = normalize(float3(1, 1, 1));
-        float3 baseColor = baseColorTexture.SampleGrad(textureSampler, uv, texGradient1, texGradient2) * blasGeometryInfo.baseColor;
-        float ndotl = dot(shadingNormal, lightDir);
-        payload.color += baseColor/* * ndotl*/;
+        float ndotl = saturate(dot(lightDir, normal));
+        payload.color += baseColor * blasGeometryInfo.baseColorFactor * ndotl;
+        
+        //payload.color += normal;
     }
 
     float4 ndc = mul(renderInfo.cameraViewProjectMat, float4(position, 1));
@@ -141,7 +165,7 @@ void rayAnyHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInterse
         baseColor = float3(blasInstanceInfo.color & 0xff000000, blasInstanceInfo.color & 0x00ff0000, blasInstanceInfo.color & 0x0000ff00);
     }
     else {
-        baseColor = baseColorTexture.SampleLevel(textureSampler, uv, 0) * blasGeometryInfo.baseColor;
+        baseColor = baseColorTexture.SampleLevel(textureSampler, uv, 0) * blasGeometryInfo.baseColorFactor;
     }
     payload.color += (baseColor * 0.25);
     
