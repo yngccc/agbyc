@@ -114,9 +114,9 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
         anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGrad1, texGrad2);
     }
     float3 normalMapXYZ = normalTexture.SampleGrad(textureSampler, uv, texGrad1, texGrad2);
-    normalMapXYZ = normalize(normalMapXYZ * 2.0 - 1.0);
+    float3 normalMapNormal = normalize(normalMapXYZ * 2.0 - 1.0);
     float3x3 tbnMat = transpose(float3x3(tangent, bitangent, normal));
-    normal = normalize(mul(tbnMat, normalMapXYZ));
+    normal = normalize(mul(tbnMat, normalMapNormal));
     
     if (blasInstanceInfo.flags & BLASInstanceFlagForcedColor) {
         payload.color += uintToColor(blasInstanceInfo.color);
@@ -127,6 +127,7 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
         payload.color += baseColor * blasGeometryInfo.baseColorFactor * ndotl;
         
         //payload.color += normal;
+        //payload.color += normalMapXYZ;
     }
 
     float4 ndc = mul(renderInfo.cameraViewProjectMat, float4(position, 1));

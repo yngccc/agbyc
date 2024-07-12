@@ -918,7 +918,7 @@ static std::filesystem::path saveDir = [] {
     return documentFolderPath;
 }();
 
-static std::filesystem::path worldFilePath = exeDir / "assets/worlds/world_1.yaml";
+static std::filesystem::path worldFilePath = exeDir / "assets/worlds/bistro.yaml";
 static std::filesystem::path gameSavePath = saveDir / "save.yaml";
 static std::filesystem::path settingsPath = saveDir / "settings.yaml";
 
@@ -1263,7 +1263,7 @@ Controller controllerGetStateGameInput() {
 void controllerGetState() {
     Controller c = controllerGetStateXInput();
     // Controller c = controllerGetStateGameInput();
-    //  Controller c = controllerGetStateDualSense();
+    // Controller c = controllerGetStateDualSense();
     controllerApplyDeadZone(&c);
     if (controller.back && c.back) c.backDownDuration = controller.backDownDuration + frameTime;
     if (controller.start && c.start) c.startDownDuration = controller.startDownDuration + frameTime;
@@ -1288,6 +1288,33 @@ void d3dMessageCallback(D3D12_MESSAGE_CATEGORY category, D3D12_MESSAGE_SEVERITY 
         OutputDebugStringA(description);
         //__debugbreak();
     }
+}
+
+void d3dGraphicsCmdListReset() {
+    assert(SUCCEEDED(d3d.graphicsCmdAllocator->Reset()));
+    assert(SUCCEEDED(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
+}
+
+void d3dGraphicsCmdListExecute() {
+    assert(SUCCEEDED(d3d.graphicsCmdList->Close()));
+    d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
+}
+
+void d3dSignalFence(D3DFence* fence) {
+    fence->value += 1;
+    d3d.graphicsQueue->Signal(fence->fence, fence->value);
+}
+
+void d3dWaitFence(D3DFence* fence) {
+    if (fence->fence->GetCompletedValue() < fence->value) {
+        assert(SUCCEEDED(fence->fence->SetEventOnCompletion(fence->value, fence->event)));
+        assert(WaitForSingleObjectEx(fence->event, INFINITE, false) == WAIT_OBJECT_0);
+    }
+}
+
+bool d3dTryWaitFence(D3DFence* fence) {
+    bool wait = fence->fence->GetCompletedValue() < fence->value;
+    return !wait;
 }
 
 D3D12MA::Allocation* d3dCreateImage(const D3D12MA::ALLOCATION_DESC& allocDesc, D3D12_CLEAR_VALUE* clearValue, const D3D12_RESOURCE_DESC& resourceDesc, D3D12_SUBRESOURCE_DATA* imageMipsData, ID3D12GraphicsCommandList* cmdList, const wchar_t* name, D3D12_RESOURCE_STATES stateAfter) {
@@ -1318,7 +1345,7 @@ D3D12MA::Allocation* d3dCreateImage(const D3D12MA::ALLOCATION_DESC& allocDesc, D
     return image;
 }
 
-D3D12MA::Allocation* d3dCreateImageSTB(const std::filesystem::path& ddsFilePath, ID3D12GraphicsCommandList* cmdList, const wchar_t* name, D3D12_RESOURCE_STATES stateAfter) {
+D3D12MA::Allocation* d3dCreateImageSTB(const std::filesystem::path& ddsFilePath, const wchar_t* name, D3D12_RESOURCE_STATES stateAfter) {
     int width, height, channelCount;
     unsigned char* imageData = stbi_load(ddsFilePath.string().c_str(), &width, &height, &channelCount, 4);
     assert(imageData);
@@ -1333,18 +1360,25 @@ D3D12MA::Allocation* d3dCreateImageSTB(const std::filesystem::path& ddsFilePath,
     uint64 rowSize;
     uint64 requiredSize;
     d3d.device->GetCopyableFootprints(&resourceDesc, 0, 1, 0, &mipFootprint, &rowCount, &rowSize, &requiredSize);
-    assert(d3d.stagingBuffer.size + requiredSize < d3d.stagingBuffer.capacity);
+    if (d3d.stagingBuffer.size + requiredSize >= d3d.stagingBuffer.capacity) {
+        d3dGraphicsCmdListExecute();
+        d3dSignalFence(&d3d.transferFence);
+        d3dWaitFence(&d3d.transferFence);
+        d3dGraphicsCmdListReset();
+        d3d.stagingBuffer.size = 0;
+    }
     mipFootprint.Offset += d3d.stagingBuffer.size;
     D3D12_SUBRESOURCE_DATA srcData = {.pData = imageData, .RowPitch = width * 4, .SlicePitch = width * height * 4};
-    assert(UpdateSubresources(cmdList, image->GetResource(), d3d.stagingBuffer.buffer->GetResource(), 0, 1, requiredSize, &mipFootprint, &rowCount, &rowSize, &srcData) == requiredSize);
+    assert(UpdateSubresources(d3d.graphicsCmdList, image->GetResource(), d3d.stagingBuffer.buffer->GetResource(), 0, 1, requiredSize, &mipFootprint, &rowCount, &rowSize, &srcData) == requiredSize);
     d3d.stagingBuffer.size += requiredSize;
+    assert(d3d.stagingBuffer.size < d3d.stagingBuffer.capacity);
     stbi_image_free(imageData);
     D3D12_RESOURCE_BARRIER transition = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = image->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = stateAfter}};
-    cmdList->ResourceBarrier(1, &transition);
+    d3d.graphicsCmdList->ResourceBarrier(1, &transition);
     return image;
 }
 
-D3D12MA::Allocation* d3dCreateImageDDS(const std::filesystem::path& ddsFilePath, ID3D12GraphicsCommandList* cmdList, const wchar_t* name, D3D12_RESOURCE_STATES stateAfter) {
+D3D12MA::Allocation* d3dCreateImageDDS(const std::filesystem::path& ddsFilePath, const wchar_t* name, D3D12_RESOURCE_STATES stateAfter) {
     DirectX::ScratchImage scratchImage;
     assert(SUCCEEDED(LoadFromDDSFile(ddsFilePath.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, scratchImage)));
     assert(scratchImage.GetImageCount() == scratchImage.GetMetadata().mipLevels);
@@ -1370,47 +1404,27 @@ D3D12MA::Allocation* d3dCreateImageDDS(const std::filesystem::path& ddsFilePath,
     uint64 requiredSize;
     D3D12_SUBRESOURCE_DATA srcData[16];
     d3d.device->GetCopyableFootprints(&resourceDesc, 0, resourceDesc.MipLevels, 0, mipFootprints, rowCounts, rowSizes, &requiredSize);
-    assert(d3d.stagingBuffer.size + requiredSize < d3d.stagingBuffer.capacity);
+    if (d3d.stagingBuffer.size + requiredSize >= d3d.stagingBuffer.capacity) {
+        d3dGraphicsCmdListExecute();
+        d3dSignalFence(&d3d.transferFence);
+        d3dWaitFence(&d3d.transferFence);
+        d3dGraphicsCmdListReset();
+        d3d.stagingBuffer.size = 0;
+    }
     for (uint mipIndex = 0; mipIndex < scratchImageInfo.mipLevels; mipIndex++) {
         mipFootprints[mipIndex].Offset += d3d.stagingBuffer.size;
         const DirectX::Image& image = scratchImage.GetImages()[mipIndex];
         srcData[mipIndex] = {.pData = image.pixels, .RowPitch = (int64)image.rowPitch, .SlicePitch = (int64)image.slicePitch};
     }
-    assert(UpdateSubresources(cmdList, image->GetResource(), d3d.stagingBuffer.buffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, srcData) == requiredSize);
+    assert(UpdateSubresources(d3d.graphicsCmdList, image->GetResource(), d3d.stagingBuffer.buffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, srcData) == requiredSize);
     d3d.stagingBuffer.size += requiredSize;
+    assert(d3d.stagingBuffer.size < d3d.stagingBuffer.capacity);
     D3D12_RESOURCE_BARRIER transition = {
         .Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
         .Transition = {.pResource = image->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST, .StateAfter = stateAfter},
     };
-    cmdList->ResourceBarrier(1, &transition);
+    d3d.graphicsCmdList->ResourceBarrier(1, &transition);
     return image;
-}
-
-void d3dCmdListReset() {
-    assert(SUCCEEDED(d3d.graphicsCmdAllocator->Reset()));
-    assert(SUCCEEDED(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
-}
-
-void d3dCmdListExecute() {
-    assert(SUCCEEDED(d3d.graphicsCmdList->Close()));
-    d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
-}
-
-void d3dSignalFence(D3DFence* fence) {
-    fence->value += 1;
-    d3d.graphicsQueue->Signal(fence->fence, fence->value);
-}
-
-void d3dWaitFence(D3DFence* fence) {
-    if (fence->fence->GetCompletedValue() < fence->value) {
-        assert(SUCCEEDED(fence->fence->SetEventOnCompletion(fence->value, fence->event)));
-        assert(WaitForSingleObjectEx(fence->event, INFINITE, false) == WAIT_OBJECT_0);
-    }
-}
-
-bool d3dTryWaitFence(D3DFence* fence) {
-    bool wait = fence->fence->GetCompletedValue() < fence->value;
-    return !wait;
 }
 
 void d3dInit() {
@@ -1603,7 +1617,7 @@ void d3dInit() {
         d3d.pathTracerAccumulationTexture->GetResource()->SetName(L"pathTracerAccumulationTexture");
     }
     {
-        d3dCmdListReset();
+        d3dGraphicsCmdListReset();
         d3d.stagingBuffer.size = 0;
         {
             uint8* imguiTextureData;
@@ -1641,7 +1655,7 @@ void d3dInit() {
             d3d.defaultNormalTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, nullptr, desc, &data, d3d.graphicsCmdList, L"defaultNormalTexture", D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             d3d.defaultNormalTextureSRVDesc = {.Format = desc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = desc.MipLevels}};
         }
-        d3dCmdListExecute();
+        d3dGraphicsCmdListExecute();
         d3dSignalFence(&d3d.transferFence);
         d3dWaitFence(&d3d.transferFence);
     }
@@ -2013,7 +2027,7 @@ Model* modelLoadGLTF(const std::filesystem::path& filePath) {
     model->filePathStr = filePath.string();
     model->gltfData = gltfData;
 
-    d3dCmdListReset();
+    d3dGraphicsCmdListReset();
     d3d.stagingBuffer.size = 0;
 
     model->nodes.resize(gltfData->nodes_count);
@@ -2324,10 +2338,10 @@ Model* modelLoadGLTF(const std::filesystem::path& filePath) {
         std::filesystem::path imageDDSFilePath = imageFilePath;
         imageDDSFilePath.replace_extension(".dds");
         if (std::filesystem::exists(imageDDSFilePath)) {
-            image.gpuData = d3dCreateImageDDS(imageDDSFilePath, d3d.graphicsCmdList, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            image.gpuData = d3dCreateImageDDS(imageDDSFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
         else if (std::filesystem::exists(imageFilePath)) {
-            image.gpuData = d3dCreateImageSTB(imageFilePath, d3d.graphicsCmdList, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            image.gpuData = d3dCreateImageSTB(imageFilePath, std::format(L"{}Image{}", filePath.stem().wstring(), imageIndex).c_str(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
         else {
             assert(false);
@@ -2397,7 +2411,7 @@ Model* modelLoadGLTF(const std::filesystem::path& filePath) {
             material.normalTexture->srvDesc = {.Format = imageDesc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = imageDesc.MipLevels}};
         }
     }
-    d3dCmdListExecute();
+    d3dGraphicsCmdListExecute();
     d3dSignalFence(&d3d.transferFence);
     d3dWaitFence(&d3d.transferFence);
     {
@@ -3037,23 +3051,26 @@ void worldInit() {
     }
 #endif
     {
-        ryml::ConstNodeRef assetsYaml = yamlRoot["assets"];
-
-        ryml::ConstNodeRef skyboxesYaml = assetsYaml["skyboxes"];
-        d3dCmdListReset();
         d3d.stagingBuffer.size = 0;
+        d3dGraphicsCmdListReset();
+        ryml::ConstNodeRef assetsYaml = yamlRoot["assets"];
+        ryml::ConstNodeRef skyboxesYaml = assetsYaml["skyboxes"];
         for (ryml::ConstNodeRef skyboxYaml : skyboxesYaml) {
             std::string file;
             skyboxYaml >> file;
             Skybox skybox;
             skybox.hdriTextureFilePath = file;
-            skybox.hdriTexture = d3dCreateImageDDS(exeDir / skybox.hdriTextureFilePath, d3d.graphicsCmdList, L"SkyboxHDRI", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            skybox.hdriTexture = d3dCreateImageDDS(exeDir / skybox.hdriTextureFilePath, L"SkyboxHDRI", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             skyboxes.push_back(skybox);
         }
-        d3dCmdListExecute();
+        d3dGraphicsCmdListExecute();
         d3dSignalFence(&d3d.transferFence);
         d3dWaitFence(&d3d.transferFence);
 
+        const char* simpleModelFiles[] = {"assets/models/sphere/gltf/sphere.gltf", "assets/models/cube/gltf/cube.gltf", "assets/models/cylinder/gltf/cylinder.gltf"};
+        for (const char* modelFile : simpleModelFiles) {
+            Model* model = modelLoad(modelFile);
+        }
         for (ryml::ConstNodeRef modelsYaml = assetsYaml["models"]; ryml::ConstNodeRef modelYaml : modelsYaml) {
             std::string modelFile;
             modelYaml["file"] >> modelFile;
@@ -4634,7 +4651,7 @@ void d3dRender() {
     d3d.stagingBuffer.size = 0;
     d3d.constantsBuffer.size = 0;
     d3d.cbvSrvUavDescriptorHeap.size = 0;
-    d3dCmdListReset();
+    d3dGraphicsCmdListReset();
     d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap.heap);
     {
         RenderInfo renderInfo = {
@@ -4848,7 +4865,7 @@ void d3dRender() {
         d3d.graphicsCmdList->ResourceBarrier(1, &barrier);
         d3d.graphicsCmdList->CopyBufferRegion(d3d.collisionQueryResultsBuffer.buffer->GetResource(), 0, d3d.collisionQueryResultsBuffer.bufferUAV->GetResource(), 0, d3d.collisionQueryResultsBuffer.capacity);
 
-        d3dCmdListExecute();
+        d3dGraphicsCmdListExecute();
         d3dSignalFence(&d3d.collisionQueriesFence);
         assert(SUCCEEDED(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
         d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap.heap);
@@ -4989,7 +5006,7 @@ void d3dRender() {
     }
     {
         ZoneScopedN("ExecuteCommandLists");
-        d3dCmdListExecute();
+        d3dGraphicsCmdListExecute();
     }
     {
         ZoneScopedN("Present");
