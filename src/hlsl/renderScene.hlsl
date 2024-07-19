@@ -18,13 +18,13 @@ StructuredBuffer<BLASGeometryInfo> blasGeometriesInfos : register(t2);
 Texture2D<float3> skyboxTexture : register(t3);
 sampler textureSampler : register(s0);
 
-RaytracingPipelineConfig pipelineConfig = {2 /*MaxTraceRecursionDepth*/};
+RaytracingPipelineConfig pipelineConfig = { 2 /*MaxTraceRecursionDepth*/ };
 
-RaytracingShaderConfig shaderConfig = {16 /*UINT MaxPayloadSizeInBytes*/, 8 /*UINT MaxAttributeSizeInBytes*/};
+RaytracingShaderConfig shaderConfig = { 16 /*UINT MaxPayloadSizeInBytes*/, 8 /*UINT MaxAttributeSizeInBytes*/ };
 
-TriangleHitGroup rayHitGroupPrimary = {"rayAnyHitPrimary", "rayClosestHitPrimary"};
+TriangleHitGroup rayHitGroupPrimary = { "rayAnyHitPrimary", "rayClosestHitPrimary" };
 
-TriangleHitGroup rayHitGroupShadow = {"", "rayClosestHitShadow"};
+TriangleHitGroup rayHitGroupShadow = { "", "rayClosestHitShadow" };
 
 struct RayPayloadPrimary {
     float3 color;
@@ -42,7 +42,7 @@ void rayGen() {
     float2 pixelCoord = ((float2(pixelIndex) + 0.5) / float2(resolution)) * 2.0 - 1.0;
 
     RayDesc ray = pinholeCameraRay(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjectMat);
-    RayPayloadPrimary payload = (RayPayloadPrimary)0;
+    RayPayloadPrimary payload = (RayPayloadPrimary) 0;
     TraceRay(bvh, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, payload);
     renderTexture[pixelIndex] = payload.color;
     depthTexture[pixelIndex] = payload.depth;
@@ -101,7 +101,7 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
     baseColorTexture.GetDimensions(baseColorTextureWidth, baseColorTextureHeight);
     float2 texGrad1, texGrad2;
     float fovy = RADIAN(50.0);
-    float alpha = atan(2.0 * tan(fovy * 0.5) / (float)baseColorTextureHeight);
+    float alpha = atan(2.0 * tan(fovy * 0.5) / (float) baseColorTextureHeight);
     float radius = RayTCurrent() * tan(alpha);
     anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGrad1, texGrad2);
     float3 baseColor = baseColorTexture.SampleGrad(textureSampler, uv, texGrad1, texGrad2);
@@ -109,7 +109,7 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
     uint normalTextureWidth, normalTextureHeight;
     normalTexture.GetDimensions(normalTextureWidth, normalTextureHeight);
     if (normalTextureHeight != baseColorTextureHeight) {
-        float alpha = atan(2.0f * tan(fovy * 0.5) / (float)normalTextureHeight);
+        float alpha = atan(2.0f * tan(fovy * 0.5) / (float) normalTextureHeight);
         float radius = RayTCurrent() * tan(alpha);
         anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGrad1, texGrad2);
     }
@@ -118,18 +118,24 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
     float3x3 tbnMat = transpose(float3x3(tangent, bitangent, normal));
     normal = normalize(mul(tbnMat, normalMapNormal));
     
+    float3 color;
     if (blasInstanceInfo.flags & BLASInstanceFlagForcedColor) {
-        payload.color += uintToColor(blasInstanceInfo.color);
+        color = uintToColor(blasInstanceInfo.color);
     }
     else {
         float3 lightDir = normalize(float3(1, 1, 1));
         float ndotl = saturate(dot(lightDir, normal));
-        payload.color += baseColor * blasGeometryInfo.baseColorFactor * ndotl;
-        
-        //payload.color += normal;
-        //payload.color += normalMapXYZ;
+        color = baseColor * blasGeometryInfo.baseColorFactor * ndotl;
+        //color = normal;
+        //color = normalMapXYZ;
     }
-
+    if (blasInstanceInfo.flags & BLASInstanceFlagHighlightTriangleEdges) {
+        if (barycentricsOnEdge(trigAttribs.barycentrics, 0.03)) {
+            color = uintToColor(blasInstanceInfo.color);
+        }
+    }
+    payload.color += color;
+    
     float4 ndc = mul(renderInfo.cameraViewProjectMat, float4(position, 1));
     payload.depth = ndc.z / ndc.w;
     
@@ -160,16 +166,20 @@ void rayAnyHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInterse
     Vertex v1 = vertices[indices[NonUniformResourceIndex(triangleIndex + 1)]];
     Vertex v2 = vertices[indices[NonUniformResourceIndex(triangleIndex + 2)]];
     float2 uv = barycentricsLerp(trigAttribs.barycentrics, v0.uv, v1.uv, v2.uv);
-             
-    float3 baseColor;
+    
+    float3 color;
     if (blasInstanceInfo.flags & BLASInstanceFlagForcedColor) {
-        baseColor = float3(blasInstanceInfo.color & 0xff000000, blasInstanceInfo.color & 0x00ff0000, blasInstanceInfo.color & 0x0000ff00);
+        color = uintToColor(blasInstanceInfo.color);
     }
     else {
-        baseColor = baseColorTexture.SampleLevel(textureSampler, uv, 0) * blasGeometryInfo.baseColorFactor;
+        color = baseColorTexture.SampleLevel(textureSampler, uv, 0) * blasGeometryInfo.baseColorFactor;
     }
-    payload.color += (baseColor * 0.25);
-    
+    if (blasInstanceInfo.flags & BLASInstanceFlagHighlightTriangleEdges) {
+        if (barycentricsOnEdge(trigAttribs.barycentrics, 0.03)) {
+            color = float3(0, 1, 0);
+        }
+    }
+    payload.color += color * 0.25;
     IgnoreHit();
 }
 

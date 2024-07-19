@@ -6,7 +6,7 @@
 
 #include <ufbx/ufbx.h>
 
-#include <d3d12ma/d3d12memalloc.h>
+#include <d3d12MA/d3d12Memalloc.h>
 
 #include <stb/stb_image.h>
 
@@ -27,6 +27,10 @@
 #define LIVE_RELOAD_FUNCS
 #define PHYSX_PVD
 
+#define EULER 2.71828182845904523536f
+#define PI 3.14159265358979323846f
+#define SQRT2 1.41421356237309504880f
+
 typedef int8_t int8;
 typedef int16_t int16;
 typedef int64_t int64;
@@ -36,49 +40,17 @@ typedef uint64_t uint64;
 typedef uint32_t uint32;
 typedef uint32_t uint;
 
-static const float euler = 2.71828182845904523536f;
-static const float pi = 3.14159265358979323846f;
-static const float sqrt2 = 1.41421356237309504880f;
-
 static const XMMatrix xmMatrixIdentity = XMMatrixIdentity();
 static const XMVector xmVectorZero = XMVectorSet(0, 0, 0, 0);
 static const XMVector xmVectorOne = XMVectorSet(1, 1, 1, 1);
 static const XMVector xmQuatIdentity = XMVectorSet(0, 0, 0, 1);
 
-constexpr float radian(float d) { return d * (pi / 180.0f); }
-constexpr float degree(float r) { return r * (180.0f / pi); }
+constexpr float radian(float d) { return d * (PI / 180.0f); }
+constexpr float degree(float r) { return r * (180.0f / PI); }
 
 constexpr uint64 kilobytes(uint64 n) { return n * 1024ll; }
 constexpr uint64 megabytes(uint64 n) { return n * 1024ll * 1024ll; }
 constexpr uint64 gigabytes(uint64 n) { return n * 1024ll * 1024ll * 1024ll; }
-
-template <typename T, uint32 N>
-constexpr uint32 countof(const T (&)[N]) { return N; }
-
-template <typename T>
-uint64 vectorSizeof(const std::vector<T>& v) { return v.size() * sizeof(T); }
-
-template <typename T, typename T2>
-T align(T x, T2 n) {
-    T remainder = x % (T)n;
-    return remainder == 0 ? x : x + ((T)n - remainder);
-}
-
-bool getBit(uint32 n, uint32 index) {
-    return (n >> index) & 1;
-}
-
-uint32 setBit(uint32 n, uint32 index) {
-    return n |= (1 << index);
-}
-
-uint32 unsetBit(uint32 n, uint32 index) {
-    return n &= ~(1 << index);
-}
-
-uint32 toggleBit(uint32 n, uint32 index) {
-    return n ^= (1 << index);
-}
 
 struct int2 {
     int x = 0, y = 0;
@@ -233,187 +205,6 @@ struct AABB {
     float3 max;
 };
 
-float3 lerp(float3 a, float3 b, float t) {
-    return a + ((b - a) * t);
-}
-
-float4 slerp(float4 a, float4 b, float t) {
-    return float4(XMQuaternionSlerp(a.toXMVector(), b.toXMVector(), t));
-}
-
-std::string toString(XMVector vec) {
-    return std::format("|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n", XMVectorGetX(vec), XMVectorGetY(vec), XMVectorGetZ(vec), XMVectorGetW(vec));
-}
-
-std::string toString(XMMatrix mat) {
-    return std::format("|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n",
-                       XMVectorGetX(mat.r[0]), XMVectorGetX(mat.r[1]), XMVectorGetX(mat.r[2]), XMVectorGetX(mat.r[3]),
-                       XMVectorGetY(mat.r[0]), XMVectorGetY(mat.r[1]), XMVectorGetY(mat.r[2]), XMVectorGetY(mat.r[3]),
-                       XMVectorGetZ(mat.r[0]), XMVectorGetZ(mat.r[1]), XMVectorGetZ(mat.r[2]), XMVectorGetZ(mat.r[3]),
-                       XMVectorGetW(mat.r[0]), XMVectorGetW(mat.r[1]), XMVectorGetW(mat.r[2]), XMVectorGetW(mat.r[3]));
-}
-
-XMVector quaternionBetween(float3 v1, float3 v2) {
-    float c = v1.dot(v2);
-    float k = sqrtf(v1.lengthSquared() * v2.lengthSquared());
-    if (((c / k) - (-1.0f)) < 0.000001f) {
-        float3 u = v1.orthogonal().normalize();
-        return XMVectorSet(u.x, u.y, u.z, 0);
-    }
-    else {
-        float3 u = v1.cross(v2);
-        return XMQuaternionNormalize(XMVectorSet(u.x, u.y, u.z, c + k));
-    }
-}
-
-float4 quaternionFromEulerAngles(float3 eulerAngles) {
-    float cr = cosf(eulerAngles.x * 0.5f);
-    float sr = sinf(eulerAngles.x * 0.5f);
-    float cp = cosf(eulerAngles.y * 0.5f);
-    float sp = sinf(eulerAngles.y * 0.5f);
-    float cy = cosf(eulerAngles.z * 0.5f);
-    float sy = sinf(eulerAngles.z * 0.5f);
-
-    float4 q;
-    q.w = cr * cp * cy + sr * sp * sy;
-    q.x = sr * cp * cy - cr * sp * sy;
-    q.y = cr * sp * cy + sr * cp * sy;
-    q.z = cr * cp * sy - sr * sp * cy;
-
-    return q;
-}
-
-float3 quaternionToEulerAngles(float4 q) {
-    float3 angles;
-
-    float sinr_cosp = 2.0f * (q.w * q.x + q.y * q.z);
-    float cosr_cosp = 1.0f - 2.0f * (q.x * q.x + q.y * q.y);
-    angles.x = atan2f(sinr_cosp, cosr_cosp);
-
-    float sinp = sqrtf(1.0f + 2.0f * (q.w * q.y - q.x * q.z));
-    float cosp = sqrtf(1.0f - 2.0f * (q.w * q.y - q.x * q.z));
-    angles.y = 2.0f * atan2f(sinp, cosp) - pi / 2.0f;
-
-    float siny_cosp = 2.0f * (q.w * q.z + q.x * q.y);
-    float cosy_cosp = 1.0f - 2.0f * (q.y * q.y + q.z * q.z);
-    angles.z = atan2f(siny_cosp, cosy_cosp);
-
-    return angles;
-}
-
-float2 ndcToScreen(float2 ndc, float2 screenSize) {
-    float2 coord = (float2(ndc.x, -ndc.y) + 1.0f) * 0.5f;
-    return coord * screenSize;
-}
-
-bool insideNDC(float3 position) {
-    return position.x >= -1.0f && position.x <= 1.0f &&
-           position.y >= -1.0f && position.y <= 1.0f &&
-           position.z >= 0.0f && position.z <= 1.0f;
-}
-
-bool insideAABB(float3 position, AABB aabb) {
-    return position.x >= aabb.min.x && position.y >= aabb.min.y && position.z >= aabb.min.z &&
-           position.x <= aabb.max.x && position.y <= aabb.max.y && position.z <= aabb.max.z;
-}
-
-bool intersectSegmentPlane(float3 a, float3 b, Plane p, float* t, float3* q) {
-    float3 ab = b - a;
-    *t = (p.d - p.n.dot(a)) / p.n.dot(ab);
-    if (*t >= 0.0f && *t <= 1.0f) {
-        *q = a + ab * t;
-        return true;
-    }
-    else {
-        return false;
-    }
-}
-
-bool intersectRayAABB(float3 p, float3 d, AABB a, float* tmin, float3* q) {
-    *tmin = 0.0f;
-    float tmax = FLT_MAX;
-    for (int i = 0; i < 3; i++) {
-        if (fabs(d[i]) < 0.00001f) {
-            if (p[i] < a.min[i] || p[i] > a.max[i]) return false;
-        }
-        else {
-            float ood = 1.0f / d[i];
-            float t1 = (a.min[i] - p[i]) * ood;
-            float t2 = (a.max[i] - p[i]) * ood;
-            if (t1 > t2) std::swap(t1, t2);
-            if (t1 > *tmin) *tmin = t1;
-            if (t2 > tmax) tmax = t2;
-            if (*tmin > tmax) return false;
-        }
-    }
-    *q = p + d * *tmin;
-    return true;
-}
-
-uint32 ARGBToABGR(uint32 argb) {
-    uint32 a_g_ = argb & 0xff00ff00;
-    uint32 _b__ = argb << 16 & 0x00ff0000;
-    uint32 ___r = argb >> 16 & 0x000000ff;
-    return a_g_ | _b__ | ___r;
-}
-
-std::string getLastErrorStr() {
-    DWORD err = GetLastError();
-    std::string message = std::system_category().message(err);
-    return message;
-}
-
-std::string fileReadStr(const std::filesystem::path& path) {
-    std::ifstream file;
-    file.open(path, std::ios::in);
-    std::string str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    return str;
-}
-
-std::vector<uint8> fileReadBytes(const std::filesystem::path& path) {
-    HANDLE hwnd = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    assert(hwnd != INVALID_HANDLE_VALUE);
-    DWORD size = GetFileSize(hwnd, nullptr);
-    assert(size != INVALID_FILE_SIZE);
-    std::vector<uint8> data(size);
-    DWORD byteRead;
-    assert(ReadFile(hwnd, data.data(), size, &byteRead, nullptr));
-    assert(byteRead == size);
-    CloseHandle(hwnd);
-    return data;
-}
-
-void fileWriteStr(const std::filesystem::path& path, const std::string& str) {
-    std::ofstream file(path, std::ios::out | std::ios::trunc);
-    file << str;
-}
-
-void fileWriteBytes(const std::filesystem::path& path, void* data, uint64 size) {
-    std::ofstream file(path, std::ios::out | std::ios::trunc | std::ios::binary);
-    file.write((char*)data, size);
-}
-
-bool commandLineContain(const wchar_t* arg) {
-    int argsCount;
-    LPWSTR* args = CommandLineToArgvW(GetCommandLineW(), &argsCount);
-    for (int i = 1; i < argsCount; i++) {
-        if (wcscmp(arg, args[i]) == 0) return true;
-    }
-    return false;
-}
-
-void showConsole() {
-    if (AllocConsole()) {
-        freopen_s((FILE**)stdin, "CONIN$", "r", stdin);
-        freopen_s((FILE**)stdout, "CONOUT$", "w", stdout);
-        freopen_s((FILE**)stderr, "CONOUT$", "w", stderr);
-        HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
-        // HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
-        // HANDLE hStderr = GetStdHandle(STD_ERROR_HANDLE);
-        assert(SetConsoleMode(hStdin, ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT));
-    }
-}
-
 template <typename T>
 struct ArenaElementHandle {
     uint index;
@@ -460,6 +251,10 @@ struct Arena {
             return nullptr;
         }
     }
+};
+
+struct Task {
+    std::string msg;
 };
 
 #include "hlsl/shared.h"
@@ -884,7 +679,8 @@ struct Editor {
     CameraEditor editCamera;
     ObjectType selectedObjectType = ObjectTypeNone;
     uint selectedObjectIndex = UINT_MAX;
-    bool selectedObjectXRay = false;
+    uint selectedObjectMeshNodeIndex = UINT_MAX;
+    bool selectedObjectXRay;
     uint renameObjectIndex = UINT_MAX;
     ImGuizmo::OPERATION gizmoOperation = ImGuizmo::TRANSLATE;
     ImGuizmo::MODE gizmoMode = ImGuizmo::LOCAL;
@@ -897,8 +693,8 @@ struct Editor {
 // GLOBALS
 static std::filesystem::path exeDir = [] {
     wchar_t buf[512];
-    DWORD n = GetModuleFileNameW(nullptr, buf, countof(buf));
-    assert(n < countof(buf));
+    DWORD n = GetModuleFileNameW(nullptr, buf, sizeof(buf) / sizeof(wchar_t));
+    assert(n < (sizeof(buf) / sizeof(wchar_t)));
     std::filesystem::path path(buf);
     return path.parent_path();
 }();
@@ -918,7 +714,7 @@ static std::filesystem::path saveDir = [] {
     return documentFolderPath;
 }();
 
-static std::filesystem::path worldFilePath = exeDir / "assets/worlds/bistro.yaml";
+static std::filesystem::path worldFilePath = exeDir / "assets/worlds/test.yaml";
 static std::filesystem::path gameSavePath = saveDir / "save.yaml";
 static std::filesystem::path settingsPath = saveDir / "settings.yaml";
 
@@ -929,7 +725,6 @@ static LARGE_INTEGER perfCounterEnd;
 static float frameTime;
 static uint mouseSelectX = UINT_MAX;
 static uint mouseSelectY = UINT_MAX;
-static bool mouseSelectOngoing = false;
 static int2 mouseDeltaRaw;
 static float mouseWheel;
 static float mouseSensitivity = 0.001f;
@@ -1004,7 +799,221 @@ static PxControllerManager* pxControllerManager;
 #ifdef EDITOR
 static Editor editor;
 static bool editorActive = true;
+static moodycamel::ConcurrentQueue<Task> tasks;
 #endif
+
+template <typename T, uint32 N>
+constexpr uint32 countof(const T (&)[N]) {
+    return N;
+}
+
+template <typename T>
+uint64 vectorSizeof(const std::vector<T>& v) {
+    return v.size() * sizeof(T);
+}
+
+template <typename T, typename T2>
+T align(T x, T2 n) {
+    T remainder = x % (T)n;
+    return remainder == 0 ? x : x + ((T)n - remainder);
+}
+
+bool getBit(uint32 n, uint32 index) {
+    return (n >> index) & 1;
+}
+
+uint32 setBit(uint32 n, uint32 index) {
+    return n |= (1 << index);
+}
+
+uint32 unsetBit(uint32 n, uint32 index) {
+    return n &= ~(1 << index);
+}
+
+uint32 toggleBit(uint32 n, uint32 index) {
+    return n ^= (1 << index);
+}
+
+float3 lerp(float3 a, float3 b, float t) {
+    return a + ((b - a) * t);
+}
+
+float4 slerp(float4 a, float4 b, float t) {
+    return float4(XMQuaternionSlerp(a.toXMVector(), b.toXMVector(), t));
+}
+
+std::string toString(XMVector vec) {
+    return std::format("|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n", XMVectorGetX(vec), XMVectorGetY(vec), XMVectorGetZ(vec), XMVectorGetW(vec));
+}
+
+std::string toString(XMMatrix mat) {
+    return std::format("|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n|{:+.3f}, {:+.3f}, {:+.3f}, {:+.3f}|\n",
+                       XMVectorGetX(mat.r[0]), XMVectorGetX(mat.r[1]), XMVectorGetX(mat.r[2]), XMVectorGetX(mat.r[3]),
+                       XMVectorGetY(mat.r[0]), XMVectorGetY(mat.r[1]), XMVectorGetY(mat.r[2]), XMVectorGetY(mat.r[3]),
+                       XMVectorGetZ(mat.r[0]), XMVectorGetZ(mat.r[1]), XMVectorGetZ(mat.r[2]), XMVectorGetZ(mat.r[3]),
+                       XMVectorGetW(mat.r[0]), XMVectorGetW(mat.r[1]), XMVectorGetW(mat.r[2]), XMVectorGetW(mat.r[3]));
+}
+
+XMVector quaternionBetween(float3 v1, float3 v2) {
+    float c = v1.dot(v2);
+    float k = sqrtf(v1.lengthSquared() * v2.lengthSquared());
+    if (((c / k) - (-1.0f)) < 0.000001f) {
+        float3 u = v1.orthogonal().normalize();
+        return XMVectorSet(u.x, u.y, u.z, 0);
+    }
+    else {
+        float3 u = v1.cross(v2);
+        return XMQuaternionNormalize(XMVectorSet(u.x, u.y, u.z, c + k));
+    }
+}
+
+float4 quaternionFromEulerAngles(float3 eulerAngles) {
+    float cr = cosf(eulerAngles.x * 0.5f);
+    float sr = sinf(eulerAngles.x * 0.5f);
+    float cp = cosf(eulerAngles.y * 0.5f);
+    float sp = sinf(eulerAngles.y * 0.5f);
+    float cy = cosf(eulerAngles.z * 0.5f);
+    float sy = sinf(eulerAngles.z * 0.5f);
+
+    float4 q;
+    q.w = cr * cp * cy + sr * sp * sy;
+    q.x = sr * cp * cy - cr * sp * sy;
+    q.y = cr * sp * cy + sr * cp * sy;
+    q.z = cr * cp * sy - sr * sp * cy;
+
+    return q;
+}
+
+float3 quaternionToEulerAngles(float4 q) {
+    float3 angles;
+
+    float sinr_cosp = 2.0f * (q.w * q.x + q.y * q.z);
+    float cosr_cosp = 1.0f - 2.0f * (q.x * q.x + q.y * q.y);
+    angles.x = atan2f(sinr_cosp, cosr_cosp);
+
+    float sinp = sqrtf(1.0f + 2.0f * (q.w * q.y - q.x * q.z));
+    float cosp = sqrtf(1.0f - 2.0f * (q.w * q.y - q.x * q.z));
+    angles.y = 2.0f * atan2f(sinp, cosp) - PI / 2.0f;
+
+    float siny_cosp = 2.0f * (q.w * q.z + q.x * q.y);
+    float cosy_cosp = 1.0f - 2.0f * (q.y * q.y + q.z * q.z);
+    angles.z = atan2f(siny_cosp, cosy_cosp);
+
+    return angles;
+}
+
+float2 ndcToScreen(float2 ndc, float2 screenSize) {
+    float2 coord = (float2(ndc.x, -ndc.y) + 1.0f) * 0.5f;
+    return coord * screenSize;
+}
+
+bool insideNDC(float3 position) {
+    return position.x >= -1.0f && position.x <= 1.0f &&
+           position.y >= -1.0f && position.y <= 1.0f &&
+           position.z >= 0.0f && position.z <= 1.0f;
+}
+
+bool insideAABB(float3 position, AABB aabb) {
+    return position.x >= aabb.min.x && position.y >= aabb.min.y && position.z >= aabb.min.z &&
+           position.x <= aabb.max.x && position.y <= aabb.max.y && position.z <= aabb.max.z;
+}
+
+bool intersectSegmentPlane(float3 a, float3 b, Plane p, float* t, float3* q) {
+    float3 ab = b - a;
+    *t = (p.d - p.n.dot(a)) / p.n.dot(ab);
+    if (*t >= 0.0f && *t <= 1.0f) {
+        *q = a + ab * t;
+        return true;
+    }
+    else {
+        return false;
+    }
+}
+
+bool intersectRayAABB(float3 p, float3 d, AABB a, float* tmin, float3* q) {
+    *tmin = 0.0f;
+    float tmax = FLT_MAX;
+    for (int i = 0; i < 3; i++) {
+        if (fabs(d[i]) < 0.00001f) {
+            if (p[i] < a.min[i] || p[i] > a.max[i]) return false;
+        }
+        else {
+            float ood = 1.0f / d[i];
+            float t1 = (a.min[i] - p[i]) * ood;
+            float t2 = (a.max[i] - p[i]) * ood;
+            if (t1 > t2) std::swap(t1, t2);
+            if (t1 > *tmin) *tmin = t1;
+            if (t2 > tmax) tmax = t2;
+            if (*tmin > tmax) return false;
+        }
+    }
+    *q = p + d * *tmin;
+    return true;
+}
+
+uint32 ARGBToABGR(uint32 argb) {
+    uint32 a_g_ = argb & 0xff00ff00;
+    uint32 _b__ = argb << 16 & 0x00ff0000;
+    uint32 ___r = argb >> 16 & 0x000000ff;
+    return a_g_ | _b__ | ___r;
+}
+
+std::string getLastErrorStr() {
+    DWORD err = GetLastError();
+    std::string message = std::system_category().message(err);
+    return message;
+}
+
+std::string fileReadStr(const std::filesystem::path& path) {
+    std::ifstream file;
+    file.open(path, std::ios::in);
+    std::string str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    return str;
+}
+
+std::vector<uint8> fileReadBytes(const std::filesystem::path& path) {
+    HANDLE hwnd = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    assert(hwnd != INVALID_HANDLE_VALUE);
+    DWORD size = GetFileSize(hwnd, nullptr);
+    assert(size != INVALID_FILE_SIZE);
+    std::vector<uint8> data(size);
+    DWORD byteRead;
+    assert(ReadFile(hwnd, data.data(), size, &byteRead, nullptr));
+    assert(byteRead == size);
+    CloseHandle(hwnd);
+    return data;
+}
+
+void fileWriteStr(const std::filesystem::path& path, const std::string& str) {
+    std::ofstream file(path, std::ios::out | std::ios::trunc);
+    file << str;
+}
+
+void fileWriteBytes(const std::filesystem::path& path, void* data, uint64 size) {
+    std::ofstream file(path, std::ios::out | std::ios::trunc | std::ios::binary);
+    file.write((char*)data, size);
+}
+
+bool commandLineContain(const wchar_t* arg) {
+    int argsCount;
+    LPWSTR* args = CommandLineToArgvW(GetCommandLineW(), &argsCount);
+    for (int i = 1; i < argsCount; i++) {
+        if (wcscmp(arg, args[i]) == 0) return true;
+    }
+    return false;
+}
+
+void showConsole() {
+    if (AllocConsole()) {
+        freopen_s((FILE**)stdin, "CONIN$", "r", stdin);
+        freopen_s((FILE**)stdout, "CONOUT$", "w", stdout);
+        freopen_s((FILE**)stderr, "CONOUT$", "w", stderr);
+        HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+        // HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
+        // HANDLE hStderr = GetStdHandle(STD_ERROR_HANDLE);
+        assert(SetConsoleMode(hStdin, ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT));
+    }
+}
 
 void settingsInit() {
     if (std::filesystem::is_regular_file(settingsPath)) {
@@ -1117,10 +1126,17 @@ void imguiInit() {
     // ImGui::StyleColorsClassic();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = _strdup((exeDir / "imgui.ini").string().c_str());
-    // assert(io.Fonts->AddFontDefault());
-    imguiFont = io.Fonts->AddFontFromFileTTF((exeDir / "assets/fonts/NotoSerif.ttf").string().c_str(), 50);
-    io.FontGlobalScale = (float)screenH / 3000.0f;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.FontGlobalScale = (float)screenH / 3000.0f;
+    float baseFontSize = 50.0f;
+    imguiFont = io.Fonts->AddFontFromFileTTF((exeDir / "assets/fonts/NotoSerif.ttf").string().c_str(), baseFontSize);
+    ImWchar iconsRange[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
+    float iconFontSize = baseFontSize * 2.0f / 3.0f; // FontAwesome fonts need to have their sizes reduced by 2.0f/3.0f in order to align correctly
+    ImFontConfig iconsConfig;
+    iconsConfig.MergeMode = true;
+    iconsConfig.PixelSnapH = true;
+    iconsConfig.GlyphMinAdvanceX = iconFontSize;
+    io.Fonts->AddFontFromFileTTF((exeDir / "assets/fonts/fa-solid-900.ttf").string().c_str(), iconFontSize, &iconsConfig, iconsRange);
 }
 
 void gameInputInit() {
@@ -1558,7 +1574,7 @@ void d3dInit() {
             buffer->buffer->GetResource()->SetName(name);
             assert(SUCCEEDED(buffer->buffer->GetResource()->Map(0, nullptr, (void**)&buffer->ptr)));
         };
-        d3dUploadBufferInit(&d3d.stagingBuffer, gigabytes(2), D3D12_RESOURCE_STATE_COPY_SOURCE, L"stagingBuffer");
+        d3dUploadBufferInit(&d3d.stagingBuffer, megabytes(500), D3D12_RESOURCE_STATE_COPY_SOURCE, L"stagingBuffer");
         d3dUploadBufferInit(&d3d.constantsBuffer, megabytes(2), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer");
         d3dUploadBufferInit(&d3d.constantsBufferPrevFrame, megabytes(2), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBufferPrevFrame");
         d3dUploadBufferInit(&d3d.imguiVertexBuffer, megabytes(10), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_GENERIC_READ, L"imguiVertexBuffer");
@@ -2011,7 +2027,7 @@ bool projectCameraSpaceTriangleToScreen(float3 p0, float3 p1, float3 p2, float2*
     return false;
 }
 
-Model* modelLoadGLTF(const std::filesystem::path& filePath) {
+Model* modelInitGLTF(const std::filesystem::path& filePath) {
     const std::filesystem::path gltfFilePath = exeDir / filePath;
     const std::filesystem::path gltfFileFolderPath = gltfFilePath.parent_path();
     cgltf_options gltfOptions = {};
@@ -2437,27 +2453,42 @@ Model* modelLoadGLTF(const std::filesystem::path& filePath) {
     return model;
 }
 
-Model* modelLoadFBX(const std::filesystem::path& filePath) {
+Model* modelInitFBX(const std::filesystem::path& filePath) {
     assert(false);
     return nullptr;
 }
 
-Model* modelLoad(const std::filesystem::path& filePath) {
+Model* modelInit(const std::filesystem::path& filePath) {
     for (Model& m : models) {
         if (m.filePath == filePath) {
             return &m;
         }
     }
     if (filePath.extension() == ".gltf") {
-        return modelLoadGLTF(filePath);
+        return modelInitGLTF(filePath);
     }
     else if (filePath.extension() == ".fbx") {
-        return modelLoadFBX(filePath);
+        return modelInitFBX(filePath);
     }
     else {
         assert(false);
         return nullptr;
     }
+}
+
+#ifdef EDITOR
+void modelGenerateDDSImages(const Model* model) {
+    auto generateDDSImages = [](const Model* model) {
+        std::filesystem::path modelDirPath = (exeDir / model->filePath).parent_path();
+        std::filesystem::path nvcompressPath = exeDir / "nvcompress.exe";
+        STARTUPINFOA startUpInfo = {.cb = sizeof(startUpInfo)};
+        PROCESS_INFORMATION processInfo;
+        char cmdArguments[] = "";
+        CreateProcessA(nvcompressPath.string().c_str(), cmdArguments, nullptr, nullptr, false, 0, nullptr, nullptr, &startUpInfo, &processInfo);
+        tasks.enqueue(Task{modelDirPath.string()});
+    };
+    std::thread generateDDSImagesThread(generateDDSImages, model);
+    generateDDSImagesThread.detach();
 }
 
 bool modelGenerateConvexMesh(Model* model) {
@@ -2525,81 +2556,7 @@ bool modelGenerateTriangleMesh(Model* model) {
         return true;
     }
 }
-
-// bool modelCreateConvexMesh(Model& model, bool forceCooking = true) {
-//     assert(!model.physxConvexMesh);
-//     std::filesystem::path convexMeshFilePath = model.filePath;
-//     convexMeshFilePath.replace_extension("convexMesh");
-//     if (!forceCooking && std::filesystem::exists(exeDir / convexMeshFilePath)) {
-//         std::vector<uint8> convexMeshData = fileReadBytes(exeDir / convexMeshFilePath);
-//         PxDefaultMemoryInputData input(convexMeshData.data(), (uint)convexMeshData.size());
-//         model.physxConvexMesh = pxPhysics->createConvexMesh(input);
-//     } else {
-//         std::vector<float3> points;
-//         for (ModelNode* meshNode : model.meshNodes) {
-//             meshNode->globalTransform;
-//             XMMatrix transformMat = XMMatrixMultiply(meshNode->globalTransform, XMMatrixScaling(scaleFactor, scaleFactor, -scaleFactor));
-//             for (Vertex& vertex : meshNode->mesh->vertices) {
-//                 points.push_back(float3(XMVector3Transform(vertex.position.toXMVector(), transformMat)));
-//             }
-//         }
-//         PxCookingParams cookingParams((PxTolerancesScale()));
-//         PxConvexMeshDesc convexMeshDesc;
-//         convexMeshDesc.points.count = (uint)points.size();
-//         convexMeshDesc.points.stride = sizeof(float3);
-//         convexMeshDesc.points.data = points.data();
-//         convexMeshDesc.flags = PxConvexFlag::eCOMPUTE_CONVEX | PxConvexFlag::eDISABLE_MESH_VALIDATION;
-//         PxDefaultMemoryOutputStream outputStream;
-//         PxConvexMeshCookingResult::Enum cookingResult;
-//         if (!PxCookConvexMesh(cookingParams, convexMeshDesc, outputStream, &cookingResult)) {
-//             return false;
-//         }
-//         std::filesystem::path convexMeshFilePath = model.filePath;
-//         convexMeshFilePath.replace_extension("convexMesh");
-//         fileWriteBytes(exeDir / convexMeshFilePath, outputStream.getData(), outputStream.getSize());
-//         PxDefaultMemoryInputData input(outputStream.getData(), outputStream.getSize());
-//         model.physxConvexMesh = pxPhysics->createConvexMesh(input);
-//     }
-//     return true;
-// }
-
-// bool modelCreateTriangleMesh(Model& model, bool forceCooking = true) {
-//     assert(!model.physxTriangleMesh);
-//     std::filesystem::path triangleMeshFilePath = model.filePath;
-//     triangleMeshFilePath.replace_extension("triangleMesh");
-//     if (!forceCooking && std::filesystem::exists(exeDir / triangleMeshFilePath)) {
-//         std::vector<uint8> triangleMeshData = fileReadBytes(exeDir / triangleMeshFilePath);
-//         PxDefaultMemoryInputData input(triangleMeshData.data(), (uint)triangleMeshData.size());
-//         model.physxTriangleMesh = physxPhysics->createTriangleMesh(input);
-//     } else {
-//         std::vector<float3> points;
-//         for (ModelNode* meshNode : model.meshNodes) {
-//             meshNode->globalTransform;
-//             XMMatrix transformMat = XMMatrixMultiply(meshNode->globalTransform, XMMatrixScaling(scaleFactor, scaleFactor, -scaleFactor));
-//             for (Vertex& vertex : meshNode->mesh->vertices) {
-//                 points.push_back(float3(XMVector3Transform(vertex.position.toXMVector(), transformMat)));
-//             }
-//         }
-//         PxCookingParams cookingParams(PxTolerancesScale(meters(1), meters(10)));
-//         PxTriangleMeshDesc triangleMeshDesc;
-//         //PxConvexMeshDesc convexMeshDesc;
-//         //convexMeshDesc.points.count = (uint)points.size();
-//         //convexMeshDesc.points.stride = sizeof(float3);
-//         //convexMeshDesc.points.data = points.data();
-//         //convexMeshDesc.flags = PxConvexFlag::eCOMPUTE_CONVEX | PxConvexFlag::eDISABLE_MESH_VALIDATION;
-//         PxDefaultMemoryOutputStream outputStream;
-//         PxTriangleMeshCookingResult::Enum cookingResult;
-//         if (!PxCookTriangleMesh(cookingParams, triangleMeshDesc, outputStream, &cookingResult)) {
-//             return false;
-//         }
-//         std::filesystem::path convexMeshFilePath = model.filePath;
-//         convexMeshFilePath.replace_extension("convexMesh");
-//         fileWriteBytes(exeDir / convexMeshFilePath, outputStream.getData(), outputStream.getSize());
-//         PxDefaultMemoryInputData input(outputStream.getData(), outputStream.getSize());
-//         model.physxConvexMesh = physxPhysics->createConvexMesh(input);
-//     }
-//     return true;
-// }
+#endif
 
 void modelTraverseNodesImGui(ModelNode* node) {
     if (ImGui::TreeNode(node->name.c_str())) {
@@ -2833,7 +2790,7 @@ void modelsAppendDescriptorsAndBlasGeometriesInfos() {
     }
 }
 
-void modelInstanceAddBLASInstancesToTLAS(ModelInstance& modelInstance, const XMMatrix& objectTransform, const XMMatrix& objectTransformPrevFrame, ObjectType objectType, uint objectIndex, uint instanceFlags, uint color) {
+void modelInstanceAddBLASInstancesToTLAS(ModelInstance& modelInstance, const XMMatrix& objectTransform, const XMMatrix& objectTransformPrevFrame, ObjectType objectType, uint objectIndex) {
     ZoneScopedN("modelInstanceAddBLASInstancesToTLAS");
     for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance.meshNodes.size(); meshNodeIndex++) {
         ModelInstanceMeshNode* instanceMeshNode = &modelInstance.meshNodes[meshNodeIndex];
@@ -2846,13 +2803,20 @@ void modelInstanceAddBLASInstancesToTLAS(ModelInstance& modelInstance, const XMM
         transform = XMMatrixMultiply(transform, objectTransform);
         XMMatrix transformT = XMMatrixTranspose(transform);
         D3D12_RAYTRACING_INSTANCE_DESC blasInstanceDesc = {.InstanceMask = objectType, .Flags = 0, .AccelerationStructure = instanceMeshNode->blas->GetResource()->GetGPUVirtualAddress()};
+        BLASInstanceInfo blasInstanceInfo = {.objectType = objectType, .objectIndex = objectIndex, .meshNodeIndex = meshNodeIndex};
 #ifdef EDITOR
-        if (editor.mode == EditorModeFreeCam && objectType != ObjectTypeNone && editor.selectedObjectType == objectType && editor.selectedObjectIndex == objectIndex && editor.selectedObjectXRay) {
-            blasInstanceDesc.Flags |= D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE;
+        if (editor.mode == EditorModeFreeCam && objectType != ObjectTypeNone && editor.selectedObjectType == objectType && editor.selectedObjectIndex == objectIndex) {
+            blasInstanceInfo.flags |= BLASInstanceFlagHighlightTriangleEdges;
+            blasInstanceInfo.color = 0xff000000;
+            if (editor.selectedObjectXRay) {
+                blasInstanceDesc.Flags |= D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE;
+            }
+            if (editor.selectedObjectMeshNodeIndex == meshNodeIndex) {
+                blasInstanceInfo.color = 0x00ff0000;
+            }
         }
 #endif
         memcpy(blasInstanceDesc.Transform, &transformT, sizeof(blasInstanceDesc.Transform));
-        BLASInstanceInfo blasInstanceInfo = {.flags = instanceFlags, .color = color, .objectType = objectType, .objectIndex = objectIndex};
         XMStoreFloat3x3(&blasInstanceInfo.transformNormalMat, transform);
         XMMatrix normalTransform = XMMatrixTranspose(XMMatrixInverse(nullptr, XMLoadFloat3x3(&blasInstanceInfo.transformNormalMat)));
         XMStoreFloat3x3(&blasInstanceInfo.transformNormalMat, normalTransform);
@@ -2979,8 +2943,8 @@ void playerCameraReset(bool keepPitchYaw) {
 }
 
 void playerCameraSetPitchYaw(float2 pitchYawNew) {
-    player.camera.pitchYaw.x = std::clamp(pitchYawNew.x, -pi * 0.4f, pi * 0.09f);
-    player.camera.pitchYaw.y = std::remainderf(pitchYawNew.y, pi * 2.0f);
+    player.camera.pitchYaw.x = std::clamp(pitchYawNew.x, -PI * 0.4f, PI * 0.09f);
+    player.camera.pitchYaw.y = std::remainderf(pitchYawNew.y, PI * 2.0f);
     XMVector quaternion = XMQuaternionRotationRollPitchYaw(player.camera.pitchYaw.x, player.camera.pitchYaw.y, 0);
     float3 dir = float3(XMVector3Rotate(XMVectorSet(0, 0, 1, 0), quaternion)).normalize();
     player.camera.position = player.camera.lookAt + (dir * player.camera.distance);
@@ -2995,8 +2959,8 @@ void playerCameraTranslate(float3 translate) {
 void editorCameraRotate(CameraEditor& editorCamera, float2 pitchYawDelta) {
     editorCamera.pitchYaw.x += pitchYawDelta.x;
     editorCamera.pitchYaw.y += pitchYawDelta.y;
-    editorCamera.pitchYaw.x = std::clamp(editorCamera.pitchYaw.x, -pi * 0.4f, pi * 0.4f);
-    editorCamera.pitchYaw.y = std::remainderf(editorCamera.pitchYaw.y, pi * 2.0f);
+    editorCamera.pitchYaw.x = std::clamp(editorCamera.pitchYaw.x, -PI * 0.4f, PI * 0.4f);
+    editorCamera.pitchYaw.y = std::remainderf(editorCamera.pitchYaw.y, PI * 2.0f);
     XMVector quaternion = XMQuaternionRotationRollPitchYaw(editorCamera.pitchYaw.x, editorCamera.pitchYaw.y, 0);
     float3 dir = XMVector3Rotate(XMVectorSet(0, 0, 1, 0), quaternion);
     editorCamera.lookAt = editorCamera.position + dir;
@@ -3069,12 +3033,12 @@ void worldInit() {
 
         const char* simpleModelFiles[] = {"assets/models/sphere/gltf/sphere.gltf", "assets/models/cube/gltf/cube.gltf", "assets/models/cylinder/gltf/cylinder.gltf"};
         for (const char* modelFile : simpleModelFiles) {
-            Model* model = modelLoad(modelFile);
+            Model* model = modelInit(modelFile);
         }
         for (ryml::ConstNodeRef modelsYaml = assetsYaml["models"]; ryml::ConstNodeRef modelYaml : modelsYaml) {
             std::string modelFile;
             modelYaml["file"] >> modelFile;
-            Model* model = modelLoad(modelFile);
+            Model* model = modelInit(modelFile);
         }
     }
     {
@@ -3490,6 +3454,7 @@ void editorObjectsWindow() {
         if (ImGui::Selectable("Player", editor.selectedObjectType == ObjectTypePlayer)) {
             editor.selectedObjectType = ObjectTypePlayer;
             editor.selectedObjectIndex = 0;
+            editor.selectedObjectMeshNodeIndex = 0;
         }
         if (editor.selectedObjectType == ObjectTypePlayer && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
             ImGui::OpenPopup("player edit");
@@ -3586,6 +3551,7 @@ void editorObjectsWindow() {
                     if (ImGui::Selectable(obj.name.c_str(), editor.selectedObjectType == ObjectTypeGameObject && editor.selectedObjectIndex == objIndex, ImGuiSelectableFlags_AllowDoubleClick)) {
                         editor.selectedObjectType = ObjectTypeGameObject;
                         editor.selectedObjectIndex = objIndex;
+                        editor.selectedObjectMeshNodeIndex = 0;
                         if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                             editor.renameObjectIndex = objIndex;
                         }
@@ -4026,6 +3992,12 @@ void editorPropertiesGameObject() {
         }
         ImGui::TreePop();
     }
+    if (ImGui::TreeNode("MeshNode")) {
+        ImGui::Text("Index: %d", editor.selectedObjectMeshNodeIndex);
+        ImGui::Text("Node Name: %s", obj.modelInstance.model->meshNodes[editor.selectedObjectMeshNodeIndex]->name.c_str());
+        ImGui::Text("Mesh Name: %s", obj.modelInstance.model->meshNodes[editor.selectedObjectMeshNodeIndex]->mesh->name.c_str());
+        ImGui::TreePop();
+    }
 }
 
 void editorPropertiesWindow() {
@@ -4041,15 +4013,34 @@ void editorPropertiesWindow() {
 }
 
 void editorAssetsWindow() {
+    bool newModelPopup = false;
     if (ImGui::Begin("Assets")) {
-        bool modelsTreeOpen = ImGui::TreeNode("Models");
-        bool newModelPopup = false;
-        if (ImGui::BeginPopupContextItem()) {
-            if (ImGui::Button("New Model")) {
+        if (ImGui::TreeNode("Models")) {
+            if (ImGui::Button(ICON_FA_PLUS)) {
                 newModelPopup = true;
-                ImGui::CloseCurrentPopup();
             }
-            ImGui::EndPopup();
+            for (uint modelIndex = 0; modelIndex < models.size(); modelIndex++) {
+                ImGui::PushID(modelIndex);
+                Model* model = &models[modelIndex];
+                if (ImGui::Selectable(model->filePath.string().c_str(), editor.selectedModelIndex == modelIndex)) {
+                    editor.selectedModelIndex = modelIndex;
+                }
+                if (ImGui::BeginPopupContextItem()) {
+                    if (ImGui::Button("generate .dds images")) {
+                        modelGenerateDDSImages(model);
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndPopup();
+                }
+                if (editor.mode == EditorModeFreeCam) {
+                    if (ImGui::BeginDragDropSource()) {
+                        ImGui::SetDragDropPayload("dragDropTypeModelIndex", (void*)&modelIndex, sizeof(modelIndex));
+                        ImGui::EndDragDropSource();
+                    }
+                }
+                ImGui::PopID();
+            }
+            ImGui::TreePop();
         }
         if (newModelPopup) {
             ImGui::OpenPopup("NewModelPopup");
@@ -4070,22 +4061,6 @@ void editorAssetsWindow() {
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
-        }
-        if (modelsTreeOpen) {
-            for (uint modelIndex = 0; modelIndex < models.size(); modelIndex++) {
-                ImGui::PushID(modelIndex);
-                if (ImGui::Selectable(models[modelIndex].filePath.string().c_str(), editor.selectedModelIndex == modelIndex)) {
-                    editor.selectedModelIndex = modelIndex;
-                }
-                if (editor.mode == EditorModeFreeCam) {
-                    if (ImGui::BeginDragDropSource()) {
-                        ImGui::SetDragDropPayload("dragDropTypeModelIndex", (void*)&modelIndex, sizeof(modelIndex));
-                        ImGui::EndDragDropSource();
-                    }
-                }
-                ImGui::PopID();
-            }
-            ImGui::TreePop();
         }
         bool skyBoxesTreeOpen = ImGui::TreeNode("Skyboxes");
         bool newSkyboxPopup = false;
@@ -4161,16 +4136,18 @@ void editorAssetsWindow() {
 
 void editorUpdate() {
     ZoneScopedN("editorUpdate");
-    if (mouseSelectOngoing && d3dTryWaitFence(&d3d.collisionQueriesFence)) {
-        mouseSelectOngoing = false;
-        CollisionQueryResult collisionQueryResult = ((CollisionQueryResult*)d3d.collisionQueryResultsBuffer.ptr)[0];
-        if (editor.selectedObjectType == collisionQueryResult.objectType && editor.selectedObjectIndex == collisionQueryResult.objectIndex) {
-            editor.selectedObjectType = ObjectTypeNone;
-            editor.selectedObjectIndex = UINT_MAX;
-        }
-        else {
-            editor.selectedObjectType = collisionQueryResult.objectType;
-            editor.selectedObjectIndex = collisionQueryResult.objectIndex;
+    if (d3d.collisionQueriesFence.value > 0) {
+        d3dWaitFence(&d3d.collisionQueriesFence);
+        if (mouseSelectX != UINT_MAX && mouseSelectY != UINT_MAX) {
+            CollisionQueryResult collisionQueryResult = ((CollisionQueryResult*)d3d.collisionQueryResultsBuffer.ptr)[0];
+            if (editor.selectedObjectType == collisionQueryResult.objectType && editor.selectedObjectIndex == collisionQueryResult.objectIndex) {
+                editor.selectedObjectMeshNodeIndex = collisionQueryResult.meshNodeIndex;
+            }
+            else {
+                editor.selectedObjectType = collisionQueryResult.objectType;
+                editor.selectedObjectIndex = collisionQueryResult.objectIndex;
+                editor.selectedObjectMeshNodeIndex = collisionQueryResult.meshNodeIndex;
+            }
         }
     }
     {
@@ -4204,6 +4181,10 @@ void editorUpdate() {
     editorObjectsWindow();
     editorPropertiesWindow();
     editorAssetsWindow();
+    Task task;
+    if (tasks.try_dequeue(task)) {
+        ImGui::DebugLog("%s\n", task.msg.c_str());
+    }
 
     if (editor.mode == EditorModeFreeCam) {
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().WantCaptureMouse) {
@@ -4751,57 +4732,57 @@ void d3dRender() {
         modelsAppendDescriptorsAndBlasGeometriesInfos();
 #ifdef EDITOR
         if (editor.mode == EditorModeFreeCam) {
-            modelInstanceAddBLASInstancesToTLAS(player.modelInstance, player.transform.toMat(), player.transformPrevFrame.toMat(), ObjectTypePlayer, 0, 0, 0);
+            modelInstanceAddBLASInstancesToTLAS(player.modelInstance, player.transform.toMat(), player.transformPrevFrame.toMat(), ObjectTypePlayer, 0);
             for (uint objIndex = 0; objIndex < gameObjects.size(); objIndex++) {
                 GameObject& obj = gameObjects[objIndex];
-                modelInstanceAddBLASInstancesToTLAS(obj.modelInstance, obj.transform.toMat(), obj.transformPrevFrame.toMat(), ObjectTypeGameObject, objIndex, 0, 0);
+                modelInstanceAddBLASInstancesToTLAS(obj.modelInstance, obj.transform.toMat(), obj.transformPrevFrame.toMat(), ObjectTypeGameObject, objIndex);
             }
             if (editor.beginDragDropGameObject) {
                 editor.dragDropGameObject.transformPrevFrame = editor.dragDropGameObject.transform;
-                modelInstanceAddBLASInstancesToTLAS(editor.dragDropGameObject.modelInstance, editor.dragDropGameObject.transform.toMat(), editor.dragDropGameObject.transformPrevFrame.toMat(), ObjectTypeGameObject, UINT_MAX, 0, 0);
+                modelInstanceAddBLASInstancesToTLAS(editor.dragDropGameObject.modelInstance, editor.dragDropGameObject.transform.toMat(), editor.dragDropGameObject.transformPrevFrame.toMat(), ObjectTypeGameObject, UINT_MAX);
             }
         }
         else if (editor.mode == EditorModeEditObject) {
             if (editor.selectedObjectType == ObjectTypePlayer) {
-                modelInstanceAddBLASInstancesToTLAS(player.modelInstance, player.transform.toMat(), player.transformPrevFrame.toMat(), ObjectTypePlayer, 0, 0, 0);
+                modelInstanceAddBLASInstancesToTLAS(player.modelInstance, player.transform.toMat(), player.transformPrevFrame.toMat(), ObjectTypePlayer, 0);
             }
             else if (editor.selectedObjectType == ObjectTypeGameObject) {
                 GameObject& obj = gameObjects[editor.selectedObjectIndex];
-                modelInstanceAddBLASInstancesToTLAS(obj.modelInstance, obj.transform.toMat(), obj.transformPrevFrame.toMat(), ObjectTypeGameObject, editor.selectedObjectIndex, 0, 0);
+                modelInstanceAddBLASInstancesToTLAS(obj.modelInstance, obj.transform.toMat(), obj.transformPrevFrame.toMat(), ObjectTypeGameObject, editor.selectedObjectIndex);
             }
         }
-        for (Sphere& sphere : debugSpheres) {
-            float s = sphere.radius;
-            XMMatrix transformMat = XMMatrixAffineTransformation(XMVectorSet(s, s, s, 0), xmVectorZero, xmQuatIdentity, sphere.center.toXMVector());
-            modelInstanceAddBLASInstancesToTLAS(modelInstanceSphere, transformMat, transformMat, ObjectTypeNone, 0, BLASInstanceFlagForcedColor, 0xff000000);
-        }
-        for (Line& line : debugLines) {
-            float3 dir = line.p1 - line.p0;
-            float s = line.radius;
-            float sY = dir.length();
-            float4 r = quaternionBetween(float3(0, 0.01f, 0), dir);
-            XMMatrix transformMat = XMMatrixAffineTransformation(XMVectorSet(s, sY, s, 0), xmVectorZero, r.toXMVector(), line.p0.toXMVector());
-            modelInstanceAddBLASInstancesToTLAS(modelInstanceCube, transformMat, transformMat, ObjectTypeNone, 0, BLASInstanceFlagForcedColor, 0xff000000);
-        }
+        // for (Sphere& sphere : debugSpheres) {
+        //     float s = sphere.radius;
+        //     XMMatrix transformMat = XMMatrixAffineTransformation(XMVectorSet(s, s, s, 0), xmVectorZero, xmQuatIdentity, sphere.center.toXMVector());
+        //     modelInstanceAddBLASInstancesToTLAS(modelInstanceSphere, transformMat, transformMat, ObjectTypeNone, 0, BLASInstanceFlagForcedColor, 0xff000000);
+        // }
+        // for (Line& line : debugLines) {
+        //     float3 dir = line.p1 - line.p0;
+        //     float s = line.radius;
+        //     float sY = dir.length();
+        //     float4 r = quaternionBetween(float3(0, 0.01f, 0), dir);
+        //     XMMatrix transformMat = XMMatrixAffineTransformation(XMVectorSet(s, sY, s, 0), xmVectorZero, r.toXMVector(), line.p0.toXMVector());
+        //     modelInstanceAddBLASInstancesToTLAS(modelInstanceCube, transformMat, transformMat, ObjectTypeNone, 0, BLASInstanceFlagForcedColor, 0xff000000);
+        // }
 #else
         modelInstanceAddBLASInstancesToTLAS(player.modelInstance, player.transform.toMat(), ObjectTypePlayer, 0, 0, 0);
         for (uint objIndex = 0; objIndex < gameObjects.size(); objIndex++) {
             GameObject& obj = gameObjects[objIndex];
             modelInstanceAddBLASInstancesToTLAS(obj.modelInstance, obj.transform.toMat(), ObjectTypeGameObject, objIndex, 0, 0);
         }
-        for (Sphere& sphere : debugSpheres) {
-            float s = sphere.radius / scaleFactor;
-            XMMatrix transformMat = XMMatrixAffineTransformation(XMVectorSet(s, s, s, 0), xmVectorZero, xmQuatIdentity, sphere.center.toXMVector());
-            modelInstanceAddBLASInstancesToTLAS(modelInstanceSphere, transformMat, ObjectTypeOthers, 0, BLASInstanceFlagForcedColor, 0xff000000);
-        }
-        for (Cylinder& cylinder : debugCylinders) {
-            float3 dir = cylinder.p1 - cylinder.p0;
-            float s = cylinder.radius / scaleFactor;
-            float sY = dir.length() / scaleFactor;
-            float4 r = quaternionBetween(float3(0, 0.001f, 0), dir);
-            XMMatrix transformMat = XMMatrixAffineTransformation(XMVectorSet(s, sY, s, 0), xmVectorZero, r.toXMVector(), cylinder.p0.toXMVector());
-            modelInstanceAddBLASInstancesToTLAS(modelInstanceCylinder, transformMat, ObjectTypeOthers, 0, BLASInstanceFlagForcedColor, 0xff000000);
-        }
+        // for (Sphere& sphere : debugSpheres) {
+        //     float s = sphere.radius / scaleFactor;
+        //     XMMatrix transformMat = XMMatrixAffineTransformation(XMVectorSet(s, s, s, 0), xmVectorZero, xmQuatIdentity, sphere.center.toXMVector());
+        //     modelInstanceAddBLASInstancesToTLAS(modelInstanceSphere, transformMat, ObjectTypeOthers, 0, BLASInstanceFlagForcedColor, 0xff000000);
+        // }
+        // for (Cylinder& cylinder : debugCylinders) {
+        //     float3 dir = cylinder.p1 - cylinder.p0;
+        //     float s = cylinder.radius / scaleFactor;
+        //     float sY = dir.length() / scaleFactor;
+        //     float4 r = quaternionBetween(float3(0, 0.001f, 0), dir);
+        //     XMMatrix transformMat = XMMatrixAffineTransformation(XMVectorSet(s, sY, s, 0), xmVectorZero, r.toXMVector(), cylinder.p0.toXMVector());
+        //     modelInstanceAddBLASInstancesToTLAS(modelInstanceCylinder, transformMat, ObjectTypeOthers, 0, BLASInstanceFlagForcedColor, 0xff000000);
+        // }
 #endif
         assert(vectorSizeof(blasInstancesDescs) < d3d.blasInstanceDescsBuffer.capacity);
         assert(vectorSizeof(blasInstancesInfos) < d3d.blasInstancesInfosBuffer.capacity);
@@ -4828,9 +4809,7 @@ void d3dRender() {
             d3d.graphicsCmdList->ResourceBarrier(1, &tlasBarrier);
         }
     }
-#ifdef EDITOR
-    if (!mouseSelectOngoing && mouseSelectX != UINT_MAX && mouseSelectY != UINT_MAX) {
-        mouseSelectOngoing = true;
+    {
         XMFloat4x4 viewMat;
         XMFloat4x4 projMat;
         XMStoreFloat4x4(&viewMat, cameraViewMatInverseTranspose);
@@ -4841,6 +4820,7 @@ void d3dRender() {
         float tanHalfFovY = 1.0f / projMat.m[1][1];
         rayDesc.dir = (float3(viewMat.m[0][0], viewMat.m[1][0], viewMat.m[2][0]) * pixelCoord.x * tanHalfFovY * aspect) - (float3(viewMat.m[0][1], viewMat.m[1][1], viewMat.m[2][1]) * pixelCoord.y * tanHalfFovY) + (float3(viewMat.m[0][2], viewMat.m[1][2], viewMat.m[2][2]));
         rayDesc.dir = rayDesc.dir.normalize();
+        if (mouseSelectX == UINT_MAX || mouseSelectY == UINT_MAX) rayDesc.max = 0.0f;
         ((CollisionQuery*)d3d.collisionQueriesBuffer.ptr)[0] = {.rayDesc = rayDesc, .instanceInclusionMask = 0xff & ~ObjectTypeNone};
 
         D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsBuffer.bufferUAV->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}};
@@ -4870,7 +4850,6 @@ void d3dRender() {
         assert(SUCCEEDED(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
         d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap.heap);
     }
-#endif
     if (pathTracer) {
         if (d3d.pathTracerAccumulationCount < d3d.pathTracerAccumulationCountMax) {
             void* rayMissIDs[] = {d3d.pathTracerRayMissID};
@@ -5015,16 +4994,16 @@ void d3dRender() {
     {
         d3dSignalFence(&d3d.renderFence);
     }
-    {
-        std::swap(d3d.graphicsCmdAllocator, d3d.graphicsCmdAllocatorPrevFrame);
-        std::swap(d3d.graphicsCmdList, d3d.graphicsCmdListPrevFrame);
-        std::swap(d3d.renderFence, d3d.renderFencePrevFrame);
-        std::swap(d3d.cbvSrvUavDescriptorHeap, d3d.cbvSrvUavDescriptorHeapPrevFrame);
-        std::swap(d3d.constantsBuffer, d3d.constantsBufferPrevFrame);
-        std::swap(d3d.renderTexture, d3d.renderTexturePrevFrame);
-        std::swap(d3d.imguiVertexBuffer, d3d.imguiVertexBufferPrevFrame);
-        std::swap(d3d.imguiIndexBuffer, d3d.imguiIndexBufferPrevFrame);
-    }
+    //{
+    //    std::swap(d3d.graphicsCmdAllocator, d3d.graphicsCmdAllocatorPrevFrame);
+    //    std::swap(d3d.graphicsCmdList, d3d.graphicsCmdListPrevFrame);
+    //    std::swap(d3d.renderFence, d3d.renderFencePrevFrame);
+    //    std::swap(d3d.cbvSrvUavDescriptorHeap, d3d.cbvSrvUavDescriptorHeapPrevFrame);
+    //    std::swap(d3d.constantsBuffer, d3d.constantsBufferPrevFrame);
+    //    std::swap(d3d.renderTexture, d3d.renderTexturePrevFrame);
+    //    std::swap(d3d.imguiVertexBuffer, d3d.imguiVertexBufferPrevFrame);
+    //    std::swap(d3d.imguiIndexBuffer, d3d.imguiIndexBufferPrevFrame);
+    //}
 }
 
 ImGuiKey virtualKeytoImGuiKey(WPARAM wparam) {

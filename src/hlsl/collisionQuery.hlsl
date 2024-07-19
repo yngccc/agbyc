@@ -13,13 +13,14 @@ RWStructuredBuffer<CollisionQueryResult> collisionQueryResults : register(u0);
 
 
 RaytracingPipelineConfig pipelineConfig = {1};
-RaytracingShaderConfig shaderConfig = {20, 8};
+RaytracingShaderConfig shaderConfig = {24, 8};
 TriangleHitGroup hitGroup = {"", "closestHit"};
 
 struct RayPayload {
     float3 distance;
     uint objectType;
     uint objectIndex;
+    uint meshNodeIndex;
 };
 
 [shader("raygeneration")]
@@ -31,7 +32,8 @@ void rayGen() {
     CollisionQueryResult result;
     result.distance = payload.distance;
     result.objectType = (ObjectType)payload.objectType;
-    result.objectIndex = payload.objectIndex,
+    result.objectIndex = payload.objectIndex;
+    result.meshNodeIndex = payload.meshNodeIndex;
     collisionQueryResults[collisionQueryIndex] = result;
 }
 
@@ -39,12 +41,14 @@ void rayGen() {
 void miss(inout RayPayload payload) {
     payload.objectType = ObjectTypeNone;
     payload.objectIndex = UINT_MAX;
+    payload.meshNodeIndex = UINT_MAX;
 }
 
 [shader("closesthit")]
 void closestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
     BLASInstanceInfo info = blasInstanceInfos[InstanceIndex()];
+    payload.distance = WorldRayDirection() * RayTCurrent();
     payload.objectType = info.objectType;
     payload.objectIndex = info.objectIndex;
-    payload.distance = WorldRayDirection() * RayTCurrent();
+    payload.meshNodeIndex = info.meshNodeIndex;
 }

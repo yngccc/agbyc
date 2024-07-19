@@ -378,6 +378,7 @@ struct BLASInstanceInfo {
     uint color;
     ObjectType objectType;
     uint objectIndex;
+    uint meshNodeIndex;
     XMFloat3x3 transformNormalMat;
     XMFloat4x3 transformMatPrevFrame;
 #else
@@ -386,6 +387,7 @@ struct BLASInstanceInfo {
     uint color;
     ObjectType objectType;
     uint objectIndex;
+    uint meshNodeIndex;
     float3x3 transformNormalMat;
     float3x4 transformMatPrevFrame;
 #endif
@@ -431,10 +433,12 @@ struct CollisionQueryResult {
     float3 distance;
     ObjectType objectType;
     uint objectIndex;
+    uint meshNodeIndex;
 #else
     float3 distance;
     ObjectType objectType;
     uint objectIndex;
+    uint meshNodeIndex;
 #endif
 };
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <cmath>
 #include <algorithm>
 #include <array>
 #include <filesystem>
@@ -95,3 +96,6 @@ using namespace physx;
 #pragma intrinsic(_umul128)
 #include "hashTable/unordered_dense.h"
 
+#include <iconfontcppheaders/iconsfontawesome6.h>
+
+#include <concurrentqueue/concurrentqueue.h>
