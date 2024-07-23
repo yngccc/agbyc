@@ -734,7 +734,7 @@ static HRESULT setDPIAwareness = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_
 static int screenW = GetSystemMetrics(SM_CXSCREEN);
 static int screenH = GetSystemMetrics(SM_CYSCREEN);
 static WindowMode windowMode = WindowModeWindowed;
-static int windowX = 0, windowY = 0;
+static int windowX, windowY;
 static int windowW = 1920, windowH = 1080;
 static int renderW = 1920, renderH = 1080;
 static DXGI_RATIONAL refreshRate = {60, 1};
@@ -2028,8 +2028,9 @@ bool projectCameraSpaceTriangleToScreen(float3 p0, float3 p1, float3 p2, float2*
 }
 
 Model* modelInitGLTF(const std::filesystem::path& filePath) {
-    const std::filesystem::path gltfFilePath = exeDir / filePath;
-    const std::filesystem::path gltfFileFolderPath = gltfFilePath.parent_path();
+    std::filesystem::path gltfFilePath = filePath;
+    if (filePath.is_relative()) { gltfFilePath = exeDir / filePath; }
+    std::filesystem::path gltfFileFolderPath = gltfFilePath.parent_path();
     cgltf_options gltfOptions = {};
     cgltf_data* gltfData = nullptr;
     cgltf_result gltfParseFileResult = cgltf_parse_file(&gltfOptions, gltfFilePath.string().c_str(), &gltfData);
@@ -2477,15 +2478,68 @@ Model* modelInit(const std::filesystem::path& filePath) {
 }
 
 #ifdef EDITOR
-void modelGenerateDDSImages(const Model* model) {
-    auto generateDDSImages = [](const Model* model) {
-        std::filesystem::path modelDirPath = (exeDir / model->filePath).parent_path();
-        std::filesystem::path nvcompressPath = exeDir / "nvcompress.exe";
-        STARTUPINFOA startUpInfo = {.cb = sizeof(startUpInfo)};
-        PROCESS_INFORMATION processInfo;
-        char cmdArguments[] = "";
-        CreateProcessA(nvcompressPath.string().c_str(), cmdArguments, nullptr, nullptr, false, 0, nullptr, nullptr, &startUpInfo, &processInfo);
-        tasks.enqueue(Task{modelDirPath.string()});
+void modelGenerateDDSImages(const Model& model) {
+    auto generateDDSImages = [](const Model& model) {
+        std::filesystem::path modelDirPath = (exeDir / model.filePath).parent_path();
+        enum TextureType {
+            TextureTypeBaseColor,
+            TextureTypeMetallicRoughness,
+            TextureTypeNormal,
+            TextureTypeEmissive,
+        };
+        auto imagesHashMap = ankerl::unordered_dense::map<cgltf_image*, TextureType>();
+        auto hashImage = [&](cgltf_texture* texture, TextureType type) {
+            if (texture && texture->image) {
+                if (auto image = imagesHashMap.find(texture->image); image == imagesHashMap.end()) {
+                    imagesHashMap.insert({texture->image, type});
+                }
+                else {
+                    if (image->second != type) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+        for (cgltf_material& gltfMaterial : std::span(model.gltfData->materials, model.gltfData->materials_count)) {
+            bool noError = true;
+            if (gltfMaterial.has_pbr_metallic_roughness) {
+                noError = hashImage(gltfMaterial.pbr_metallic_roughness.base_color_texture.texture, TextureTypeBaseColor);
+                noError = hashImage(gltfMaterial.pbr_metallic_roughness.metallic_roughness_texture.texture, TextureTypeMetallicRoughness);
+            }
+            noError = hashImage(gltfMaterial.normal_texture.texture, TextureTypeNormal);
+            noError = hashImage(gltfMaterial.emissive_texture.texture, TextureTypeEmissive);
+            if (!noError) {
+                tasks.enqueue(Task{"modelGenerateDDSImages error: hashImage (" + modelDirPath.string() + ")"});
+                return;
+            }
+        }
+        assert(SetCurrentDirectory(exeDir.c_str()));
+        for (auto& image : imagesHashMap) {
+            std::string cmdArguments = "";
+            switch (image.second) {
+                case TextureTypeBaseColor: cmdArguments += "-color -alpha -mipfilter kaiser -bc7 "; break;
+                case TextureTypeMetallicRoughness: cmdArguments += "-color -noalpha -no-mip-gamma-correct -bc7 "; break;
+                case TextureTypeNormal: cmdArguments += "-normal -no-mip-gamma-correct -bc5 "; break;
+                case TextureTypeEmissive: cmdArguments += "-color -noalpha -mipfilter kaiser -bc7 "; break;
+                default: assert(false); break;
+            }
+            std::filesystem::path imageFilePath = image.first->uri;
+            std::filesystem::path imageFilePathFull = modelDirPath / imageFilePath;
+            std::filesystem::path imageFilePathDDS = imageFilePath.replace_extension(".dds");
+            std::filesystem::path imageFilePathDDSFull = modelDirPath / imageFilePathDDS;
+            cmdArguments = std::format("{} \"{}\" \"{}\"", cmdArguments, imageFilePathFull.string(), imageFilePathDDSFull.string());
+            PROCESS_INFORMATION processInfo = {};
+            STARTUPINFOA startUpInfo = {.cb = sizeof(startUpInfo)};
+            if (CreateProcessA("nvcompress.exe", const_cast<char *>(cmdArguments.c_str()), nullptr, nullptr, false, CREATE_NO_WINDOW, nullptr, nullptr, &startUpInfo, &processInfo)) {
+                WaitForSingleObject(processInfo.hProcess, INFINITE);
+            }
+            else {
+                tasks.enqueue(Task{"modelGenerateDDSImages error: CreateProcessA (" + modelDirPath.string() + ")"});
+                return;
+            }
+        }
+        tasks.enqueue(Task{"modelGenerateDDSImages finished: (" + modelDirPath.string() + ")"});
     };
     std::thread generateDDSImagesThread(generateDDSImages, model);
     generateDDSImagesThread.detach();
@@ -3034,11 +3088,13 @@ void worldInit() {
         const char* simpleModelFiles[] = {"assets/models/sphere/gltf/sphere.gltf", "assets/models/cube/gltf/cube.gltf", "assets/models/cylinder/gltf/cylinder.gltf"};
         for (const char* modelFile : simpleModelFiles) {
             Model* model = modelInit(modelFile);
+            assert(model);
         }
         for (ryml::ConstNodeRef modelsYaml = assetsYaml["models"]; ryml::ConstNodeRef modelYaml : modelsYaml) {
             std::string modelFile;
             modelYaml["file"] >> modelFile;
             Model* model = modelInit(modelFile);
+            assert(model);
         }
     }
     {
@@ -4013,16 +4069,12 @@ void editorPropertiesWindow() {
 }
 
 void editorAssetsWindow() {
-    bool newModelPopup = false;
     if (ImGui::Begin("Assets")) {
         if (ImGui::TreeNode("Models")) {
-            if (ImGui::Button(ICON_FA_PLUS)) {
-                newModelPopup = true;
-            }
             for (uint modelIndex = 0; modelIndex < models.size(); modelIndex++) {
                 ImGui::PushID(modelIndex);
-                Model* model = &models[modelIndex];
-                if (ImGui::Selectable(model->filePath.string().c_str(), editor.selectedModelIndex == modelIndex)) {
+                Model& model = models[modelIndex];
+                if (ImGui::Selectable(model.filePath.string().c_str(), editor.selectedModelIndex == modelIndex)) {
                     editor.selectedModelIndex = modelIndex;
                 }
                 if (ImGui::BeginPopupContextItem()) {
@@ -4042,56 +4094,7 @@ void editorAssetsWindow() {
             }
             ImGui::TreePop();
         }
-        if (newModelPopup) {
-            ImGui::OpenPopup("NewModelPopup");
-        }
-        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-        if (ImGui::BeginPopupModal("NewModelPopup", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            static char filePath[256] = {};
-            ImGui::InputText("File", filePath, sizeof(filePath)), ImGui::SameLine();
-            if (ImGui::Button("Browse")) {
-                OPENFILENAMEA openfileName = {.lStructSize = sizeof(OPENFILENAMEA), .hwndOwner = window.hwnd, .lpstrFile = filePath, .nMaxFile = sizeof(filePath)};
-                GetOpenFileNameA(&openfileName);
-            }
-            if (ImGui::Button("Okay") || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-        bool skyBoxesTreeOpen = ImGui::TreeNode("Skyboxes");
-        bool newSkyboxPopup = false;
-        if (ImGui::BeginPopupContextItem()) {
-            if (ImGui::Button("New Skybox")) {
-                newSkyboxPopup = true;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-        if (newSkyboxPopup) {
-            ImGui::OpenPopup("NewSkyboxPopup");
-        }
-        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-        if (ImGui::BeginPopupModal("NewSkyboxPopup", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            static char filePath[256] = {};
-            ImGui::InputText("File", filePath, sizeof(filePath)), ImGui::SameLine();
-            if (ImGui::Button("Browse")) {
-                OPENFILENAMEA openfileName = {.lStructSize = sizeof(OPENFILENAMEA), .hwndOwner = window.hwnd, .lpstrFile = filePath, .nMaxFile = sizeof(filePath)};
-                GetOpenFileNameA(&openfileName);
-            }
-            if (ImGui::Button("Okay") || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-        if (skyBoxesTreeOpen) {
+        if (ImGui::TreeNode("Skyboxes")) {
             for (Skybox& skybox : skyboxes) {
                 ImGui::Text("%s\n", skybox.hdriTextureFilePath.string().c_str());
             }

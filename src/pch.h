@@ -92,8 +92,8 @@ using DirectX::XMQuaternionRotationRollPitchYaw;
 
 using namespace physx;
 
-#include <intrin.h>
-#pragma intrinsic(_umul128)
+//#include <intrin.h>
+//#pragma intrinsic(_umul128)
 #include "hashTable/unordered_dense.h"
 
 #include <iconfontcppheaders/iconsfontawesome6.h>
