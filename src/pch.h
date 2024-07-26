@@ -37,7 +37,6 @@
 #include <d2d1_3.h>
 #include <pix3.h>
 #include <xinput.h>
-#include <gameInput.h>
 
 #define _XM_SSE4_INTRINSICS_
 #include <directxmath.h>

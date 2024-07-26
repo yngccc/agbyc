@@ -76,7 +76,7 @@ float3 bt709To2020(float3 rgb) {
     const float3x3 mat = {
         0.6274f, 0.3293f, 0.0433f,
 		0.0691f, 0.9195f, 0.0114f,
-		0.0164f, 0.0880f, 0.8956f
+		0.0164f, 0.0880f, 0.8956f,
     };
     return mul(mat, rgb);
 }
@@ -89,8 +89,13 @@ float luminance_bt2020(float3 rgb) {
     return dot(rgb, float3(0.2627f, 0.6780f, 0.0593f));
 }
 
-float3 uintToColor(uint color) {
-    return float3(color & 0xff000000, color & 0x00ff0000, color & 0x0000ff00);;
+float4 uintToColor(uint color) {
+    return float4(
+        ((color >> 24) & 0xff) / 255.0f,
+        ((color >> 16) & 0xff) / 255.0f,
+        ((color >> 8) & 0xff) / 255.0f,
+        (color & 0xff) / 255.0f
+   );
 }
 
 float3 hashIntToColor(int i) {
@@ -296,28 +301,6 @@ struct Joint {
 #endif
 };
 
-struct Material {
-#ifdef __cplusplus
-    float3 emissive;
-    uint32 emissiveTextureIndex;
-    float3 baseColor;
-    uint32 baseColorTextureIndex;
-    float metallic;
-    float roughness;
-    uint32 metallicRoughnessTextureIndex;
-    uint32 normalTextureIndex;
-#else
-    float3 emissive;
-    uint emissiveTextureIndex;
-    float3 baseColor;
-    uint baseColorTextureIndex;
-    float metallic;
-    float roughness;
-    uint metallicRoughnessTextureIndex;
-    uint normalTextureIndex;
-#endif
-};
-
 enum LightType : uint {
     LightTypeDirectional,
     LightTypePoint,
@@ -347,6 +330,7 @@ struct RenderInfo {
     XMMatrix cameraViewProjectMat;
     XMMatrix cameraViewProjectMatInverse;
     XMMatrix cameraViewProjectMatPrevFrame;
+    float fovy;
     uint pathTracerAccumulationFrameCount;
 #else
     float4x4 cameraViewMat;
@@ -355,6 +339,7 @@ struct RenderInfo {
     float4x4 cameraViewProjectMat;
     float4x4 cameraViewProjectMatInverse;
     float4x4 cameraViewProjectMatPrevFrame;
+    float fovy;
     uint pathTracerAccumulationFrameCount;
 #endif
 };
@@ -393,19 +378,29 @@ struct BLASInstanceInfo {
 #endif
 };
 
+enum AlphaMode : uint {
+    AlphaModeOpaque,
+    AlphaModeMask,
+    AlphaModeBlend,
+};
+
 struct BLASGeometryInfo {
 #ifdef __cplusplus
-    uint descriptorsHeapOffset;
-    float3 emissiveFactor;
-    float metallicFactor;
-    float3 baseColorFactor;
-    float roughnessFactor;
+    uint descriptorsHeapOffset = 0;
+    float3 emissiveFactor = {0, 0, 0};
+    float metallicFactor = 0;
+    float4 baseColorFactor = {0.8f, 0.8f, 0.8f, 1.0f};
+    float roughnessFactor = 1;
+    AlphaMode alphaMode = AlphaModeOpaque;
+    float alphaCutOff = 0.5f;
 #else
     uint descriptorsHeapOffset;
     float3 emissiveFactor;
     float metallicFactor;
-    float3 baseColorFactor;
+    float4 baseColorFactor;
     float roughnessFactor;
+    AlphaMode alphaMode;
+    float alphaCutOff;
 #endif
 };
 

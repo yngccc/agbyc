@@ -71,16 +71,16 @@ void rayGen() {
         
         BLASGeometryInfo blasGeometryInfo = blasGeometriesInfos[NonUniformResourceIndex(payload.blasGeometryInfoIndex)];
         Texture2D<float3> emissiveTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 2)];
-        Texture2D<float3> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 3)];
+        Texture2D<float4> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 3)];
         Texture2D<float3> metallicRoughnessTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 4)];
         Texture2D<float3> normalTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 5)];
         
-        float3 baseColor = baseColorTexture.SampleLevel(textureSampler, payload.uv, 0) * blasGeometryInfo.baseColorFactor;
+        float4 baseColor = baseColorTexture.SampleLevel(textureSampler, payload.uv, 0) * blasGeometryInfo.baseColorFactor;
         float4 rotation = getRotationFromZAxis(shadingNormal);
         float3 sampleDirection = sampleHemisphereCosineWeighted(float2(rand(rngState), rand(rngState)));
         sampleDirection = rotatePoint(rotation, sampleDirection);
         if (dot(geometryNormal, sampleDirection) <= 0.0f) break;
-        throughput *= baseColor;
+        throughput *= baseColor.xyz;
         ray.Origin = offsetRay(payload.position, geometryNormal);
         ray.Direction = sampleDirection;
     }

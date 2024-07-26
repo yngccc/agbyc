@@ -5,7 +5,7 @@ globalRootSig = {
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED),"
     "CBV(b0), SRV(t0), SRV(t1), SRV(t2),"
     "DescriptorTable(UAV(u0), UAV(u1), UAV(u2), SRV(t3)),"
-	"StaticSampler(s0, filter = FILTER_ANISOTROPIC, addressU = TEXTURE_ADDRESS_MIRROR, addressV = TEXTURE_ADDRESS_MIRROR, mipLODBias = 0, maxAnisotropy = 16)"
+	"StaticSampler(s0, filter = FILTER_ANISOTROPIC, addressU = TEXTURE_ADDRESS_MIRROR, addressV = TEXTURE_ADDRESS_MIRROR, maxAnisotropy = 16, mipLODBias = 0)"
 };
 
 RWTexture2D<float3> renderTexture : register(u0);
@@ -64,7 +64,7 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
     StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset)];
     StructuredBuffer<uint> indices = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 1)];
     Texture2D<float3> emissiveTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 2)];
-    Texture2D<float3> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 3)];
+    Texture2D<float4> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 3)];
     Texture2D<float3> metallicRoughnessTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 4)];
     Texture2D<float3> normalTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 5)];
 
@@ -100,16 +100,15 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
     uint baseColorTextureWidth, baseColorTextureHeight;
     baseColorTexture.GetDimensions(baseColorTextureWidth, baseColorTextureHeight);
     float2 texGrad1, texGrad2;
-    float fovy = RADIAN(50.0);
-    float alpha = atan(2.0 * tan(fovy * 0.5) / (float) baseColorTextureHeight);
+    float alpha = atan(2.0 * tan(renderInfo.fovy * 0.5) / (float) baseColorTextureHeight);
     float radius = RayTCurrent() * tan(alpha);
     anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGrad1, texGrad2);
-    float3 baseColor = baseColorTexture.SampleGrad(textureSampler, uv, texGrad1, texGrad2);
+    float4 baseColor = baseColorTexture.SampleGrad(textureSampler, uv, texGrad1, texGrad2);
     
     uint normalTextureWidth, normalTextureHeight;
     normalTexture.GetDimensions(normalTextureWidth, normalTextureHeight);
     if (normalTextureHeight != baseColorTextureHeight) {
-        float alpha = atan(2.0f * tan(fovy * 0.5) / (float) normalTextureHeight);
+        float alpha = atan(2.0f * tan(renderInfo.fovy * 0.5) / (float) normalTextureHeight);
         float radius = RayTCurrent() * tan(alpha);
         anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGrad1, texGrad2);
     }
@@ -118,13 +117,14 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
     float3x3 tbnMat = transpose(float3x3(tangent, bitangent, normal));
     normal = normalize(mul(tbnMat, normalMapNormal));
     
-    float3 color;
+    float4 color;
     if (blasInstanceInfo.flags & BLASInstanceFlagForcedColor) {
         color = uintToColor(blasInstanceInfo.color);
     }
     else {
         float3 lightDir = normalize(float3(1, 1, 1));
         float ndotl = saturate(dot(lightDir, normal));
+        ndotl = 1;
         color = baseColor * blasGeometryInfo.baseColorFactor * ndotl;
         //color = normal;
         //color = normalMapXYZ;
@@ -134,7 +134,7 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
             color = uintToColor(blasInstanceInfo.color);
         }
     }
-    payload.color += color;
+    payload.color += color.rgb;
     
     float4 ndc = mul(renderInfo.cameraViewProjectMat, float4(position, 1));
     payload.depth = ndc.z / ndc.w;
@@ -159,28 +159,54 @@ void rayAnyHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInterse
 
     StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset)];
     StructuredBuffer<uint> indices = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 1)];
-    Texture2D<float3> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 3)];
+    Texture2D<float4> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 3)];
 
     uint triangleIndex = PrimitiveIndex() * 3;
     Vertex v0 = vertices[indices[NonUniformResourceIndex(triangleIndex)]];
     Vertex v1 = vertices[indices[NonUniformResourceIndex(triangleIndex + 1)]];
     Vertex v2 = vertices[indices[NonUniformResourceIndex(triangleIndex + 2)]];
+    float3 p0 = mul(ObjectToWorld3x4(), float4(v0.position, 1));
+    float3 p1 = mul(ObjectToWorld3x4(), float4(v1.position, 1));
+    float3 p2 = mul(ObjectToWorld3x4(), float4(v2.position, 1));
+    float3 position = barycentricsLerp(trigAttribs.barycentrics, p0, p1, p2);
+    float3 normal = barycentricsLerp(trigAttribs.barycentrics, v0.normal, v1.normal, v2.normal);
+    normal = normalize(mul(blasInstanceInfo.transformNormalMat, normal));
     float2 uv = barycentricsLerp(trigAttribs.barycentrics, v0.uv, v1.uv, v2.uv);
     
-    float3 color;
+    float4 color;
     if (blasInstanceInfo.flags & BLASInstanceFlagForcedColor) {
         color = uintToColor(blasInstanceInfo.color);
     }
     else {
-        color = baseColorTexture.SampleLevel(textureSampler, uv, 0) * blasGeometryInfo.baseColorFactor;
+        uint baseColorTextureWidth, baseColorTextureHeight;
+        baseColorTexture.GetDimensions(baseColorTextureWidth, baseColorTextureHeight);
+        float2 texGrad1, texGrad2;
+        float alpha = atan(2.0 * tan(renderInfo.fovy * 0.5) / (float) baseColorTextureHeight);
+        float radius = RayTCurrent() * tan(alpha);
+        anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGrad1, texGrad2);
+        color = baseColorTexture.SampleGrad(textureSampler, uv, texGrad1, texGrad2) * blasGeometryInfo.baseColorFactor;
     }
     if (blasInstanceInfo.flags & BLASInstanceFlagHighlightTriangleEdges) {
         if (barycentricsOnEdge(trigAttribs.barycentrics, 0.03)) {
-            color = float3(0, 1, 0);
+            color = float4(0, 1, 0, 1);
         }
     }
-    payload.color += color * 0.25;
-    IgnoreHit();
+    if (blasGeometryInfo.alphaMode == AlphaModeOpaque) {
+        payload.color += color.rgb * 0.25;
+        IgnoreHit();
+    }
+    else if (blasGeometryInfo.alphaMode == AlphaModeMask) {
+        if (color.a < blasGeometryInfo.alphaCutOff) {
+            IgnoreHit();
+        }
+        else {
+            return;
+            //AcceptHitAndEndSearch();
+        }
+    }
+    else if (blasGeometryInfo.alphaMode == AlphaModeBlend) {
+        //AcceptHitAndEndSearch();
+    }
 }
 
 [shader("miss")]
