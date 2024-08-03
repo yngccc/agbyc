@@ -711,16 +711,16 @@ struct Editor {
 
 static std::filesystem::path exeDir = [] {
     wchar_t buf[512];
-    DWORD n = GetModuleFileNameW(nullptr, buf, sizeof(buf) / sizeof(wchar_t));
-    assert(n < (sizeof(buf) / sizeof(wchar_t)));
+    DWORD moduleFileNameLen = GetModuleFileNameW(nullptr, buf, sizeof(buf) / sizeof(wchar_t));
+    assert(moduleFileNameLen < (sizeof(buf) / sizeof(wchar_t)));
     std::filesystem::path path(buf);
     return path.parent_path();
 }();
 
 static std::filesystem::path saveDir = [] {
+    HRESULT hr;
     wchar_t* documentFolderPathStr;
-    HRESULT result = SHGetKnownFolderPath(FOLDERID_SavedGames, KF_FLAG_DEFAULT, nullptr, &documentFolderPathStr);
-    assert(result == S_OK);
+    assert(SUCCEEDED(hr = SHGetKnownFolderPath(FOLDERID_SavedGames, KF_FLAG_DEFAULT, nullptr, &documentFolderPathStr)));
     std::filesystem::path documentFolderPath(documentFolderPathStr);
     CoTaskMemFree(documentFolderPathStr);
     documentFolderPath = documentFolderPath / "AGBY_GAME_SAVES";
@@ -1014,7 +1014,8 @@ std::vector<uint8> fileReadBytes(const std::filesystem::path& path) {
     assert(size != INVALID_FILE_SIZE);
     std::vector<uint8> data(size);
     DWORD byteRead;
-    assert(ReadFile(hwnd, data.data(), size, &byteRead, nullptr));
+    bool readFileSucceed = ReadFile(hwnd, data.data(), size, &byteRead, nullptr);
+    assert(readFileSucceed);
     assert(byteRead == size);
     CloseHandle(hwnd);
     return data;
@@ -1101,10 +1102,9 @@ void windowInit() {
     windowClass.hCursor = LoadCursor(nullptr, IDC_ARROW);
     windowClass.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     windowClass.lpszClassName = "windowClassName";
-    assert(RegisterClassA(&windowClass));
+    assert(RegisterClassA(&windowClass) != 0);
 
-    window.hwnd = CreateWindowExA(0, windowClass.lpszClassName, nullptr, WS_OVERLAPPEDWINDOW, windowX, windowY, windowW, windowH, nullptr, nullptr, instanceHandle, nullptr);
-    assert(window.hwnd);
+    assert(window.hwnd = CreateWindowExA(0, windowClass.lpszClassName, nullptr, WS_OVERLAPPEDWINDOW, windowX, windowY, windowW, windowH, nullptr, nullptr, instanceHandle, nullptr));
 
     windowUpdateSizes();
 
@@ -1375,12 +1375,14 @@ void d3dMessageCallback(D3D12_MESSAGE_CATEGORY category, D3D12_MESSAGE_SEVERITY 
 }
 
 void d3dGraphicsCmdListReset() {
-    assert(SUCCEEDED(d3d.graphicsCmdAllocator->Reset()));
-    assert(SUCCEEDED(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
+    HRESULT hr;
+    assert(SUCCEEDED(hr = d3d.graphicsCmdAllocator->Reset()));
+    assert(SUCCEEDED(hr = d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
 }
 
 void d3dGraphicsCmdListExecute() {
-    assert(SUCCEEDED(d3d.graphicsCmdList->Close()));
+    HRESULT hr;
+    assert(SUCCEEDED(hr = d3d.graphicsCmdList->Close()));
     d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
 }
 
@@ -1391,7 +1393,8 @@ void d3dSignalFence(D3DFence* fence) {
 
 void d3dWaitFence(D3DFence* fence) {
     if (fence->fence->GetCompletedValue() < fence->value) {
-        assert(SUCCEEDED(fence->fence->SetEventOnCompletion(fence->value, fence->event)));
+        HRESULT hr;
+        assert(SUCCEEDED(hr = fence->fence->SetEventOnCompletion(fence->value, fence->event)));
         assert(WaitForSingleObjectEx(fence->event, INFINITE, false) == WAIT_OBJECT_0);
     }
 }
@@ -1402,8 +1405,9 @@ bool d3dTryWaitFence(D3DFence* fence) {
 }
 
 D3D12MA::Allocation* d3dCreateImage(const D3D12MA::ALLOCATION_DESC& allocDesc, D3D12_CLEAR_VALUE* clearValue, const D3D12_RESOURCE_DESC& resourceDesc, D3D12_SUBRESOURCE_DATA* imageMipsData, ID3D12GraphicsCommandList* cmdList, const wchar_t* name, D3D12_RESOURCE_STATES stateAfter) {
+    HRESULT hr;
     D3D12MA::Allocation* image;
-    assert(SUCCEEDED(d3d.allocator->CreateResource(&allocDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, clearValue, &image, {}, nullptr)));
+    assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, clearValue, &image, {}, nullptr)));
     image->GetResource()->SetName(name);
     if (imageMipsData) {
         d3d.stagingBuffer.offset = align(d3d.stagingBuffer.offset, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
@@ -1416,7 +1420,8 @@ D3D12MA::Allocation* d3dCreateImage(const D3D12MA::ALLOCATION_DESC& allocDesc, D
         for (uint mipIndex = 0; mipIndex < resourceDesc.MipLevels; mipIndex++) {
             mipFootprints[mipIndex].Offset += d3d.stagingBuffer.offset;
         }
-        assert(UpdateSubresources(cmdList, image->GetResource(), d3d.stagingBuffer.buffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, imageMipsData) == requiredSize);
+        uint64 size;
+        assert((size = UpdateSubresources(cmdList, image->GetResource(), d3d.stagingBuffer.buffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, imageMipsData)) == requiredSize);
         d3d.stagingBuffer.offset += requiredSize;
     }
     if (stateAfter != D3D12_RESOURCE_STATE_COPY_DEST) {
@@ -1430,13 +1435,14 @@ D3D12MA::Allocation* d3dCreateImage(const D3D12MA::ALLOCATION_DESC& allocDesc, D
 }
 
 D3D12MA::Allocation* d3dCreateImageSTB(const std::filesystem::path& ddsFilePath, const wchar_t* name, D3D12_RESOURCE_STATES stateAfter) {
+    HRESULT hr;
     int width, height, channelCount;
-    unsigned char* imageData = stbi_load(ddsFilePath.string().c_str(), &width, &height, &channelCount, 4);
-    assert(imageData);
+    unsigned char* imageData;
+    assert(imageData = stbi_load(ddsFilePath.string().c_str(), &width, &height, &channelCount, 4));
     D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
     D3D12_RESOURCE_DESC resourceDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = (uint)width, .Height = (uint)height, .DepthOrArraySize = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {.Count = 1}};
     D3D12MA::Allocation* image;
-    assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image, {}, nullptr)));
+    assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image, {}, nullptr)));
     image->GetResource()->SetName(name);
     d3d.stagingBuffer.offset = align(d3d.stagingBuffer.offset, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT mipFootprint;
@@ -1453,7 +1459,8 @@ D3D12MA::Allocation* d3dCreateImageSTB(const std::filesystem::path& ddsFilePath,
     }
     mipFootprint.Offset += d3d.stagingBuffer.offset;
     D3D12_SUBRESOURCE_DATA srcData = {.pData = imageData, .RowPitch = width * 4, .SlicePitch = width * height * 4};
-    assert(UpdateSubresources(d3d.graphicsCmdList, image->GetResource(), d3d.stagingBuffer.buffer->GetResource(), 0, 1, requiredSize, &mipFootprint, &rowCount, &rowSize, &srcData) == requiredSize);
+    uint64 size;
+    assert((size = UpdateSubresources(d3d.graphicsCmdList, image->GetResource(), d3d.stagingBuffer.buffer->GetResource(), 0, 1, requiredSize, &mipFootprint, &rowCount, &rowSize, &srcData)) == requiredSize);
     d3d.stagingBuffer.offset += requiredSize;
     assert(d3d.stagingBuffer.offset < d3d.stagingBuffer.capacity);
     stbi_image_free(imageData);
@@ -1463,8 +1470,9 @@ D3D12MA::Allocation* d3dCreateImageSTB(const std::filesystem::path& ddsFilePath,
 }
 
 D3D12MA::Allocation* d3dCreateImageDDS(const std::filesystem::path& ddsFilePath, const wchar_t* name, D3D12_RESOURCE_STATES stateAfter) {
+    HRESULT hr;
     DirectX::ScratchImage scratchImage;
-    assert(SUCCEEDED(LoadFromDDSFile(ddsFilePath.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, scratchImage)));
+    assert(SUCCEEDED(hr = LoadFromDDSFile(ddsFilePath.c_str(), DirectX::DDS_FLAGS_NONE, nullptr, scratchImage)));
     assert(scratchImage.GetImageCount() == scratchImage.GetMetadata().mipLevels);
     const DirectX::TexMetadata& scratchImageInfo = scratchImage.GetMetadata();
     DXGI_FORMAT format = scratchImageInfo.format;
@@ -1479,7 +1487,7 @@ D3D12MA::Allocation* d3dCreateImageDDS(const std::filesystem::path& ddsFilePath,
         .SampleDesc = {.Count = 1},
     };
     D3D12MA::Allocation* image;
-    assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image, {}, nullptr)));
+    assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &image, {}, nullptr)));
     image->GetResource()->SetName(name);
     d3d.stagingBuffer.offset = align(d3d.stagingBuffer.offset, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT mipFootprints[16];
@@ -1500,7 +1508,8 @@ D3D12MA::Allocation* d3dCreateImageDDS(const std::filesystem::path& ddsFilePath,
         const DirectX::Image& image = scratchImage.GetImages()[mipIndex];
         srcData[mipIndex] = {.pData = image.pixels, .RowPitch = (int64)image.rowPitch, .SlicePitch = (int64)image.slicePitch};
     }
-    assert(UpdateSubresources(d3d.graphicsCmdList, image->GetResource(), d3d.stagingBuffer.buffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, srcData) == requiredSize);
+    uint64 size;
+    assert((size = UpdateSubresources(d3d.graphicsCmdList, image->GetResource(), d3d.stagingBuffer.buffer->GetResource(), 0, resourceDesc.MipLevels, requiredSize, mipFootprints, rowCounts, rowSizes, srcData)) == requiredSize);
     d3d.stagingBuffer.offset += requiredSize;
     assert(d3d.stagingBuffer.offset < d3d.stagingBuffer.capacity);
     D3D12_RESOURCE_BARRIER transition = {
@@ -1512,58 +1521,58 @@ D3D12MA::Allocation* d3dCreateImageDDS(const std::filesystem::path& ddsFilePath,
 }
 
 void d3dInit() {
+    HRESULT hr;
     bool debug = commandLineContain(L"d3d_debug");
     uint factoryFlags = 0;
     if (debug) {
         factoryFlags = factoryFlags | DXGI_CREATE_FACTORY_DEBUG;
         ID3D12Debug1* debug;
-        assert(SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))));
+        assert(SUCCEEDED(hr = D3D12GetDebugInterface(IID_PPV_ARGS(&debug))));
         debug->EnableDebugLayer();
         // debug->SetEnableGPUBasedValidation(true);
         // debug->SetEnableSynchronizedCommandQueueValidation(true);
     }
-
-    assert(SUCCEEDED(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&d3d.dxgiFactory))));
-    assert(SUCCEEDED(d3d.dxgiFactory->EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&d3d.dxgiAdapter))));
+    assert(SUCCEEDED(hr = CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&d3d.dxgiFactory))));
+    assert(SUCCEEDED(hr = d3d.dxgiFactory->EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&d3d.dxgiAdapter))));
     DXGI_ADAPTER_DESC dxgiAdapterDesc = {};
-    assert(SUCCEEDED(d3d.dxgiAdapter->GetDesc(&dxgiAdapterDesc)));
-    assert(SUCCEEDED(D3D12CreateDevice(d3d.dxgiAdapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&d3d.device))));
+    assert(SUCCEEDED(hr = d3d.dxgiAdapter->GetDesc(&dxgiAdapterDesc)));
+    assert(SUCCEEDED(hr = D3D12CreateDevice(d3d.dxgiAdapter, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&d3d.device))));
     if (debug) {
         ID3D12InfoQueue1* infoQueue;
         DWORD callbackCookie;
-        assert(SUCCEEDED(d3d.device->QueryInterface(IID_PPV_ARGS(&infoQueue))));
-        assert(SUCCEEDED(infoQueue->RegisterMessageCallback(d3dMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &callbackCookie)));
+        assert(SUCCEEDED(hr = d3d.device->QueryInterface(IID_PPV_ARGS(&infoQueue))));
+        assert(SUCCEEDED(hr = infoQueue->RegisterMessageCallback(d3dMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &callbackCookie)));
     }
     IDXGIOutput6* dxgiOutput;
     DXGI_OUTPUT_DESC1 dxgiOutputDesc;
-    assert(SUCCEEDED(d3d.dxgiAdapter->EnumOutputs(0, (IDXGIOutput**)&dxgiOutput)));
-    assert(SUCCEEDED(dxgiOutput->GetDesc1(&dxgiOutputDesc)));
+    assert(SUCCEEDED(hr = d3d.dxgiAdapter->EnumOutputs(0, (IDXGIOutput**)&dxgiOutput)));
+    assert(SUCCEEDED(hr = dxgiOutput->GetDesc1(&dxgiOutputDesc)));
     dxgiOutput->Release();
     hdr = (dxgiOutputDesc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
     {
         D3D12_FEATURE_DATA_D3D12_OPTIONS resourceBindingTier = {};
         D3D12_FEATURE_DATA_SHADER_MODEL shaderModel = {D3D_SHADER_MODEL_6_6};
         D3D12_FEATURE_DATA_D3D12_OPTIONS5 rayTracing = {};
-        assert(SUCCEEDED(d3d.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &resourceBindingTier, sizeof(resourceBindingTier))));
-        assert(SUCCEEDED(d3d.device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &shaderModel, sizeof(shaderModel))));
-        assert(SUCCEEDED(d3d.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &rayTracing, sizeof(rayTracing))));
+        assert(SUCCEEDED(hr = d3d.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &resourceBindingTier, sizeof(resourceBindingTier))));
+        assert(SUCCEEDED(hr = d3d.device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &shaderModel, sizeof(shaderModel))));
+        assert(SUCCEEDED(hr = d3d.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &rayTracing, sizeof(rayTracing))));
         assert(resourceBindingTier.ResourceBindingTier == D3D12_RESOURCE_BINDING_TIER_3);
         assert(shaderModel.HighestShaderModel == D3D_SHADER_MODEL_6_6);
         assert(rayTracing.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1);
     }
     {
         D3D12_COMMAND_QUEUE_DESC graphicsQueueDesc = {.Type = D3D12_COMMAND_LIST_TYPE_DIRECT, .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE};
-        assert(SUCCEEDED(d3d.device->CreateCommandQueue(&graphicsQueueDesc, IID_PPV_ARGS(&d3d.graphicsQueue))));
-        assert(SUCCEEDED(d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&d3d.graphicsCmdAllocator))));
-        assert(SUCCEEDED(d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&d3d.graphicsCmdAllocatorPrevFrame))));
-        assert(SUCCEEDED(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.graphicsCmdAllocator, nullptr, IID_PPV_ARGS(&d3d.graphicsCmdList))));
-        assert(SUCCEEDED(d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.graphicsCmdAllocatorPrevFrame, nullptr, IID_PPV_ARGS(&d3d.graphicsCmdListPrevFrame))));
-        assert(SUCCEEDED(d3d.graphicsCmdList->Close()));
-        assert(SUCCEEDED(d3d.graphicsCmdListPrevFrame->Close()));
-        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.transferFence.fence))));
-        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.renderFence.fence))));
-        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.renderFencePrevFrame.fence))));
-        assert(SUCCEEDED(d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.collisionQueriesFence.fence))));
+        assert(SUCCEEDED(hr = d3d.device->CreateCommandQueue(&graphicsQueueDesc, IID_PPV_ARGS(&d3d.graphicsQueue))));
+        assert(SUCCEEDED(hr = d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&d3d.graphicsCmdAllocator))));
+        assert(SUCCEEDED(hr = d3d.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&d3d.graphicsCmdAllocatorPrevFrame))));
+        assert(SUCCEEDED(hr = d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.graphicsCmdAllocator, nullptr, IID_PPV_ARGS(&d3d.graphicsCmdList))));
+        assert(SUCCEEDED(hr = d3d.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, d3d.graphicsCmdAllocatorPrevFrame, nullptr, IID_PPV_ARGS(&d3d.graphicsCmdListPrevFrame))));
+        assert(SUCCEEDED(hr = d3d.graphicsCmdList->Close()));
+        assert(SUCCEEDED(hr = d3d.graphicsCmdListPrevFrame->Close()));
+        assert(SUCCEEDED(hr = d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.transferFence.fence))));
+        assert(SUCCEEDED(hr = d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.renderFence.fence))));
+        assert(SUCCEEDED(hr = d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.renderFencePrevFrame.fence))));
+        assert(SUCCEEDED(hr = d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.collisionQueriesFence.fence))));
         assert(d3d.transferFence.event = CreateEventA(nullptr, false, false, nullptr));
         assert(d3d.renderFence.event = CreateEventA(nullptr, false, false, nullptr));
         assert(d3d.renderFencePrevFrame.event = CreateEventA(nullptr, false, false, nullptr));
@@ -1581,13 +1590,14 @@ void d3dInit() {
             .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
             .AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED,
         };
-        assert(SUCCEEDED(d3d.dxgiFactory->CreateSwapChainForHwnd(d3d.graphicsQueue, window.hwnd, &swapChainDesc, nullptr, nullptr, (IDXGISwapChain1**)&d3d.swapChain)));
+        assert(SUCCEEDED(hr = d3d.dxgiFactory->CreateSwapChainForHwnd(d3d.graphicsQueue, window.hwnd, &swapChainDesc, nullptr, nullptr, (IDXGISwapChain1**)&d3d.swapChain)));
 
         DXGI_COLOR_SPACE_TYPE colorSpace = hdr ? DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
-        assert(SUCCEEDED(d3d.swapChain->SetColorSpace1(colorSpace)));
+        assert(SUCCEEDED(hr = d3d.swapChain->SetColorSpace1(colorSpace)));
+
         for (uint imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
             ID3D12Resource** image = &d3d.swapChainImages[imageIndex];
-            assert(SUCCEEDED(d3d.swapChain->GetBuffer(imageIndex, IID_PPV_ARGS(image))));
+            assert(SUCCEEDED(hr = d3d.swapChain->GetBuffer(imageIndex, IID_PPV_ARGS(image))));
             (*image)->SetName(std::format(L"swapChain{}", imageIndex).c_str());
         }
         d3d.dxgiFactory->MakeWindowAssociation(window.hwnd, DXGI_MWA_NO_WINDOW_CHANGES); // disable alt-enter
@@ -1597,7 +1607,8 @@ void d3dInit() {
         d3d.rtvDescriptorHeap.capacity = 16;
         d3d.rtvDescriptorHeap.descriptorSize = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         D3D12_DESCRIPTOR_HEAP_DESC rtvDescriptorHeapDesc = {.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV, .NumDescriptors = d3d.rtvDescriptorHeap.capacity, .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE};
-        assert(SUCCEEDED(d3d.device->CreateDescriptorHeap(&rtvDescriptorHeapDesc, IID_PPV_ARGS(&d3d.rtvDescriptorHeap.heap))));
+        assert(SUCCEEDED(hr = d3d.device->CreateDescriptorHeap(&rtvDescriptorHeapDesc, IID_PPV_ARGS(&d3d.rtvDescriptorHeap.heap))));
+
         for (uint imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
             ID3D12Resource* image = d3d.swapChainImages[imageIndex];
             d3d.swapChainImageRTVDescriptors[imageIndex] = {d3d.rtvDescriptorHeap.heap->GetCPUDescriptorHandleForHeapStart().ptr + d3d.rtvDescriptorHeap.descriptorSize * d3d.rtvDescriptorHeap.offset};
@@ -1612,35 +1623,35 @@ void d3dInit() {
         d3d.cbvSrvUavDescriptorHeap.descriptorSize = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         d3d.cbvSrvUavDescriptorHeapPrevFrame.descriptorSize = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         D3D12_DESCRIPTOR_HEAP_DESC cbvSrvUavDescriptorHeapDesc = {.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, .NumDescriptors = d3d.cbvSrvUavDescriptorHeap.capacity, .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
-        assert(SUCCEEDED(d3d.device->CreateDescriptorHeap(&cbvSrvUavDescriptorHeapDesc, IID_PPV_ARGS(&d3d.cbvSrvUavDescriptorHeap.heap))));
-        assert(SUCCEEDED(d3d.device->CreateDescriptorHeap(&cbvSrvUavDescriptorHeapDesc, IID_PPV_ARGS(&d3d.cbvSrvUavDescriptorHeapPrevFrame.heap))));
+        assert(SUCCEEDED(hr = d3d.device->CreateDescriptorHeap(&cbvSrvUavDescriptorHeapDesc, IID_PPV_ARGS(&d3d.cbvSrvUavDescriptorHeap.heap))));
+        assert(SUCCEEDED(hr = d3d.device->CreateDescriptorHeap(&cbvSrvUavDescriptorHeapDesc, IID_PPV_ARGS(&d3d.cbvSrvUavDescriptorHeapPrevFrame.heap))));
     }
     {
         D3D12MA::ALLOCATOR_DESC allocatorDesc = {.Flags = D3D12MA::ALLOCATOR_FLAG_NONE, .pDevice = d3d.device, .pAdapter = d3d.dxgiAdapter};
-        assert(SUCCEEDED(D3D12MA::CreateAllocator(&allocatorDesc, &d3d.allocator)));
+        assert(SUCCEEDED(hr = D3D12MA::CreateAllocator(&allocatorDesc, &d3d.allocator)));
     }
     {
-        auto d3dUploadBufferInit = [](D3DUploadBuffer* buffer, uint64 size, D3D12_RESOURCE_STATES initStates, const wchar_t* name) {
+        auto d3dUploadBufferInit = [&](D3DUploadBuffer* buffer, uint64 size, D3D12_RESOURCE_STATES initStates, const wchar_t* name) {
             buffer->capacity = size;
             D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
             D3D12_RESOURCE_DESC bufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = size, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
-            assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &bufferDesc, initStates, nullptr, &buffer->buffer, {}, nullptr)));
+            assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &bufferDesc, initStates, nullptr, &buffer->buffer, {}, nullptr)));
             buffer->buffer->GetResource()->SetName(name);
-            assert(SUCCEEDED(buffer->buffer->GetResource()->Map(0, nullptr, (void**)&buffer->ptr)));
+            assert(SUCCEEDED(hr = buffer->buffer->GetResource()->Map(0, nullptr, (void**)&buffer->ptr)));
         };
-        auto d3dReadBackBufferInit = [](D3DReadBackBuffer* buffer, uint64 size, D3D12_RESOURCE_STATES initStates, const wchar_t* name) {
+        auto d3dReadBackBufferInit = [&](D3DReadBackBuffer* buffer, uint64 size, D3D12_RESOURCE_STATES initStates, const wchar_t* name) {
             buffer->capacity = size;
             D3D12MA::ALLOCATION_DESC allocationDesc = {};
             D3D12_RESOURCE_DESC bufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = size, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
             bufferDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
             allocationDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
-            assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &bufferDesc, initStates, nullptr, &buffer->bufferUAV, {}, nullptr)));
+            assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &bufferDesc, initStates, nullptr, &buffer->bufferUAV, {}, nullptr)));
             bufferDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
             allocationDesc.HeapType = D3D12_HEAP_TYPE_READBACK;
-            assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &bufferDesc, initStates, nullptr, &buffer->buffer, {}, nullptr)));
+            assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &bufferDesc, initStates, nullptr, &buffer->buffer, {}, nullptr)));
             buffer->bufferUAV->GetResource()->SetName((std::wstring(name) + L"UAV").c_str());
             buffer->buffer->GetResource()->SetName(name);
-            assert(SUCCEEDED(buffer->buffer->GetResource()->Map(0, nullptr, (void**)&buffer->ptr)));
+            assert(SUCCEEDED(hr = buffer->buffer->GetResource()->Map(0, nullptr, (void**)&buffer->ptr)));
         };
         d3dUploadBufferInit(&d3d.stagingBuffer, megabytes(500), D3D12_RESOURCE_STATE_COPY_SOURCE, L"stagingBuffer");
         d3dUploadBufferInit(&d3d.constantsBuffer, megabytes(2), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_GENERIC_READ, L"constantBuffer");
@@ -1660,10 +1671,10 @@ void d3dInit() {
         {
             D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
             D3D12_RESOURCE_DESC bufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = megabytes(32), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
-            assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &bufferDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &d3d.tlasBuffer, {}, nullptr)));
+            assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &bufferDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &d3d.tlasBuffer, {}, nullptr)));
             d3d.tlasBuffer->GetResource()->SetName(L"tlasBuffer");
             bufferDesc.Width = d3d.bvhBuildScratchBufferCapacity;
-            assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &bufferDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &d3d.bvhBuildScratchBuffer, {}, nullptr)));
+            assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &bufferDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &d3d.bvhBuildScratchBuffer, {}, nullptr)));
             d3d.bvhBuildScratchBuffer->GetResource()->SetName(L"bvhBuildScratchBuffer");
         }
     }
@@ -1681,24 +1692,24 @@ void d3dInit() {
 
         textureDesc.Format = d3d.renderTextureFormat;
         textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr)));
-        assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexturePrevFrame, {}, nullptr)));
+        assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr)));
+        assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexturePrevFrame, {}, nullptr)));
         d3d.renderTexture->GetResource()->SetName(L"renderTexture");
         d3d.renderTexturePrevFrame->GetResource()->SetName(L"renderTexturePrevFrame");
 
         textureDesc.Format = d3d.depthTextureFormat;
         textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.depthTexture, {}, nullptr)));
+        assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.depthTexture, {}, nullptr)));
         d3d.depthTexture->GetResource()->SetName(L"depthTexture");
 
         textureDesc.Format = d3d.motionVectorTextureFormat;
         textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.motionVectorTexture, {}, nullptr)));
+        assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.motionVectorTexture, {}, nullptr)));
         d3d.motionVectorTexture->GetResource()->SetName(L"motionVectorTexture");
 
         textureDesc.Format = d3d.pathTracerAccumulationTextureFormat;
         textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &d3d.pathTracerAccumulationTexture, {}, nullptr)));
+        assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &textureDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &d3d.pathTracerAccumulationTexture, {}, nullptr)));
         d3d.pathTracerAccumulationTexture->GetResource()->SetName(L"pathTracerAccumulationTexture");
     }
     {
@@ -1747,6 +1758,7 @@ void d3dInit() {
 }
 
 void d3dCompileShaders() {
+    HRESULT hr;
     {
         static std::filesystem::path shaderPath = exeDir / "renderScene.cso";
         static std::filesystem::file_time_type prevLastWriteTime = {};
@@ -1763,9 +1775,9 @@ void d3dCompileShaders() {
             D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
             D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
             D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
-            assert(SUCCEEDED(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.renderScenePSO))));
-            assert(SUCCEEDED(d3d.renderScenePSO->QueryInterface(IID_PPV_ARGS(&d3d.renderScenePSOProps))));
-            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.renderSceneRootSig))));
+            assert(SUCCEEDED(hr = d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.renderScenePSO))));
+            assert(SUCCEEDED(hr = d3d.renderScenePSO->QueryInterface(IID_PPV_ARGS(&d3d.renderScenePSOProps))));
+            assert(SUCCEEDED(hr = d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.renderSceneRootSig))));
             assert(d3d.renderSceneRayGenID = d3d.renderScenePSOProps->GetShaderIdentifier(L"rayGen"));
             assert(d3d.renderSceneRayMissIDPrimary = d3d.renderScenePSOProps->GetShaderIdentifier(L"rayMissPrimary"));
             assert(d3d.renderSceneRayHitGroupIDPrimary = d3d.renderScenePSOProps->GetShaderIdentifier(L"rayHitGroupPrimary"));
@@ -1789,9 +1801,9 @@ void d3dCompileShaders() {
             D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
             D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
             D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
-            assert(SUCCEEDED(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.pathTracerPSO))));
-            assert(SUCCEEDED(d3d.pathTracerPSO->QueryInterface(IID_PPV_ARGS(&d3d.pathTracerPSOProps))));
-            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.pathTracerRootSig))));
+            assert(SUCCEEDED(hr = d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.pathTracerPSO))));
+            assert(SUCCEEDED(hr = d3d.pathTracerPSO->QueryInterface(IID_PPV_ARGS(&d3d.pathTracerPSOProps))));
+            assert(SUCCEEDED(hr = d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.pathTracerRootSig))));
             assert(d3d.pathTracerRayGenID = d3d.pathTracerPSOProps->GetShaderIdentifier(L"rayGen"));
             assert(d3d.pathTracerRayMissID = d3d.pathTracerPSOProps->GetShaderIdentifier(L"rayMiss"));
             assert(d3d.pathTracerRayHitGroupID = d3d.pathTracerPSOProps->GetShaderIdentifier(L"rayHitGroup"));
@@ -1813,9 +1825,9 @@ void d3dCompileShaders() {
             D3D12_DXIL_LIBRARY_DESC dxilLibDesc = {.DXILLibrary = {.pShaderBytecode = rtByteCode.data(), .BytecodeLength = rtByteCode.size()}, .NumExports = countof(exportDescs), .pExports = exportDescs};
             D3D12_STATE_SUBOBJECT stateSubobjects[] = {{.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &dxilLibDesc}};
             D3D12_STATE_OBJECT_DESC stateObjectDesc = {.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = countof(stateSubobjects), .pSubobjects = stateSubobjects};
-            assert(SUCCEEDED(d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.collisionQueryPSO))));
-            assert(SUCCEEDED(d3d.collisionQueryPSO->QueryInterface(IID_PPV_ARGS(&d3d.collisionQueryProps))));
-            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.collisionQueryRootSig))));
+            assert(SUCCEEDED(hr = d3d.device->CreateStateObject(&stateObjectDesc, IID_PPV_ARGS(&d3d.collisionQueryPSO))));
+            assert(SUCCEEDED(hr = d3d.collisionQueryPSO->QueryInterface(IID_PPV_ARGS(&d3d.collisionQueryProps))));
+            assert(SUCCEEDED(hr = d3d.device->CreateRootSignature(0, rtByteCode.data(), rtByteCode.size(), IID_PPV_ARGS(&d3d.collisionQueryRootSig))));
             assert(d3d.collisionQueryRayGenID = d3d.collisionQueryProps->GetShaderIdentifier(L"rayGen"));
             assert(d3d.collisionQueryMissID = d3d.collisionQueryProps->GetShaderIdentifier(L"miss"));
             assert(d3d.collisionQueryHitGroupID = d3d.collisionQueryProps->GetShaderIdentifier(L"hitGroup"));
@@ -1833,8 +1845,8 @@ void d3dCompileShaders() {
             if (d3d.vertexSkinningRootSig) d3d.vertexSkinningRootSig->Release();
             std::vector<uint8> csByteCode = fileReadBytes(shaderPath);
             D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {.pRootSignature = d3d.vertexSkinningRootSig, .CS = {.pShaderBytecode = csByteCode.data(), .BytecodeLength = csByteCode.size()}};
-            assert(SUCCEEDED(d3d.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&d3d.vertexSkinningPSO))));
-            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, csByteCode.data(), csByteCode.size(), IID_PPV_ARGS(&d3d.vertexSkinningRootSig))));
+            assert(SUCCEEDED(hr = d3d.device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&d3d.vertexSkinningPSO))));
+            assert(SUCCEEDED(hr = d3d.device->CreateRootSignature(0, csByteCode.data(), csByteCode.size(), IID_PPV_ARGS(&d3d.vertexSkinningRootSig))));
         }
     }
     {
@@ -1864,8 +1876,8 @@ void d3dCompileShaders() {
                 .RTVFormats = {d3d.swapChainFormat},
                 .SampleDesc = {.Count = 1},
             };
-            assert(SUCCEEDED(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.compositePSO))));
-            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, psByteCode.data(), psByteCode.size(), IID_PPV_ARGS(&d3d.compositeRootSig))));
+            assert(SUCCEEDED(hr = d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.compositePSO))));
+            assert(SUCCEEDED(hr = d3d.device->CreateRootSignature(0, psByteCode.data(), psByteCode.size(), IID_PPV_ARGS(&d3d.compositeRootSig))));
         }
     }
     {
@@ -1911,33 +1923,34 @@ void d3dCompileShaders() {
                 .RTVFormats = {d3d.swapChainFormat},
                 .SampleDesc = {.Count = 1},
             };
-            assert(SUCCEEDED(d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.imguiPSO))));
-            assert(SUCCEEDED(d3d.device->CreateRootSignature(0, vsByteCode.data(), vsByteCode.size(), IID_PPV_ARGS(&d3d.imguiRootSig))));
+            assert(SUCCEEDED(hr = d3d.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d.imguiPSO))));
+            assert(SUCCEEDED(hr = d3d.device->CreateRootSignature(0, vsByteCode.data(), vsByteCode.size(), IID_PPV_ARGS(&d3d.imguiRootSig))));
         }
     }
 }
 
 void d3dApplySettings() {
+    HRESULT hr;
     IDXGIOutput6* dxgiOutput;
     DXGI_OUTPUT_DESC1 dxgiOutputDesc;
-    assert(SUCCEEDED(d3d.swapChain->GetContainingOutput((IDXGIOutput**)&dxgiOutput)));
-    assert(SUCCEEDED(dxgiOutput->GetDesc1(&dxgiOutputDesc)));
+    assert(SUCCEEDED(hr = d3d.swapChain->GetContainingOutput((IDXGIOutput**)&dxgiOutput)));
+    assert(SUCCEEDED(hr = dxgiOutput->GetDesc1(&dxgiOutputDesc)));
     dxgiOutput->Release();
     if (hdr && dxgiOutputDesc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) {
-        assert(SUCCEEDED(d3d.swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)));
+        assert(SUCCEEDED(hr = d3d.swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)));
     }
     else {
-        assert(SUCCEEDED(d3d.swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)));
+        assert(SUCCEEDED(hr = d3d.swapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)));
     }
     static RECT windowRect = [] {  RECT r; assert(GetWindowRect(window.hwnd, &r)); return r; }();
     if (windowMode == WindowModeWindowed) {
-        assert(SetWindowLong(window.hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW));
+        assert(SetWindowLong(window.hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW) != 0);
         assert(SetWindowPos(window.hwnd, HWND_NOTOPMOST, windowRect.left, windowRect.top, windowRect.right - windowRect.left, windowRect.bottom - windowRect.top, SWP_FRAMECHANGED | SWP_NOACTIVATE));
         ShowWindow(window.hwnd, SW_NORMAL);
     }
     else if (windowMode == WindowModeBorderless) {
         assert(GetWindowRect(window.hwnd, &windowRect));
-        assert(SetWindowLong(window.hwnd, GWL_STYLE, GetWindowLong(window.hwnd, GWL_STYLE) & ~(WS_CAPTION | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU | WS_THICKFRAME)));
+        assert(SetWindowLong(window.hwnd, GWL_STYLE, GetWindowLong(window.hwnd, GWL_STYLE) & ~(WS_CAPTION | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU | WS_THICKFRAME)) != 0);
         RECT rect = dxgiOutputDesc.DesktopCoordinates;
         assert(SetWindowPos(window.hwnd, HWND_TOP, rect.left, rect.top, rect.right, rect.bottom, SWP_FRAMECHANGED | SWP_NOACTIVATE));
         ShowWindow(window.hwnd, SW_MAXIMIZE);
@@ -2112,6 +2125,8 @@ Model* modelInitGLTF(const std::filesystem::path& filePath) {
     model->filePath = filePath;
     model->filePathStr = filePath.string();
     model->gltfData = gltfData;
+
+    HRESULT hr;
 
     d3dGraphicsCmdListReset();
     d3d.stagingBuffer.offset = 0;
@@ -2352,10 +2367,10 @@ Model* modelInitGLTF(const std::filesystem::path& filePath) {
         D3D12MA::ALLOCATION_DESC verticeIndicesBuffersAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
         D3D12_RESOURCE_DESC verticeIndicesBuffersDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
         verticeIndicesBuffersDesc.Width = vectorSizeof(mesh.vertices);
-        assert(SUCCEEDED(d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.verticesBuffer, {}, nullptr)));
+        assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.verticesBuffer, {}, nullptr)));
         mesh.verticesBuffer->GetResource()->SetName(std::format(L"{}Mesh{}VerticesBuffer", filePath.stem().wstring(), meshIndex).c_str());
         verticeIndicesBuffersDesc.Width = vectorSizeof(mesh.indices);
-        assert(SUCCEEDED(d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.indicesBuffer, {}, nullptr)));
+        assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&verticeIndicesBuffersAllocationDesc, &verticeIndicesBuffersDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &mesh.indicesBuffer, {}, nullptr)));
         mesh.verticesBuffer->GetResource()->SetName(std::format(L"{}Mesh{}IndicesBuffer", filePath.stem().wstring(), meshIndex).c_str());
 
         memcpy(d3d.stagingBuffer.ptr + d3d.stagingBuffer.offset, mesh.vertices.data(), vectorSizeof(mesh.vertices));
@@ -2399,7 +2414,8 @@ Model* modelInitGLTF(const std::filesystem::path& filePath) {
         D3D12MA::ALLOCATION_DESC blasAllocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
         D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
         blasDesc.Width = prebuildInfo.ResultDataMaxSizeInBytes;
-        assert(SUCCEEDED(d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &mesh.blas, {}, nullptr)));
+        hr = d3d.allocator->CreateResource(&blasAllocationDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &mesh.blas, {}, nullptr);
+        assert(SUCCEEDED(hr));
         mesh.blas->GetResource()->SetName(std::format(L"{}Mesh{}Blas", filePath.stem().wstring(), meshIndex).c_str());
         mesh.blasScratchBufferSize = prebuildInfo.ScratchDataSizeInBytes;
         d3d.bvhBuildScratchBufferOffset = align(d3d.bvhBuildScratchBufferOffset, D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT);
@@ -2734,6 +2750,7 @@ void modelTraverseNodesAndGetGlobalTransformMats(Model* model, ModelNode* node, 
 }
 
 ModelInstance modelInstanceInit(Model* model) {
+    HRESULT hr;
     ModelInstance modelInstance = {};
     modelInstance.model = model;
     modelInstance.meshNodes.resize(model->meshNodes.size());
@@ -2747,11 +2764,11 @@ ModelInstance modelInstanceInit(Model* model) {
         else {
             D3D12MA::ALLOCATION_DESC verticesBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
             D3D12_RESOURCE_DESC verticesBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = meshNode->mesh->verticesBuffer->GetSize(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
-            assert(SUCCEEDED(d3d.allocator->CreateResource(&verticesBufferAllocDesc, &verticesBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &instanceMeshNode.verticesBuffer, {}, nullptr)));
+            assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&verticesBufferAllocDesc, &verticesBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &instanceMeshNode.verticesBuffer, {}, nullptr)));
 
             D3D12MA::ALLOCATION_DESC blasAllocDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
             D3D12_RESOURCE_DESC blasDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = meshNode->mesh->blas->GetSize(), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR, .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
-            assert(SUCCEEDED(d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &instanceMeshNode.blas, {}, nullptr)));
+            assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&blasAllocDesc, &blasDesc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, nullptr, &instanceMeshNode.blas, {}, nullptr)));
         }
     }
     if (model->animations.size() > 0) {
@@ -2763,8 +2780,8 @@ ModelInstance modelInstanceInit(Model* model) {
             modelInstance.skins[skinIndex].bonesTransformMats.resize(model->skins[skinIndex].joints.size());
             D3D12MA::ALLOCATION_DESC jointBufferAllocDesc = {.HeapType = D3D12_HEAP_TYPE_UPLOAD};
             D3D12_RESOURCE_DESC jointBufferDesc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = vectorSizeof(modelInstance.skins[skinIndex].bonesTransformMats), .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {.Count = 1}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
-            assert(SUCCEEDED(d3d.allocator->CreateResource(&jointBufferAllocDesc, &jointBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &modelInstance.skins[skinIndex].bonesTransformMatsBuffer, {}, nullptr)));
-            assert(SUCCEEDED(modelInstance.skins[skinIndex].bonesTransformMatsBuffer->GetResource()->Map(0, nullptr, (void**)&modelInstance.skins[skinIndex].bonesTransformMatsBufferPtr)));
+            assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&jointBufferAllocDesc, &jointBufferDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &modelInstance.skins[skinIndex].bonesTransformMatsBuffer, {}, nullptr)));
+            assert(SUCCEEDED(hr = modelInstance.skins[skinIndex].bonesTransformMatsBuffer->GetResource()->Map(0, nullptr, (void**)&modelInstance.skins[skinIndex].bonesTransformMatsBufferPtr)));
         }
     }
     return modelInstance;
@@ -3050,13 +3067,12 @@ void loadSimpleAssets() {
 }
 
 void physxInit() {
-    pxFoundation = PxCreateFoundation(PX_PHYSICS_VERSION, pxAllocator, pxErrorCallback);
+    assert(pxFoundation = PxCreateFoundation(PX_PHYSICS_VERSION, pxAllocator, pxErrorCallback));
     PxPvd* pvd = nullptr;
 #ifdef PHYSX_PVD
-    pvd = PxCreatePvd(*pxFoundation);
-    assert(pvd);
-    PxPvdTransport* transport = PxDefaultPvdSocketTransportCreate("127.0.0.1", 5425, 10);
-    assert(transport);
+    assert(pvd = PxCreatePvd(*pxFoundation));
+    PxPvdTransport* transport;
+    assert(transport = PxDefaultPvdSocketTransportCreate("127.0.0.1", 5425, 10));
     pvd->connect(*transport, PxPvdInstrumentationFlag::eALL);
 #endif
     pxPhysics = PxCreatePhysics(PX_PHYSICS_VERSION, *pxFoundation, PxTolerancesScale(1, 10), true, pvd);
@@ -3162,7 +3178,7 @@ void operator<<(ryml::NodeRef n, Transform t) { n |= ryml::SEQ, n |= ryml::_WIP_
 void operator<<(ryml::NodeRef n, PxTransform t) { n |= ryml::SEQ, n |= ryml::_WIP_STYLE_FLOW_SL, n.append_child() << t.q.x, n.append_child() << t.q.y, n.append_child() << t.q.z, n.append_child() << t.q.w, n.append_child() << t.p.x, n.append_child() << t.p.y, n.append_child() << t.p.z; }
 
 void worldInit() {
-    if (!std::filesystem::exists(worldFilePath)) assert(false);
+    assert(std::filesystem::exists(worldFilePath));
     std::string yamlStr = fileReadStr(worldFilePath);
     ryml::Tree yamlTree = ryml::parse_in_arena(ryml::to_csubstr(yamlStr));
     ryml::ConstNodeRef yamlRoot = yamlTree.rootref();
@@ -3204,14 +3220,12 @@ void worldInit() {
 
         const char* simpleModelFiles[] = {"assets/models/sphere/gltf/sphere.gltf", "assets/models/cube/gltf/cube.gltf", "assets/models/cylinder/gltf/cylinder.gltf"};
         for (const char* modelFile : simpleModelFiles) {
-            Model* model = modelInit(modelFile);
-            assert(model);
+            assert(modelInit(modelFile));
         }
         for (ryml::ConstNodeRef modelsYaml = assetsYaml["models"]; ryml::ConstNodeRef modelYaml : modelsYaml) {
             std::string modelFile;
             modelYaml["file"] >> modelFile;
-            Model* model = modelInit(modelFile);
-            assert(model);
+            assert(modelInit(modelFile));
         }
     }
     {
@@ -4537,8 +4551,7 @@ void liveReloadFuncs() {
             gameDLLPrevLastWriteTime = lastWriteTime;
             FreeLibrary(gameDLL);
             CopyFileW(gameDLLPath.c_str(), gameDLLCopyPath.c_str(), false);
-            gameDLL = LoadLibraryW(gameDLLCopyPath.c_str());
-            assert(gameDLL);
+            assert(gameDLL = LoadLibraryW(gameDLLCopyPath.c_str()));
         }
     }
 }
@@ -4747,8 +4760,9 @@ D3D12_DISPATCH_RAYS_DESC fillRayTracingShaderTable(D3DUploadBuffer* buffer, void
 
 void d3dRender() {
     ZoneScopedN("d3dRender");
-    d3dWaitFence(&d3d.renderFence);
 
+    d3dWaitFence(&d3d.renderFence);
+    HRESULT hr;
     blasInstancesDescs.resize(0);
     blasInstancesInfos.resize(0);
     blasGeometriesInfos.resize(0);
@@ -4983,7 +4997,7 @@ void d3dRender() {
 
         d3dGraphicsCmdListExecute();
         d3dSignalFence(&d3d.collisionQueriesFence);
-        assert(SUCCEEDED(d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
+        assert(SUCCEEDED(hr = d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
         d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap.heap);
     }
     if (pathTracer) {
@@ -5125,7 +5139,7 @@ void d3dRender() {
     }
     {
         ZoneScopedN("Present");
-        assert(SUCCEEDED(d3d.swapChain->Present(0, 0)));
+        assert(SUCCEEDED(hr = d3d.swapChain->Present(0, 0)));
     }
     {
         d3dSignalFence(&d3d.renderFence);
@@ -5257,6 +5271,7 @@ ImGuiKey virtualKeytoImGuiKey(WPARAM wparam) {
 
 LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lParam) {
     LRESULT result = 0;
+    HRESULT hr;
     switch (eventType) {
         default: {
             result = DefWindowProcA(hwnd, eventType, wParam, lParam);
@@ -5283,10 +5298,10 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
                 for (ID3D12Resource* image : d3d.swapChainImages) {
                     image->Release();
                 }
-                assert(SUCCEEDED(d3d.swapChain->ResizeBuffers(countof(d3d.swapChainImages), renderW, renderH, d3d.swapChainFormat, 0)));
+                assert(SUCCEEDED(hr = d3d.swapChain->ResizeBuffers(countof(d3d.swapChainImages), renderW, renderH, d3d.swapChainFormat, 0)));
                 for (uint imageIndex = 0; imageIndex < countof(d3d.swapChainImages); imageIndex++) {
                     ID3D12Resource** image = &d3d.swapChainImages[imageIndex];
-                    assert(SUCCEEDED(d3d.swapChain->GetBuffer(imageIndex, IID_PPV_ARGS(image))));
+                    assert(SUCCEEDED(hr = d3d.swapChain->GetBuffer(imageIndex, IID_PPV_ARGS(image))));
                     (*image)->SetName(std::format(L"swapChain{}", imageIndex).c_str());
                     d3d.device->CreateRenderTargetView(*image, nullptr, d3d.swapChainImageRTVDescriptors[imageIndex]);
                 }
@@ -5310,12 +5325,11 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
                     motionVectorTextureDesc.Width = renderW, motionVectorTextureDesc.Height = renderH;
 
                     D3D12MA::ALLOCATION_DESC allocationDesc = {.HeapType = D3D12_HEAP_TYPE_DEFAULT};
-                    assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr)));
-                    assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &renderTexturePrevFrameDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexturePrevFrame, {}, nullptr)));
-                    assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &pathTracerAccumulationTextureDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &d3d.pathTracerAccumulationTexture, {}, nullptr)));
-                    assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &depthTextureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.depthTexture, {}, nullptr)));
-                    assert(SUCCEEDED(d3d.allocator->CreateResource(&allocationDesc, &motionVectorTextureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.motionVectorTexture, {}, nullptr)));
-
+                    assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &renderTextureDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexture, {}, nullptr)));
+                    assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &renderTexturePrevFrameDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &d3d.renderTexturePrevFrame, {}, nullptr)));
+                    assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &pathTracerAccumulationTextureDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &d3d.pathTracerAccumulationTexture, {}, nullptr)));
+                    assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &depthTextureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.depthTexture, {}, nullptr)));
+                    assert(SUCCEEDED(hr = d3d.allocator->CreateResource(&allocationDesc, &motionVectorTextureDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &d3d.motionVectorTexture, {}, nullptr)));
                     d3d.renderTexture->GetResource()->SetName(L"renderTexture");
                     d3d.renderTexturePrevFrame->GetResource()->SetName(L"renderTexturePrevFrame");
                     d3d.pathTracerAccumulationTexture->GetResource()->SetName(L"pathTracerAccumulationTexture");
