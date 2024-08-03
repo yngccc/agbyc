@@ -102,7 +102,7 @@ xcopy /y /d  "$(SolutionDir)external\bin\*" "$(TargetDir)"</Command>
   </ItemDefinitionGroup>
   <ItemGroup>
     <None Include="..\.clang-format" />
-    <None Include="..\src\hlsl\shared.h" />
+    <None Include="..\src\hlsl\shared.hlsli" />
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
@@ -202,6 +202,7 @@ xcopy /y /d  "$(SolutionDir)external\bin\*" "$(TargetDir)"</Command>
     </FxCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\src\hlsl\brdf.hlsli" />
     <ClInclude Include="..\src\pch.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -19,7 +19,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
-    <None Include="..\src\hlsl\shared.h">
+    <None Include="..\src\hlsl\shared.hlsli">
       <Filter>Source Files\hlsl</Filter>
     </None>
     <None Include="..\.clang-format">
@@ -66,6 +66,9 @@
   <ItemGroup>
     <ClInclude Include="..\src\pch.h">
       <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\hlsl\brdf.hlsli">
+      <Filter>Source Files\hlsl</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

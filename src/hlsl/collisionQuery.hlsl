@@ -1,4 +1,4 @@
-#include "shared.h"
+#include "shared.hlsli"
 
 GlobalRootSignature
 globalRootSig = { 

@@ -6,6 +6,8 @@
 #include <array>
 #include <filesystem>
 #include <format>
+#include <locale>
+#include <codecvt>
 #include <iostream>
 #include <fstream>
 #include <list>

@@ -1,4 +1,5 @@
-#include "shared.h"
+#include "shared.hlsli"
+#include "brdf.hlsli"
 
 GlobalRootSignature globalRootSig = {
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED),"
@@ -39,7 +40,7 @@ void rayGen() {
     float2 offset = float2(rand(rngState), rand(rngState));
     offset = lerp(float2(-0.5, -0.5), float2(0.5, 0.5), offset);
     float2 pixelCoord = ((float2(pixelIndex) + offset + 0.5) / float2(resolution)) * 2.0 - 1.0;
-    RayDesc ray = pinholeCameraRay(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjectMat);
+    RayDesc ray = cameraRayPinhole(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjectMat);
     RayPayload payload = (RayPayload)0;
     float3 radian = float3(0, 0, 0);
     float3 throughput = float3(1, 1, 1);
@@ -65,19 +66,19 @@ void rayGen() {
         float3 geometryNormal = decodeNormalOctahedron(payload.geometryNormalEncoded);
         float3 shadingNormal = decodeNormalOctahedron(payload.shadingNormalEncoded);
         float3 viewDir = -ray.Direction;
-        if (dot(geometryNormal, viewDir) < 0.0) geometryNormal = -geometryNormal;
-        if (dot(geometryNormal, shadingNormal) < 0.0) shadingNormal = -shadingNormal;
+        if (dot(geometryNormal, viewDir) < 0) geometryNormal = -geometryNormal;
+        if (dot(geometryNormal, shadingNormal) < 0) shadingNormal = -shadingNormal;
        //if (dot(shadingNormal, viewDir) <= 0.0f) break;
         
         BLASGeometryInfo blasGeometryInfo = blasGeometriesInfos[NonUniformResourceIndex(payload.blasGeometryInfoIndex)];
-        Texture2D<float3> emissiveTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 2)];
-        Texture2D<float4> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 3)];
-        Texture2D<float3> metallicRoughnessTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 4)];
-        Texture2D<float3> normalTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 5)];
+        Texture2D<float4> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 2)];
+        Texture2D<float3> metallicRoughnessTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 3)];
+        Texture2D<float3> normalTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 4)];
+        Texture2D<float3> emissiveTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 5)];
         
         float4 baseColor = baseColorTexture.SampleLevel(textureSampler, payload.uv, 0) * blasGeometryInfo.baseColorFactor;
         float4 rotation = getRotationFromZAxis(shadingNormal);
-        float3 sampleDirection = sampleHemisphereCosineWeighted(float2(rand(rngState), rand(rngState)));
+        float3 sampleDirection = sampleHemisphere(float2(rand(rngState), rand(rngState)));
         sampleDirection = rotatePoint(rotation, sampleDirection);
         if (dot(geometryNormal, sampleDirection) <= 0.0f) break;
         throughput *= baseColor.xyz;
@@ -103,10 +104,10 @@ void rayClosestHit(inout RayPayload payload : SV_RayPayload, in BuiltInTriangleI
     
     StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset)];
     StructuredBuffer<uint> indices = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 1)];
-    //Texture2D<float3> emissiveTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 2)];
-    //Texture2D<float3> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 3)];
-    //Texture2D<float3> metallicRoughnessTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 4)];
-    //Texture2D<float3> normalTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 5)];
+    //Texture2D<float3> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 2)];
+    //Texture2D<float3> metallicRoughnessTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 3)];
+    //Texture2D<float3> normalTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 4)];
+    //Texture2D<float3> emissiveTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 5)];
 
     uint triangleIndex = PrimitiveIndex() * 3;
     Vertex v0 = vertices[indices[NonUniformResourceIndex(triangleIndex)]];

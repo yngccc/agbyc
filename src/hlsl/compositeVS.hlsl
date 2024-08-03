@@ -1,4 +1,4 @@
-#include "shared.h"
+#include "shared.hlsli"
 
 #define rootSig \
 "RootFlags(0)," \

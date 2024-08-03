@@ -1,11 +1,14 @@
-#include "shared.h"
+#include "shared.hlsli"
+#include "brdf.hlsli"
 
 GlobalRootSignature
 globalRootSig = {
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED),"
     "CBV(b0), SRV(t0), SRV(t1), SRV(t2),"
     "DescriptorTable(UAV(u0), UAV(u1), UAV(u2), SRV(t3)),"
-	"StaticSampler(s0, filter = FILTER_ANISOTROPIC, addressU = TEXTURE_ADDRESS_MIRROR, addressV = TEXTURE_ADDRESS_MIRROR, maxAnisotropy = 16, mipLODBias = 0)"
+	"StaticSampler(s0, filter = FILTER_ANISOTROPIC, addressU = TEXTURE_ADDRESS_WRAP, addressV = TEXTURE_ADDRESS_WRAP, addressW = TEXTURE_ADDRESS_WRAP, maxAnisotropy = 16, mipLODBias = 0),"
+	"StaticSampler(s1, filter = FILTER_ANISOTROPIC, addressU = TEXTURE_ADDRESS_MIRROR, addressV = TEXTURE_ADDRESS_MIRROR, addressW = TEXTURE_ADDRESS_MIRROR, maxAnisotropy = 16, mipLODBias = 0),"
+	"StaticSampler(s2, filter = FILTER_ANISOTROPIC, addressU = TEXTURE_ADDRESS_CLAMP, addressV = TEXTURE_ADDRESS_CLAMP, addressW = TEXTURE_ADDRESS_CLAMP, maxAnisotropy = 16, mipLODBias = 0),"
 };
 
 RWTexture2D<float3> renderTexture : register(u0);
@@ -20,7 +23,7 @@ sampler textureSampler : register(s0);
 
 RaytracingPipelineConfig pipelineConfig = { 2 /*MaxTraceRecursionDepth*/ };
 
-RaytracingShaderConfig shaderConfig = { 16 /*UINT MaxPayloadSizeInBytes*/, 8 /*UINT MaxAttributeSizeInBytes*/ };
+RaytracingShaderConfig shaderConfig = { 64 /*UINT MaxPayloadSizeInBytes*/, 8 /*UINT MaxAttributeSizeInBytes*/ };
 
 TriangleHitGroup rayHitGroupPrimary = { "rayAnyHitPrimary", "rayClosestHitPrimary" };
 
@@ -29,6 +32,9 @@ TriangleHitGroup rayHitGroupShadow = { "", "rayClosestHitShadow" };
 struct RayPayloadPrimary {
     float3 color;
     float depth;
+    float4 transmissions;
+    float4 depths;
+    uint4 colors;
 };
 
 struct RayPayloadShadow {
@@ -41,9 +47,14 @@ void rayGen() {
     uint2 pixelIndex = DispatchRaysIndex().xy;
     float2 pixelCoord = ((float2(pixelIndex) + 0.5) / float2(resolution)) * 2.0 - 1.0;
 
-    RayDesc ray = pinholeCameraRay(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjectMat);
+    RayDesc ray = cameraRayPinhole(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjectMat);
     RayPayloadPrimary payload = (RayPayloadPrimary) 0;
+    payload.transmissions = float4(1, 1, 1, 1);
     TraceRay(bvh, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, payload);
+    payload.color = payload.color * payload.transmissions[3] + (1.0 - payload.transmissions[3]) * unpackRGB(payload.colors[3]);
+    payload.color = payload.color * payload.transmissions[2] + (1.0 - payload.transmissions[2]) * unpackRGB(payload.colors[2]);
+    payload.color = payload.color * payload.transmissions[1] + (1.0 - payload.transmissions[1]) * unpackRGB(payload.colors[1]);
+    payload.color = payload.color * payload.transmissions[0] + (1.0 - payload.transmissions[0]) * unpackRGB(payload.colors[0]);
     renderTexture[pixelIndex] = payload.color;
     depthTexture[pixelIndex] = payload.depth;
 }
@@ -53,7 +64,7 @@ void rayMissPrimary(inout RayPayloadPrimary payload) {
     float2 uv = equirectangularMapping(WorldRayDirection());
     float3 skyboxColor = skyboxTexture.SampleLevel(textureSampler, uv, 0);
     payload.color += skyboxColor * 0.4;
-    payload.depth = 1.0;
+    payload.depth = 1;
 }
 
 [shader("closesthit")]
@@ -63,10 +74,10 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
     
     StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset)];
     StructuredBuffer<uint> indices = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 1)];
-    Texture2D<float3> emissiveTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 2)];
-    Texture2D<float4> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 3)];
-    Texture2D<float3> metallicRoughnessTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 4)];
-    Texture2D<float3> normalTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 5)];
+    Texture2D<float4> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 2)];
+    Texture2D<float3> metallicRoughnessTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 3)];
+    Texture2D<float2> normalTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 4)];
+    Texture2D<float3> emissiveTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 5)];
 
     uint triangleIndex = PrimitiveIndex() * 3;
     Vertex v0 = vertices[indices[NonUniformResourceIndex(triangleIndex)]];
@@ -98,46 +109,45 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
     float2 uv = barycentricsLerp(trigAttribs.barycentrics, v0.uv, v1.uv, v2.uv);
         
     uint baseColorTextureWidth, baseColorTextureHeight;
+    uint normalTextureWidth, normalTextureHeight;
     baseColorTexture.GetDimensions(baseColorTextureWidth, baseColorTextureHeight);
+    normalTexture.GetDimensions(normalTextureWidth, normalTextureHeight);
+
     float2 texGrad1, texGrad2;
     float alpha = atan(2.0 * tan(renderInfo.fovy * 0.5) / (float) baseColorTextureHeight);
     float radius = RayTCurrent() * tan(alpha);
     anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGrad1, texGrad2);
     float4 baseColor = baseColorTexture.SampleGrad(textureSampler, uv, texGrad1, texGrad2);
-    
-    uint normalTextureWidth, normalTextureHeight;
-    normalTexture.GetDimensions(normalTextureWidth, normalTextureHeight);
+    float3 emissive = emissiveTexture.SampleGrad(textureSampler, uv, texGrad1, texGrad2);
     if (normalTextureHeight != baseColorTextureHeight) {
-        float alpha = atan(2.0f * tan(renderInfo.fovy * 0.5) / (float) normalTextureHeight);
-        float radius = RayTCurrent() * tan(alpha);
+        alpha = atan(2.0f * tan(renderInfo.fovy * 0.5) / (float) normalTextureHeight);
+        radius = RayTCurrent() * tan(alpha);
         anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGrad1, texGrad2);
     }
-    float3 normalMapXYZ = normalTexture.SampleGrad(textureSampler, uv, texGrad1, texGrad2);
-    float3 normalMapNormal = normalize(normalMapXYZ * 2.0 - 1.0);
+    float2 normalMapXY = normalTexture.SampleGrad(textureSampler, uv, texGrad1, texGrad2);
+    normalMapXY = normalMapXY * 2.0 - 1.0;
+    float3 normalMapNormal = float3(normalMapXY, sqrt(1.0 - normalMapXY.x * normalMapXY.x - normalMapXY.y * normalMapXY.y));
     float3x3 tbnMat = transpose(float3x3(tangent, bitangent, normal));
     normal = normalize(mul(tbnMat, normalMapNormal));
     
     float4 color;
     if (blasInstanceInfo.flags & BLASInstanceFlagForcedColor) {
-        color = uintToColor(blasInstanceInfo.color);
+        color = unpackRGBA(blasInstanceInfo.color);
     }
     else {
-        float3 lightDir = normalize(float3(1, 1, 1));
-        float ndotl = saturate(dot(lightDir, normal));
-        ndotl = 1;
-        color = baseColor * blasGeometryInfo.baseColorFactor * ndotl;
-        //color = normal;
-        //color = normalMapXYZ;
+        color = baseColor * blasGeometryInfo.baseColorFactor;
+        color.rgb += emissive * blasGeometryInfo.emissiveFactor;
     }
     if (blasInstanceInfo.flags & BLASInstanceFlagHighlightTriangleEdges) {
         if (barycentricsOnEdge(trigAttribs.barycentrics, 0.03)) {
-            color = uintToColor(blasInstanceInfo.color);
+            color = unpackRGBA(blasInstanceInfo.color);
         }
     }
     payload.color += color.rgb;
     
-    float4 ndc = mul(renderInfo.cameraViewProjectMat, float4(position, 1));
-    payload.depth = ndc.z / ndc.w;
+    //float4 ndc = mul(renderInfo.cameraViewProjectMat, float4(position, 1));
+    //payload.depth = ndc.z / ndc.w;
+    payload.depth = RayTCurrent() / CAMERA_Z_MAX;
     
     //RayPayloadShadow rayPayload;
     //RayDesc shadowRay;
@@ -159,7 +169,7 @@ void rayAnyHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInterse
 
     StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset)];
     StructuredBuffer<uint> indices = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 1)];
-    Texture2D<float4> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 3)];
+    Texture2D<float4> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 2)];
 
     uint triangleIndex = PrimitiveIndex() * 3;
     Vertex v0 = vertices[indices[NonUniformResourceIndex(triangleIndex)]];
@@ -175,7 +185,7 @@ void rayAnyHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInterse
     
     float4 color;
     if (blasInstanceInfo.flags & BLASInstanceFlagForcedColor) {
-        color = uintToColor(blasInstanceInfo.color);
+        color = unpackRGBA(blasInstanceInfo.color);
     }
     else {
         uint baseColorTextureWidth, baseColorTextureHeight;
@@ -201,11 +211,10 @@ void rayAnyHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInterse
         }
         else {
             return;
-            //AcceptHitAndEndSearch();
         }
     }
     else if (blasGeometryInfo.alphaMode == AlphaModeBlend) {
-        //AcceptHitAndEndSearch();
+        IgnoreHit();
     }
 }
 

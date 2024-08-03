@@ -1,7 +1,12 @@
+#define CAMERA_Z_MIN 0.01f
+#define CAMERA_Z_MAX 1000.0f
+
 #ifndef __cplusplus
 
-#define E 2.71828182845904523536f
 #define PI 3.14159265358979323846f
+#define TWO_PI (2.0f * PI)
+#define ONE_OVER_PI (1.0f / PI)
+#define ONE_OVER_TWO_PI (1.0f / TWO_PI)
 #define FLT_MAX 3.402823466e+38F
 #define UINT_MAX 0xffffffff
 #define RADIAN(d) (d * (PI / 180.0f))
@@ -89,13 +94,29 @@ float luminance_bt2020(float3 rgb) {
     return dot(rgb, float3(0.2627f, 0.6780f, 0.0593f));
 }
 
-float4 uintToColor(uint color) {
+uint packRGBA(float4 rgba){
+    return 0;
+}
+
+uint packRGB(float3 rgb) {
+    return 0;
+}
+
+float4 unpackRGBA(uint color) {
     return float4(
         ((color >> 24) & 0xff) / 255.0f,
         ((color >> 16) & 0xff) / 255.0f,
         ((color >> 8) & 0xff) / 255.0f,
         (color & 0xff) / 255.0f
    );
+}
+
+float3 unpackRGB(uint color) {
+    return float3(
+        ((color >> 24) & 0xff) / 255.0f,
+        ((color >> 16) & 0xff) / 255.0f,
+        ((color >> 8) & 0xff) / 255.0f
+    );
 }
 
 float3 hashIntToColor(int i) {
@@ -181,11 +202,11 @@ float3 triangleGeometryNormal(in float3 p0, in float3 p1, in float3 p2) {
     return normalize(cross(edge20, edge10));
 }
 
-RayDesc pinholeCameraRay(in float2 pixelCoord, in float4x4 cameraViewMat, in float4x4 cameraProjMat) {
+RayDesc cameraRayPinhole(in float2 pixelCoord, in float4x4 cameraViewMat, in float4x4 cameraProjMat) {
     RayDesc ray;
     ray.Origin = cameraViewMat[3].xyz;
-    ray.TMin = 0.0f;
-    ray.TMax = FLT_MAX;
+    ray.TMin = CAMERA_Z_MIN;
+    ray.TMax = CAMERA_Z_MAX;
     float aspect = cameraProjMat[1][1] / cameraProjMat[0][0];
     float tanHalfFovY = 1.0f / cameraProjMat[1][1];
     ray.Direction = normalize((pixelCoord.x * cameraViewMat[0].xyz * tanHalfFovY * aspect) - (pixelCoord.y * cameraViewMat[1].xyz * tanHalfFovY) + cameraViewMat[2].xyz);
@@ -219,42 +240,6 @@ void anisotropicEllipseAxes(in float3 p, in float3 f, in float3 d, in float rayC
     texGradient2 = (1.0f - u2 - v2) * txcoord0 + u2 * txcoord1 + v2 * txcoord2 - interpolatedTexCoordsAtIntersection;
 }
 
-// Z up
-float3 sampleHemisphereCosineWeighted(in float2 u, out float pdf) {
-	float a = sqrt(u.x);
-	float b = (2.0f * PI) * u.y;
-	float3 result = float3(a * cos(b), a * sin(b), sqrt(1.0 - u.x));
-	pdf = result.z / PI;
-	return result;
-}
-
-float3 sampleHemisphereCosineWeighted(in float2 u) {
-	float a = sqrt(u.x);
-	float b = (2.0f * PI) * u.y;
-	float3 result = float3(a * cos(b), a * sin(b), sqrt(1.0 - u.x));
-	return result;
-}
-
-// input vector must be normalized
-float4 getRotationToZAxis(in float3 input) {
-	if (input.z < -0.99999f) return float4(1.0f, 0.0f, 0.0f, 0.0f);
-	return normalize(float4(input.y, -input.x, 0.0f, 1.0f + input.z));
-}
-
-// Input vector must be normalized
-float4 getRotationFromZAxis(in float3 input) {
-	if (input.z < -0.99999f) return float4(1.0f, 0.0f, 0.0f, 0.0f);
-	return normalize(float4(-input.y, input.x, 0.0f, 1.0f + input.z));
-}
-
-float4 invertRotation(in float4 q) {
-	return float4(-q.x, -q.y, -q.z, q.w);
-}
-
-float3 rotatePoint(in float4 q, in float3 v) {
-	const float3 qAxis = float3(q.x, q.y, q.z);
-	return 2.0f * dot(qAxis, v) * qAxis + (q.w * q.w - dot(qAxis, qAxis)) * v + 2.0f * q.w * cross(qAxis, v);
-}
 #endif
 
 struct Vertex {
@@ -379,28 +364,28 @@ struct BLASInstanceInfo {
 };
 
 enum AlphaMode : uint {
-    AlphaModeOpaque,
-    AlphaModeMask,
-    AlphaModeBlend,
+    AlphaModeOpaque = 0,
+    AlphaModeMask = 1,
+    AlphaModeBlend = 2,
 };
 
 struct BLASGeometryInfo {
 #ifdef __cplusplus
     uint descriptorsHeapOffset = 0;
-    float3 emissiveFactor = {0, 0, 0};
-    float metallicFactor = 0;
     float4 baseColorFactor = {0.8f, 0.8f, 0.8f, 1.0f};
-    float roughnessFactor = 1;
     AlphaMode alphaMode = AlphaModeOpaque;
     float alphaCutOff = 0.5f;
+    float roughnessFactor = 1;
+    float metallicFactor = 0;
+    float3 emissiveFactor = {0, 0, 0};
 #else
     uint descriptorsHeapOffset;
-    float3 emissiveFactor;
-    float metallicFactor;
     float4 baseColorFactor;
-    float roughnessFactor;
     AlphaMode alphaMode;
     float alphaCutOff;
+    float roughnessFactor;
+    float metallicFactor;
+    float3 emissiveFactor;
 #endif
 };
 
