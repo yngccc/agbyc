@@ -214,7 +214,8 @@ void rayAnyHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInterse
         }
     }
     else if (blasGeometryInfo.alphaMode == AlphaModeBlend) {
-        IgnoreHit();
+        return;
+        //IgnoreHit();
     }
 }
 

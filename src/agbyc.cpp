@@ -1520,6 +1520,11 @@ D3D12MA::Allocation* d3dCreateImageDDS(const std::filesystem::path& ddsFilePath,
     return image;
 }
 
+extern "C" {
+__declspec(dllexport) extern const UINT D3D12SDKVersion = 614;
+__declspec(dllexport) extern const char* D3D12SDKPath = ".\\D3D12\\";
+}
+
 void d3dInit() {
     HRESULT hr;
     bool debug = commandLineContain(L"d3d_debug");
@@ -1536,13 +1541,13 @@ void d3dInit() {
     assert(SUCCEEDED(hr = d3d.dxgiFactory->EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&d3d.dxgiAdapter))));
     DXGI_ADAPTER_DESC dxgiAdapterDesc = {};
     assert(SUCCEEDED(hr = d3d.dxgiAdapter->GetDesc(&dxgiAdapterDesc)));
-    assert(SUCCEEDED(hr = D3D12CreateDevice(d3d.dxgiAdapter, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&d3d.device))));
-    if (debug) {
-        ID3D12InfoQueue1* infoQueue;
-        DWORD callbackCookie;
-        assert(SUCCEEDED(hr = d3d.device->QueryInterface(IID_PPV_ARGS(&infoQueue))));
-        assert(SUCCEEDED(hr = infoQueue->RegisterMessageCallback(d3dMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &callbackCookie)));
-    }
+    assert(SUCCEEDED(hr = D3D12CreateDevice(d3d.dxgiAdapter, D3D_FEATURE_LEVEL_12_2, IID_PPV_ARGS(&d3d.device))));
+    //if (debug) {
+    //    ID3D12InfoQueue1* infoQueue;
+    //    DWORD callbackCookie;
+    //    assert(SUCCEEDED(hr = d3d.device->QueryInterface(IID_PPV_ARGS(&infoQueue))));
+    //    assert(SUCCEEDED(hr = infoQueue->RegisterMessageCallback(d3dMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &callbackCookie)));
+    //}
     IDXGIOutput6* dxgiOutput;
     DXGI_OUTPUT_DESC1 dxgiOutputDesc;
     assert(SUCCEEDED(hr = d3d.dxgiAdapter->EnumOutputs(0, (IDXGIOutput**)&dxgiOutput)));
