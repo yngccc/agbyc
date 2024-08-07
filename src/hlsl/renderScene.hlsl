@@ -49,7 +49,8 @@ void rayGen() {
 
     RayDesc ray = cameraRayPinhole(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjectMat);
     RayPayloadPrimary payload = (RayPayloadPrimary) 0;
-    payload.transmissions = float4(1, 1, 1, 1);
+    payload.transmissions = (1, 1, 1, 1);
+    payload.depths = (1, 1, 1, 1);
     TraceRay(bvh, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, payload);
     payload.color = payload.color * payload.transmissions[3] + (1.0 - payload.transmissions[3]) * unpackRGB(payload.colors[3]);
     payload.color = payload.color * payload.transmissions[2] + (1.0 - payload.transmissions[2]) * unpackRGB(payload.colors[2]);
@@ -214,8 +215,16 @@ void rayAnyHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInterse
         }
     }
     else if (blasGeometryInfo.alphaMode == AlphaModeBlend) {
-        return;
-        //IgnoreHit();
+        if (color.a > 0.99) {
+            return;
+        }
+        else if (color.a < 0.01) {
+            IgnoreHit();
+        }
+        else {
+            // TODO:: implement blend
+            return;
+        }
     }
 }
 

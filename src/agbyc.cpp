@@ -208,55 +208,75 @@ struct AABB {
 };
 
 template <typename T>
-struct ArenaElementHandle {
+struct ArrayElementHandle {
     uint index;
     uint generation;
 };
 
 template <typename T>
-struct ArenaElement {
-    T element;
+struct ArrayElement {
     bool valid;
     uint generation;
+    T element;
 };
+
+typedef void (*arrayForEachFunc)(uint elemIndex);
 
 template <typename T>
-struct Arena {
-    std::vector<ArenaElement<T>> elements;
+struct Array {
+    std::vector<ArrayElement<T>> elements;
     std::stack<uint> freeSlots;
 
-    ArenaElementHandle<T> add(const T& newElement) {
-        if (freeSlots.empty()) {
-            elements.push_back(ArenaElement{newElement, true, 0});
-            return ArenaElementHandle<T>{(uint)(elements.size() - 1), 0};
+    Array() = delete;
+    Array(uint capacity) {
+        elements.resize(capacity);
+        for (ArrayElement<T>& elem : elements) {
+            elem.valid = false;
+            elem.generation = 0;
         }
-        else {
-            uint index = freeSlots.top();
-            freeSlots.pop();
-            elements[index].element = newElement;
-            elements[index].valid = true;
-            return ArenaElementHandle<T>{index, elements[index].generation};
+        for (uint i = 0; i < capacity; i++) {
+            freeSlots.push(capacity - 1 - i);
         }
+    }
+    uint size() {
+        return (uint)(elements.size() - freeSlots.size());
+    }
+    void forEach(arrayForEachFunc f) {
+        uint n = 0;
+        uint s = size();
+        for (uint i = 0; i < elements.size(); i++) {
+            if (n == s) {
+                break;
+            }
+            if (elements[i].valid) {
+                n += 1;
+                f(i);
+            }
+        }
+    }
+    ArrayElementHandle<T> add(const T& newElement) {
+        assert(!freeSlots.empty());
+        uint index = freeSlots.top();
+        freeSlots.pop();
+        ArrayElement& elem = elements[index];
+        elem.element = newElement;
+        elem.valid = true;
+        return ArrayElementHandle<T>{index, elem.generation};
     }
     void remove(uint index) {
-        if (elements[index].valid) {
-            elements[index].generation += 1;
-            elements[index].valid = false;
-            freeSlots.push(index);
-        }
+        ArrayElement& elem = elements[index];
+        assert(elem.valid);
+        elem.valid = false;
+        elem.generation += 1;
+        freeSlots.push(index);
     }
-    T* get(ArenaElementHandle<T> handle) {
-        if (elements[handle.index].generation == handle.generation) {
-            return &elements[handle.index].element;
+    T* get(ArrayElementHandle<T> elemHandle) {
+        ArrayElement& elem = elements[elemHandle.index];
+        if (elem.valid && elem.generation == elemHandle.generation) {
+            return &elem.element;
         }
-        else {
-            return nullptr;
-        }
+        return nullptr;
     }
-};
-
-struct Task {
-    std::string msg;
 };
 
 #include "hlsl/shared.hlsli"
@@ -551,7 +571,6 @@ struct ModelAnimation {
 
 struct Model {
     std::filesystem::path filePath;
-    std::string filePathStr;
     cgltf_data* gltfData;
     std::vector<ModelNode> nodes;
     std::vector<ModelNode*> rootNodes;
@@ -709,7 +728,7 @@ struct Editor {
 
 // GLOBALS
 
-static std::filesystem::path exeDir = [] {
+static std::filesystem::path exePath = [] {
     wchar_t buf[512];
     DWORD moduleFileNameLen = GetModuleFileNameW(nullptr, buf, sizeof(buf) / sizeof(wchar_t));
     assert(moduleFileNameLen < (sizeof(buf) / sizeof(wchar_t)));
@@ -717,7 +736,7 @@ static std::filesystem::path exeDir = [] {
     return path.parent_path();
 }();
 
-static std::filesystem::path saveDir = [] {
+static std::filesystem::path savePath = [] {
     HRESULT hr;
     wchar_t* documentFolderPathStr;
     assert(SUCCEEDED(hr = SHGetKnownFolderPath(FOLDERID_SavedGames, KF_FLAG_DEFAULT, nullptr, &documentFolderPathStr)));
@@ -732,9 +751,9 @@ static std::filesystem::path saveDir = [] {
     return documentFolderPath;
 }();
 
-static std::filesystem::path worldFilePath = exeDir / "assets/worlds/bistro.yaml";
-static std::filesystem::path gameSavePath = saveDir / "save.yaml";
-static std::filesystem::path settingsPath = saveDir / "settings.yaml";
+static std::filesystem::path worldFilePath = exePath / "assets/worlds/test.yaml";
+static std::filesystem::path gameSavePath = savePath / "save.yaml";
+static std::filesystem::path settingsPath = savePath / "settings.yaml";
 
 static bool quit;
 static LARGE_INTEGER perfFrequency;
@@ -822,7 +841,7 @@ static PxControllerManager* pxControllerManager;
 #ifdef EDITOR
 static Editor editor;
 static bool editorActive = true;
-static moodycamel::ConcurrentQueue<Task> tasks;
+static moodycamel::ConcurrentQueue<std::string> tasksMsg;
 #endif
 
 // FUNCTIONS
@@ -1031,6 +1050,26 @@ void fileWriteBytes(const std::filesystem::path& path, void* data, uint64 size) 
     file.write((char*)data, size);
 }
 
+bool openFileDialogGLTF(std::filesystem::path* filePath) {
+    wchar_t filePathBuf[256] = L"";
+    OPENFILENAMEW openFileNameW = {
+        .lStructSize = sizeof(openFileNameW),
+        .hwndOwner = window.hwnd,
+        .lpstrFilter = L"*.gltf\0*.gltf\0",
+        .lpstrFile = filePathBuf,
+        .nMaxFile = countof(filePathBuf),
+        .lpstrInitialDir = exePath.c_str(),
+        .Flags = OFN_FILEMUSTEXIST,
+    };
+    if (GetOpenFileNameW(&openFileNameW)) {
+        *filePath = filePathBuf;
+        return true;
+    }
+    else {
+        return false;
+    }
+}
+
 bool commandLineContain(const wchar_t* arg) {
     int argsCount;
     LPWSTR* args = CommandLineToArgvW(GetCommandLineW(), &argsCount);
@@ -1161,18 +1200,18 @@ void imguiInit() {
     // ImGui::StyleColorsLight();
     // ImGui::StyleColorsClassic();
     ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = _strdup((exeDir / "imgui.ini").string().c_str());
+    io.IniFilename = _strdup((exePath / "imgui.ini").string().c_str());
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.FontGlobalScale = (float)screenH / 3000.0f;
     float baseFontSize = 50.0f;
-    imguiFont = io.Fonts->AddFontFromFileTTF((exeDir / "assets/fonts/NotoSerif.ttf").string().c_str(), baseFontSize);
+    imguiFont = io.Fonts->AddFontFromFileTTF((exePath / "assets/fonts/NotoSerif.ttf").string().c_str(), baseFontSize);
     ImWchar iconsRange[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
     float iconFontSize = baseFontSize * 2.0f / 3.0f; // FontAwesome fonts need to have their sizes reduced by 2.0f/3.0f in order to align correctly
     ImFontConfig iconsConfig;
     iconsConfig.MergeMode = true;
     iconsConfig.PixelSnapH = true;
     iconsConfig.GlyphMinAdvanceX = iconFontSize;
-    io.Fonts->AddFontFromFileTTF((exeDir / "assets/fonts/fa-solid-900.ttf").string().c_str(), iconFontSize, &iconsConfig, iconsRange);
+    io.Fonts->AddFontFromFileTTF((exePath / "assets/fonts/fa-solid-900.ttf").string().c_str(), iconFontSize, &iconsConfig, iconsRange);
 }
 
 void imguiDebugLogWindow() {
@@ -1542,12 +1581,12 @@ void d3dInit() {
     DXGI_ADAPTER_DESC dxgiAdapterDesc = {};
     assert(SUCCEEDED(hr = d3d.dxgiAdapter->GetDesc(&dxgiAdapterDesc)));
     assert(SUCCEEDED(hr = D3D12CreateDevice(d3d.dxgiAdapter, D3D_FEATURE_LEVEL_12_2, IID_PPV_ARGS(&d3d.device))));
-    //if (debug) {
-    //    ID3D12InfoQueue1* infoQueue;
-    //    DWORD callbackCookie;
-    //    assert(SUCCEEDED(hr = d3d.device->QueryInterface(IID_PPV_ARGS(&infoQueue))));
-    //    assert(SUCCEEDED(hr = infoQueue->RegisterMessageCallback(d3dMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &callbackCookie)));
-    //}
+    // if (debug) {
+    //     ID3D12InfoQueue1* infoQueue;
+    //     DWORD callbackCookie;
+    //     assert(SUCCEEDED(hr = d3d.device->QueryInterface(IID_PPV_ARGS(&infoQueue))));
+    //     assert(SUCCEEDED(hr = infoQueue->RegisterMessageCallback(d3dMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &callbackCookie)));
+    // }
     IDXGIOutput6* dxgiOutput;
     DXGI_OUTPUT_DESC1 dxgiOutputDesc;
     assert(SUCCEEDED(hr = d3d.dxgiAdapter->EnumOutputs(0, (IDXGIOutput**)&dxgiOutput)));
@@ -1765,7 +1804,7 @@ void d3dInit() {
 void d3dCompileShaders() {
     HRESULT hr;
     {
-        static std::filesystem::path shaderPath = exeDir / "renderScene.cso";
+        static std::filesystem::path shaderPath = exePath / "renderScene.cso";
         static std::filesystem::file_time_type prevLastWriteTime = {};
         std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
         if (lastWriteTime > prevLastWriteTime) {
@@ -1791,7 +1830,7 @@ void d3dCompileShaders() {
         }
     }
     {
-        static std::filesystem::path shaderPath = exeDir / "pathTracer.cso";
+        static std::filesystem::path shaderPath = exePath / "pathTracer.cso";
         static std::filesystem::file_time_type prevLastWriteTime = {};
         std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
         if (lastWriteTime > prevLastWriteTime) {
@@ -1815,7 +1854,7 @@ void d3dCompileShaders() {
         }
     }
     {
-        static std::filesystem::path shaderPath = exeDir / "collisionQuery.cso";
+        static std::filesystem::path shaderPath = exePath / "collisionQuery.cso";
         static std::filesystem::file_time_type prevLastWriteTime = {};
         std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
         if (lastWriteTime > prevLastWriteTime) {
@@ -1839,7 +1878,7 @@ void d3dCompileShaders() {
         }
     }
     {
-        static std::filesystem::path shaderPath = exeDir / "vertexSkinningCS.cso";
+        static std::filesystem::path shaderPath = exePath / "vertexSkinningCS.cso";
         static std::filesystem::file_time_type prevLastWriteTime = {};
         std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
         if (lastWriteTime > prevLastWriteTime) {
@@ -1855,8 +1894,8 @@ void d3dCompileShaders() {
         }
     }
     {
-        static std::filesystem::path shaderPathVS = exeDir / "compositeVS.cso";
-        static std::filesystem::path shaderPathPS = exeDir / "compositePS.cso";
+        static std::filesystem::path shaderPathVS = exePath / "compositeVS.cso";
+        static std::filesystem::path shaderPathPS = exePath / "compositePS.cso";
         static std::filesystem::file_time_type prevLastWriteTimeVS = {};
         static std::filesystem::file_time_type prevLastWriteTimePS = {};
         std::filesystem::file_time_type lastWriteTimeVS = std::filesystem::last_write_time(shaderPathVS);
@@ -1886,8 +1925,8 @@ void d3dCompileShaders() {
         }
     }
     {
-        static std::filesystem::path shaderPathVS = exeDir / "ImGuiVS.cso";
-        static std::filesystem::path shaderPathPS = exeDir / "ImGuiPS.cso";
+        static std::filesystem::path shaderPathVS = exePath / "ImGuiVS.cso";
+        static std::filesystem::path shaderPathPS = exePath / "ImGuiPS.cso";
         static std::filesystem::file_time_type prevLastWriteTimeVS = {};
         static std::filesystem::file_time_type prevLastWriteTimePS = {};
         std::filesystem::file_time_type lastWriteTimeVS = std::filesystem::last_write_time(shaderPathVS);
@@ -1998,7 +2037,7 @@ D3DDescriptor d3dAppendUAVDescriptor(D3D12_UNORDERED_ACCESS_VIEW_DESC* unordered
 
 void dlssInit() {
     int needsDriver = true;
-    assert(NVSDK_NGX_D3D12_Init_with_ProjectID("1a632058-a49b-48d1-a742-9906f91912af", NVSDK_NGX_ENGINE_TYPE_CUSTOM, "1.0", exeDir.c_str(), d3d.device) == NVSDK_NGX_Result_Success);
+    assert(NVSDK_NGX_D3D12_Init_with_ProjectID("1a632058-a49b-48d1-a742-9906f91912af", NVSDK_NGX_ENGINE_TYPE_CUSTOM, "1.0", exePath.c_str(), d3d.device) == NVSDK_NGX_Result_Success);
     assert(NVSDK_NGX_D3D12_GetCapabilityParameters(&ngxParameter) == NVSDK_NGX_Result_Success);
     assert(ngxParameter->Get(NVSDK_NGX_Parameter_SuperSampling_NeedsUpdatedDriver, &needsDriver) == NVSDK_NGX_Result_Success);
     assert(ngxParameter->Get(NVSDK_NGX_Parameter_SuperSampling_Available, &dlssAvaliable) == NVSDK_NGX_Result_Success);
@@ -2115,20 +2154,18 @@ bool projectCameraSpaceTriangleToScreen(float3 p0, float3 p1, float3 p2, float2*
 }
 
 Model* modelInitGLTF(const std::filesystem::path& filePath) {
-    std::filesystem::path gltfFilePath = filePath;
-    if (filePath.is_relative()) { gltfFilePath = exeDir / filePath; }
-    std::filesystem::path gltfFileFolderPath = gltfFilePath.parent_path();
+    assert(filePath.is_relative());
+    std::filesystem::path filePathFull = exePath / filePath;
     cgltf_options gltfOptions = {};
     cgltf_data* gltfData = nullptr;
-    cgltf_result gltfParseFileResult = cgltf_parse_file(&gltfOptions, gltfFilePath.string().c_str(), &gltfData);
+    cgltf_result gltfParseFileResult = cgltf_parse_file(&gltfOptions, filePathFull.string().c_str(), &gltfData);
     assert(gltfParseFileResult == cgltf_result_success);
-    cgltf_result gltfLoadBuffersResult = cgltf_load_buffers(&gltfOptions, gltfData, gltfFilePath.string().c_str());
+    cgltf_result gltfLoadBuffersResult = cgltf_load_buffers(&gltfOptions, gltfData, filePathFull.string().c_str());
     assert(gltfLoadBuffersResult == cgltf_result_success);
     assert(gltfData->scenes_count == 1);
 
     Model* model = &models.emplace_back();
     model->filePath = filePath;
-    model->filePathStr = filePath.string();
     model->gltfData = gltfData;
 
     HRESULT hr;
@@ -2149,7 +2186,7 @@ Model* modelInitGLTF(const std::filesystem::path& filePath) {
         cgltf_image& gltfImage = gltfData->images[imageIndex];
         ModelImage& image = model->images[imageIndex];
         if (gltfImage.name) image.name = gltfImage.name;
-        std::filesystem::path imageFilePath = gltfFileFolderPath / gltfImage.uri;
+        std::filesystem::path imageFilePath = filePathFull.parent_path() / gltfImage.uri;
         std::filesystem::path imageDDSFilePath = imageFilePath;
         imageDDSFilePath.replace_extension(".dds");
         if (std::filesystem::exists(imageDDSFilePath)) {
@@ -2541,7 +2578,7 @@ Model* modelInitGLTF(const std::filesystem::path& filePath) {
     d3dSignalFence(&d3d.transferFence);
     d3dWaitFence(&d3d.transferFence);
     {
-        std::filesystem::path convexMeshPath = gltfFilePath;
+        std::filesystem::path convexMeshPath = filePath;
         convexMeshPath.replace_extension("convexMesh");
         if (std::filesystem::exists(convexMeshPath)) {
             std::vector<uint8> data = fileReadBytes(convexMeshPath);
@@ -2551,7 +2588,7 @@ Model* modelInitGLTF(const std::filesystem::path& filePath) {
         }
     }
     {
-        std::filesystem::path triangleMeshPath = gltfFilePath;
+        std::filesystem::path triangleMeshPath = filePath;
         triangleMeshPath.replace_extension("triangleMesh");
         if (std::filesystem::exists(triangleMeshPath)) {
             std::vector<uint8> data = fileReadBytes(triangleMeshPath);
@@ -2570,7 +2607,7 @@ Model* modelInitFBX(const std::filesystem::path& filePath) {
 
 Model* modelInit(const std::filesystem::path& filePath) {
     for (Model& m : models) {
-        if (m.filePath == filePath) {
+        if (std::error_code err; std::filesystem::equivalent(m.filePath, filePath, err)) {
             return &m;
         }
     }
@@ -2589,7 +2626,8 @@ Model* modelInit(const std::filesystem::path& filePath) {
 #ifdef EDITOR
 void modelGenerateDDSImages(const Model& model) {
     auto generateDDSImages = [](const Model& model) {
-        std::filesystem::path modelDirPath = (exeDir / model.filePath).parent_path();
+        std::filesystem::path modelDirPath = (exePath / model.filePath).parent_path();
+        tasksMsg.enqueue("modelGenerateDDSImages started: (" + modelDirPath.string() + ")");
         enum TextureType {
             TextureTypeBaseColor,
             TextureTypeMetallicRoughness,
@@ -2623,11 +2661,11 @@ void modelGenerateDDSImages(const Model& model) {
             noError = hashImage(gltfMaterial.normal_texture.texture, {TextureTypeNormal, false});
             noError = hashImage(gltfMaterial.emissive_texture.texture, {TextureTypeEmissive, false});
             if (!noError) {
-                tasks.enqueue(Task{"modelGenerateDDSImages error: hashImage (" + modelDirPath.string() + ")"});
+                tasksMsg.enqueue("modelGenerateDDSImages error: hashImage (" + modelDirPath.string() + ")");
                 return;
             }
         }
-        assert(SetCurrentDirectory(exeDir.c_str()));
+        assert(SetCurrentDirectory(exePath.c_str()));
         for (auto& image : imagesHashMap) {
             std::filesystem::path imageFilePath = image.first->uri;
             if (imageFilePath.extension() == ".dds") {
@@ -2636,7 +2674,7 @@ void modelGenerateDDSImages(const Model& model) {
             std::filesystem::path imageFilePathFull = modelDirPath / imageFilePath;
             int width, height, comp;
             if (!stbi_info(imageFilePathFull.string().c_str(), &width, &height, &comp)) {
-                tasks.enqueue(Task{"modelGenerateDDSImages error: stbi_info (" + imageFilePathFull.string() + ")"});
+                tasksMsg.enqueue("modelGenerateDDSImages error: stbi_info (" + imageFilePathFull.string() + ")");
                 continue;
             }
             if (width < 4 || height < 4) {
@@ -2659,11 +2697,11 @@ void modelGenerateDDSImages(const Model& model) {
                 WaitForSingleObject(processInfo.hProcess, INFINITE);
             }
             else {
-                tasks.enqueue(Task{"modelGenerateDDSImages error: CreateProcessA (" + modelDirPath.string() + ")"});
+                tasksMsg.enqueue("modelGenerateDDSImages error: CreateProcessA (" + modelDirPath.string() + ")");
                 return;
             }
         }
-        tasks.enqueue(Task{"modelGenerateDDSImages finished: (" + modelDirPath.string() + ")"});
+        tasksMsg.enqueue("modelGenerateDDSImages finished: (" + modelDirPath.string() + ")");
     };
     std::thread generateDDSImagesThread(generateDDSImages, model);
     generateDDSImagesThread.detach();
@@ -2795,7 +2833,10 @@ ModelInstance modelInstanceInit(Model* model) {
 ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
     Model* model = nullptr;
     for (Model& m : models) {
-        if (m.filePath == filePath) model = &m;
+        if (std::filesystem::equivalent(m.filePath, filePath)) {
+            model = &m;
+            break;
+        }
     }
     assert(model);
     return modelInstanceInit(model);
@@ -3066,9 +3107,9 @@ void modelInstanceAddBLASInstancesToTLAS(ModelInstance& modelInstance, const XMM
 }
 
 void loadSimpleAssets() {
-    modelInstanceSphere = modelInstanceInit("assets/models/sphere/gltf/sphere.gltf");
-    modelInstanceCube = modelInstanceInit("assets/models/cube/gltf/cube.gltf");
-    modelInstanceCylinder = modelInstanceInit("assets/models/cylinder/gltf/cylinder.gltf");
+    modelInstanceSphere = modelInstanceInit(".\\assets\\models\\sphere\\gltf\\sphere.gltf");
+    modelInstanceCube = modelInstanceInit(".\\assets\\models\\cube\\gltf\\cube.gltf");
+    modelInstanceCylinder = modelInstanceInit(".\\assets\\models\\cylinder\\gltf\\cylinder.gltf");
 }
 
 void physxInit() {
@@ -3216,14 +3257,14 @@ void worldInit() {
             skyboxYaml >> file;
             Skybox skybox;
             skybox.hdriTextureFilePath = file;
-            skybox.hdriTexture = d3dCreateImageDDS(exeDir / skybox.hdriTextureFilePath, L"SkyboxHDRI", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            skybox.hdriTexture = d3dCreateImageDDS(exePath / skybox.hdriTextureFilePath, L"SkyboxHDRI", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             skyboxes.push_back(skybox);
         }
         d3dGraphicsCmdListExecute();
         d3dSignalFence(&d3d.transferFence);
         d3dWaitFence(&d3d.transferFence);
 
-        const char* simpleModelFiles[] = {"assets/models/sphere/gltf/sphere.gltf", "assets/models/cube/gltf/cube.gltf", "assets/models/cylinder/gltf/cylinder.gltf"};
+        const char* simpleModelFiles[] = {".\\assets\\models\\sphere\\gltf\\sphere.gltf", ".\\assets\\models\\cube\\gltf\\cube.gltf", ".\\assets\\models\\cylinder\\gltf\\cylinder.gltf"};
         for (const char* modelFile : simpleModelFiles) {
             assert(modelInit(modelFile));
         }
@@ -3671,7 +3712,7 @@ void editorObjectsWindow() {
             static char objectName[32] = {};
             static int modelIndex = -1;
             auto getModelFileName = [](void* userData, int index) {
-                return models[index].filePathStr.c_str();
+                return models[index].filePath.string().c_str();
             };
             auto nameUnique = []() {
                 for (GameObject& object : gameObjects) {
@@ -4207,6 +4248,16 @@ void editorPropertiesWindow() {
 void editorAssetsWindow() {
     if (ImGui::Begin("Assets")) {
         if (ImGui::TreeNode("Models")) {
+            if (ImGui::Button("new")) {
+                std::filesystem::path filePath;
+                if (openFileDialogGLTF(&filePath)) {
+                    wchar_t filePathBuf[256];
+                    if (PathRelativePathToW(filePathBuf, exePath.c_str(), FILE_ATTRIBUTE_DIRECTORY, filePath.c_str(), 0)) {
+                        filePath = filePathBuf;
+                        modelInit(filePath);
+                    }
+                }
+            }
             for (uint modelIndex = 0; modelIndex < models.size(); modelIndex++) {
                 ImGui::PushID(modelIndex);
                 Model& model = models[modelIndex];
@@ -4214,8 +4265,11 @@ void editorAssetsWindow() {
                     editor.selectedModelIndex = modelIndex;
                 }
                 if (ImGui::BeginPopupContextItem()) {
-                    if (ImGui::Button("generate .dds images")) {
+                    if (ImGui::Selectable("generate .dds images")) {
                         modelGenerateDDSImages(model);
+                        ImGui::CloseCurrentPopup();
+                    }
+                    if (ImGui::Selectable("delete")) {
                         ImGui::CloseCurrentPopup();
                     }
                     ImGui::EndPopup();
@@ -4320,9 +4374,9 @@ void editorUpdate() {
     editorObjectsWindow();
     editorPropertiesWindow();
     editorAssetsWindow();
-    Task task;
-    if (tasks.try_dequeue(task)) {
-        debugLog("%s\n", task.msg.c_str());
+    std::string taskMsg;
+    if (tasksMsg.try_dequeue(taskMsg)) {
+        debugLog("%s\n", taskMsg.c_str());
     }
 
     if (editor.mode == EditorModeFreeCam) {
@@ -4547,8 +4601,8 @@ void editorUpdate() {
 
 void liveReloadFuncs() {
     static HMODULE gameDLL = nullptr;
-    static std::filesystem::path gameDLLPath = exeDir / "game.dll";
-    static std::filesystem::path gameDLLCopyPath = exeDir / "game.dll";
+    static std::filesystem::path gameDLLPath = exePath / "game.dll";
+    static std::filesystem::path gameDLLCopyPath = exePath / "game.dll";
     static std::filesystem::file_time_type gameDLLPrevLastWriteTime = {};
     if (std::filesystem::is_regular_file(gameDLLPath)) {
         std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(gameDLLPath);
@@ -5409,7 +5463,7 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
 }
 
 int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) {
-    assert(SetCurrentDirectoryW(exeDir.c_str()));
+    assert(SetCurrentDirectoryW(exePath.c_str()));
     settingsInit();
     windowInit();
     windowShow();
@@ -5419,7 +5473,7 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
     imguiInit();
     d3dInit();
     d3dApplySettings();
-    dlssInit();
+    // dlssInit();
     physxInit();
     worldInit();
     gameReadSave();

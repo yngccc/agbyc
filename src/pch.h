@@ -28,6 +28,7 @@
 #include <shellapi.h>
 #include <shellscalingapi.h>
 #include <shlobj.h>
+#include <shlwapi.h>
 #include <cderr.h>
 #include <commdlg.h>
 #include <winsock2.h>
