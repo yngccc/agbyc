@@ -52,10 +52,10 @@ void rayGen() {
     payload.transmissions = (1, 1, 1, 1);
     payload.depths = (1, 1, 1, 1);
     TraceRay(bvh, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, payload);
-    payload.color = payload.color * payload.transmissions[3] + (1.0 - payload.transmissions[3]) * unpackRGB(payload.colors[3]);
-    payload.color = payload.color * payload.transmissions[2] + (1.0 - payload.transmissions[2]) * unpackRGB(payload.colors[2]);
-    payload.color = payload.color * payload.transmissions[1] + (1.0 - payload.transmissions[1]) * unpackRGB(payload.colors[1]);
-    payload.color = payload.color * payload.transmissions[0] + (1.0 - payload.transmissions[0]) * unpackRGB(payload.colors[0]);
+    //payload.color = payload.color * payload.transmissions[3] + (1.0 - payload.transmissions[3]) * unpackRGB(payload.colors[3]);
+    //payload.color = payload.color * payload.transmissions[2] + (1.0 - payload.transmissions[2]) * unpackRGB(payload.colors[2]);
+    //payload.color = payload.color * payload.transmissions[1] + (1.0 - payload.transmissions[1]) * unpackRGB(payload.colors[1]);
+    //payload.color = payload.color * payload.transmissions[0] + (1.0 - payload.transmissions[0]) * unpackRGB(payload.colors[0]);
     renderTexture[pixelIndex] = payload.color;
     depthTexture[pixelIndex] = payload.depth;
 }
@@ -87,22 +87,24 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
     float3 p0 = mul(ObjectToWorld3x4(), float4(v0.position, 1));
     float3 p1 = mul(ObjectToWorld3x4(), float4(v1.position, 1));
     float3 p2 = mul(ObjectToWorld3x4(), float4(v2.position, 1));
+    float3 n0 = normalize(mul(blasInstanceInfo.transformNormalMat, v0.normal));
+    float3 n1 = normalize(mul(blasInstanceInfo.transformNormalMat, v1.normal));
+    float3 n2 = normalize(mul(blasInstanceInfo.transformNormalMat, v2.normal));
     float3 b0 = normalize(cross(v0.normal, v0.tangent.xyz) * v0.tangent.w);
     float3 b1 = normalize(cross(v1.normal, v1.tangent.xyz) * v1.tangent.w);
     float3 b2 = normalize(cross(v2.normal, v2.tangent.xyz) * v2.tangent.w);
     
     float3 position = barycentricsLerp(trigAttribs.barycentrics, p0, p1, p2);
-    float3 normal = barycentricsLerp(trigAttribs.barycentrics, v0.normal, v1.normal, v2.normal);
-    normal = normalize(mul(blasInstanceInfo.transformNormalMat, normal));
+    float3 normal = barycentricsLerp(trigAttribs.barycentrics, n0, n1, n2);
     float3 tangent = barycentricsLerp(trigAttribs.barycentrics, v0.tangent.xyz, v1.tangent.xyz, v2.tangent.xyz);
-    tangent = normalize(mul(blasInstanceInfo.transformNormalMat, tangent));
     float3 bitangent = barycentricsLerp(trigAttribs.barycentrics, b0, b1, b2);
+    tangent = normalize(mul(blasInstanceInfo.transformNormalMat, tangent));
     bitangent = normalize(mul(blasInstanceInfo.transformNormalMat, bitangent));
     float3 geometryNormal = triangleGeometryNormal(p0, p1, p2);
-    if (dot(geometryNormal, -WorldRayDirection()) < 0.0) {
+    if (dot(geometryNormal, -WorldRayDirection()) < 0) {
         geometryNormal = -geometryNormal;
     }
-    if (dot(geometryNormal, normal) < 0.0) {
+    if (dot(geometryNormal, normal) < 0) {
         normal = -normal;
         tangent = -tangent;
         bitangent = -bitangent;
@@ -144,7 +146,7 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
             color = unpackRGBA(blasInstanceInfo.color);
         }
     }
-    payload.color += color.rgb;
+    payload.color += color.rgb * dot(normal, normalize(1.xxx));
     
     //float4 ndc = mul(renderInfo.cameraViewProjectMat, float4(position, 1));
     //payload.depth = ndc.z / ndc.w;
@@ -152,14 +154,17 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
     
     //RayPayloadShadow rayPayload;
     //RayDesc shadowRay;
+    ////shadowRay.Origin = offsetRayShadow(position, p0, p1, p2, n0, n1, n2, 1.0 - trigAttribs.barycentrics.x - trigAttribs.barycentrics.y, trigAttribs.barycentrics.x, trigAttribs.barycentrics.y);
     //shadowRay.Origin = offsetRay(position, geometryNormal);
-    ////shadowRay.Origin = offsetRayShadow(position, p0, p1, p2, n0, n1, n2, trigAttribs.barycentrics.x, trigAttribs.barycentrics.y, 1.0 - trigAttribs.barycentrics.x - trigAttribs.barycentrics.y);
-    //shadowRay.TMin = 0.0f;
-    //shadowRay.TMax = 1000.0f;
-    //shadowRay.Direction = lightDir;
+    //shadowRay.TMin = 0;
+    //shadowRay.TMax = 1000;
+    //shadowRay.Direction = normalize(float3(1, 1, 1));
     //TraceRay(bvh, RAY_FLAG_NONE, 0xff, 1, 0, 1, shadowRay, rayPayload);
     //if (rayPayload.hit) {
-    //    payload.color *= 0.1;
+    //    payload.color += 0.xxx;
+    //}
+    //else {
+    //    payload.color += 0.5.xxx;
     //}
 }
 

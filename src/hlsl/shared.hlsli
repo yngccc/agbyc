@@ -180,7 +180,6 @@ float3 offsetRay(const float3 p, const float3 n) {
 		abs(p.z) < origin ? p.z + float_scale * n.z : p_i.z);
 }
 
-
 float3 offsetRayShadow(in float3 p, in float3 a, in float3 b, in float3 c, in float3 na, in float3 nb, in float3 nc, in float u, in float v, in float w) {
     float3 tmpu = p - a;
     float3 tmpv = p - b;

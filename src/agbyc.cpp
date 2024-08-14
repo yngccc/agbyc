@@ -208,29 +208,27 @@ struct AABB {
 };
 
 template <typename T>
-struct ArrayElementHandle {
+struct ArenaElementHandle {
     uint index;
     uint generation;
 };
 
 template <typename T>
-struct ArrayElement {
+struct ArenaElement {
     bool valid;
     uint generation;
     T element;
 };
 
-typedef void (*arrayForEachFunc)(uint elemIndex);
-
 template <typename T>
-struct Array {
-    std::vector<ArrayElement<T>> elements;
+struct Arena {
+    std::vector<ArenaElement<T>> elements;
     std::stack<uint> freeSlots;
 
-    Array() = delete;
-    Array(uint capacity) {
+    Arena() = delete;
+    Arena(uint capacity) {
         elements.resize(capacity);
-        for (ArrayElement<T>& elem : elements) {
+        for (ArenaElement<T>& elem : elements) {
             elem.valid = false;
             elem.generation = 0;
         }
@@ -241,41 +239,114 @@ struct Array {
     uint size() {
         return (uint)(elements.size() - freeSlots.size());
     }
-    void forEach(arrayForEachFunc f) {
-        uint n = 0;
-        uint s = size();
-        for (uint i = 0; i < elements.size(); i++) {
-            if (n == s) {
-                break;
-            }
-            if (elements[i].valid) {
-                n += 1;
-                f(i);
-            }
-        }
-    }
-    ArrayElementHandle<T> add(const T& newElement) {
+    ArenaElementHandle<T> add(const T& newElement) {
         assert(!freeSlots.empty());
         uint index = freeSlots.top();
         freeSlots.pop();
-        ArrayElement& elem = elements[index];
-        elem.element = newElement;
+        ArenaElement<T>& elem = elements[index];
         elem.valid = true;
-        return ArrayElementHandle<T>{index, elem.generation};
+        elem.element = newElement;
+        return ArenaElementHandle<T>{index, elem.generation};
     }
-    void remove(uint index) {
-        ArrayElement& elem = elements[index];
-        assert(elem.valid);
-        elem.valid = false;
-        elem.generation += 1;
-        freeSlots.push(index);
+    ArenaElementHandle<T> add(T&& newElement) {
+        assert(!freeSlots.empty());
+        uint index = freeSlots.top();
+        freeSlots.pop();
+        ArenaElement<T>& elem = elements[index];
+        elem.valid = true;
+        elem.element = std::forward<T>(newElement);
+        return ArenaElementHandle<T>{index, elem.generation};
     }
-    T* get(ArrayElementHandle<T> elemHandle) {
-        ArrayElement& elem = elements[elemHandle.index];
+    ArenaElementHandle<T> add() {
+        assert(!freeSlots.empty());
+        uint index = freeSlots.top();
+        freeSlots.pop();
+        ArenaElement<T>& elem = elements[index];
+        elem.valid = true;
+        elem.element = T{};
+        return ArenaElementHandle<T>{index, elem.generation};
+    }
+    bool remove(uint index) {
+        ArenaElement<T>& elem = elements[index];
+        if (elem.valid) {
+            elem.valid = false;
+            elem.generation += 1;
+            freeSlots.push(index);
+            return true;
+        }
+        return false;
+    }
+    bool remove(ArenaElementHandle<T> handle) {
+        ArenaElement<T>& elem = elements[handle.index];
+        if (elem.valid && elem.generation == handle.generation) {
+            elem.valid = false;
+            elem.generation += 1;
+            freeSlots.push(handle.index);
+            return true;
+        }
+        return false;
+    }
+    T* get(uint index) {
+        ArenaElement<T>& elem = elements[index];
+        if (elem.valid) {
+            return &elem.element;
+        }
+        return nullptr;
+    }
+    T* get(ArenaElementHandle<T> elemHandle) {
+        ArenaElement<T>& elem = elements[elemHandle.index];
         if (elem.valid && elem.generation == elemHandle.generation) {
             return &elem.element;
         }
         return nullptr;
+    }
+    using forEachFunc = void (*)(void* captures, T* elem);
+    void forEach(void* captures, forEachFunc f) {
+        uint n = 0, s = size(), es = (uint)elements.size();
+        for (uint i = 0; i < es; i++) {
+            if (n == s) break;
+            if (elements[i].valid) {
+                n += 1;
+                f(captures, &elements[i].element);
+            }
+        }
+    }
+    using forEachWithIndexFunc = void (*)(void* captures, T* elem, uint index);
+    void forEachWithIndex(void* captures, forEachWithIndexFunc f) {
+        uint n = 0, s = size(), es = (uint)elements.size();
+        for (uint i = 0; i < es; i++) {
+            if (n == s) break;
+            if (elements[i].valid) {
+                n += 1;
+                f(captures, &elements[i].element, i);
+            }
+        }
+    }
+    using forEachIfFunc = bool (*)(void* captures, T* elem);
+    bool anyIf(void* captures, forEachIfFunc f) {
+        uint n = 0, s = size(), es = (uint)elements.size();
+        for (uint i = 0; i < es; i++) {
+            if (n == s) break;
+            if (elements[i].valid) {
+                n += 1;
+                if (f(captures, &elements[i].element)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    void removeIf(void* captures, forEachIfFunc f) {
+        uint n = 0, s = size(), es = (uint)elements.size();
+        for (uint i = 0; i < es; i++) {
+            if (n == s) break;
+            if (elements[i].valid) {
+                n += 1;
+                if (f(captures, elements[i].element)) {
+                    remove(i);
+                }
+            }
+        }
     }
 };
 
@@ -660,7 +731,6 @@ struct GameObject {
     Transform transform;
     Transform transformPrevFrame;
     PxRigidActor* rigidActor;
-    bool toBeDeleted;
 };
 
 struct Skybox {
@@ -685,19 +755,27 @@ struct Controller {
 };
 
 enum EditorUndoType {
-    EditorUndoTypeObjectDeletion
+    EditorUndoTypePlayerTransform,
+    EditorUndoTypeGameObjectTransform,
+    EditorUndoTypeGameObjectDeletion,
 };
 
-struct EditorUndoObjectDeletion {
-    ObjectType objectType;
-    void* object;
+struct EditorUndoPlayerTransform {
+    Transform transform;
+};
+
+struct EditorUndoGameObjectTransform {
+    std::string objectName;
+    Transform transform;
+};
+
+struct EditorUndoGameObjectDeletion {
+    GameObject gameObject;
 };
 
 struct EditorUndo {
     EditorUndoType type;
-    union {
-        EditorUndoObjectDeletion* objectDeletion;
-    };
+    void* data;
 };
 
 enum EditorMode {
@@ -706,6 +784,8 @@ enum EditorMode {
 };
 
 struct Editor {
+    bool active = true;
+
     EditorMode mode = EditorModeFreeCam;
     CameraEditor camera;
     CameraEditor editCamera;
@@ -723,7 +803,16 @@ struct Editor {
     bool beginDragDropGameObject;
     GameObject dragDropGameObject;
 
-    std::stack<EditorUndo> undos;
+    std::list<EditorUndo> undos;
+    std::list<EditorUndo> redos;
+
+    moodycamel::ConcurrentQueue<std::string> tasksMsg;
+};
+
+enum MouseSelectState {
+    mouseSelectStarted,
+    mouseSelectOngoing,
+    mouseSelectEnded,
 };
 
 // GLOBALS
@@ -760,6 +849,7 @@ static LARGE_INTEGER perfFrequency;
 static LARGE_INTEGER perfCounterStart;
 static LARGE_INTEGER perfCounterEnd;
 static float frameTime;
+static MouseSelectState mouseSelectState = mouseSelectEnded;
 static uint mouseSelectX = UINT_MAX;
 static uint mouseSelectY = UINT_MAX;
 static int2 mouseDeltaRaw;
@@ -801,8 +891,8 @@ static ModelInstance modelInstanceCube;     /* 1 meter w/h/d */
 static ModelInstance modelInstanceCylinder; /* length 1 meter, diameter 1 meter */
 static Player player;
 static const uint gameObjectsMaxCount = 10'000;
-static std::vector<GameObject> gameObjects = [] { std::vector<GameObject> gameObjects; gameObjects.reserve(gameObjectsMaxCount); return gameObjects; }();
-static std::vector<GameObject*> gameObjectsWithDynamicRigidBody;
+// static std::vector<GameObject> gameObjects = [] { std::vector<GameObject> gameObjects; gameObjects.reserve(gameObjectsMaxCount); return gameObjects; }();
+static Arena<GameObject> gameObjects(gameObjectsMaxCount);
 static std::vector<Light> lights;
 
 static std::vector<D3D12_RAYTRACING_INSTANCE_DESC> blasInstancesDescs;
@@ -840,8 +930,6 @@ static PxControllerManager* pxControllerManager;
 
 #ifdef EDITOR
 static Editor editor;
-static bool editorActive = true;
-static moodycamel::ConcurrentQueue<std::string> tasksMsg;
 #endif
 
 // FUNCTIONS
@@ -1045,7 +1133,7 @@ void fileWriteStr(const std::filesystem::path& path, const std::string& str) {
     file << str;
 }
 
-void fileWriteBytes(const std::filesystem::path& path, void* data, uint64 size) {
+void fileWriteBytes(const std::filesystem::path& path, const void* data, uint64 size) {
     std::ofstream file(path, std::ios::out | std::ios::trunc | std::ios::binary);
     file.write((char*)data, size);
 }
@@ -1413,33 +1501,21 @@ void d3dMessageCallback(D3D12_MESSAGE_CATEGORY category, D3D12_MESSAGE_SEVERITY 
     }
 }
 
-void d3dGraphicsCmdListReset() {
-    HRESULT hr;
-    assert(SUCCEEDED(hr = d3d.graphicsCmdAllocator->Reset()));
-    assert(SUCCEEDED(hr = d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
-}
-
-void d3dGraphicsCmdListExecute() {
-    HRESULT hr;
-    assert(SUCCEEDED(hr = d3d.graphicsCmdList->Close()));
-    d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
-}
-
 void d3dSignalFence(D3DFence* fence) {
     fence->value += 1;
     d3d.graphicsQueue->Signal(fence->fence, fence->value);
 }
 
-void d3dWaitFence(D3DFence* fence) {
-    if (fence->fence->GetCompletedValue() < fence->value) {
+void d3dWaitFence(const D3DFence& fence) {
+    if (fence.fence->GetCompletedValue() < fence.value) {
         HRESULT hr;
-        assert(SUCCEEDED(hr = fence->fence->SetEventOnCompletion(fence->value, fence->event)));
-        assert(WaitForSingleObjectEx(fence->event, INFINITE, false) == WAIT_OBJECT_0);
+        assert(SUCCEEDED(hr = fence.fence->SetEventOnCompletion(fence.value, fence.event)));
+        assert(WaitForSingleObjectEx(fence.event, INFINITE, false) == WAIT_OBJECT_0);
     }
 }
 
-bool d3dTryWaitFence(D3DFence* fence) {
-    bool wait = fence->fence->GetCompletedValue() < fence->value;
+bool d3dTryWaitFence(const D3DFence& fence) {
+    bool wait = fence.fence->GetCompletedValue() < fence.value;
     return !wait;
 }
 
@@ -1490,10 +1566,12 @@ D3D12MA::Allocation* d3dCreateImageSTB(const std::filesystem::path& ddsFilePath,
     uint64 requiredSize;
     d3d.device->GetCopyableFootprints(&resourceDesc, 0, 1, 0, &mipFootprint, &rowCount, &rowSize, &requiredSize);
     if (d3d.stagingBuffer.offset + requiredSize >= d3d.stagingBuffer.capacity) {
-        d3dGraphicsCmdListExecute();
+        assert(SUCCEEDED(hr = d3d.graphicsCmdList->Close()));
+        d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
         d3dSignalFence(&d3d.transferFence);
-        d3dWaitFence(&d3d.transferFence);
-        d3dGraphicsCmdListReset();
+        d3dWaitFence(d3d.transferFence);
+        assert(SUCCEEDED(hr = d3d.graphicsCmdAllocator->Reset()));
+        assert(SUCCEEDED(hr = d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
         d3d.stagingBuffer.offset = 0;
     }
     mipFootprint.Offset += d3d.stagingBuffer.offset;
@@ -1536,10 +1614,12 @@ D3D12MA::Allocation* d3dCreateImageDDS(const std::filesystem::path& ddsFilePath,
     D3D12_SUBRESOURCE_DATA srcData[16];
     d3d.device->GetCopyableFootprints(&resourceDesc, 0, resourceDesc.MipLevels, 0, mipFootprints, rowCounts, rowSizes, &requiredSize);
     if (d3d.stagingBuffer.offset + requiredSize >= d3d.stagingBuffer.capacity) {
-        d3dGraphicsCmdListExecute();
+        assert(SUCCEEDED(hr = d3d.graphicsCmdList->Close()));
+        d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
         d3dSignalFence(&d3d.transferFence);
-        d3dWaitFence(&d3d.transferFence);
-        d3dGraphicsCmdListReset();
+        d3dWaitFence(d3d.transferFence);
+        assert(SUCCEEDED(hr = d3d.graphicsCmdAllocator->Reset()));
+        assert(SUCCEEDED(hr = d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
         d3d.stagingBuffer.offset = 0;
     }
     for (uint mipIndex = 0; mipIndex < scratchImageInfo.mipLevels; mipIndex++) {
@@ -1757,7 +1837,8 @@ void d3dInit() {
         d3d.pathTracerAccumulationTexture->GetResource()->SetName(L"pathTracerAccumulationTexture");
     }
     {
-        d3dGraphicsCmdListReset();
+        assert(SUCCEEDED(hr = d3d.graphicsCmdAllocator->Reset()));
+        assert(SUCCEEDED(hr = d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
         d3d.stagingBuffer.offset = 0;
         {
             uint8* imguiTextureData;
@@ -1795,9 +1876,10 @@ void d3dInit() {
             d3d.defaultEmissiveTexture = d3dCreateImage(D3D12MA::ALLOCATION_DESC{.HeapType = D3D12_HEAP_TYPE_DEFAULT}, nullptr, desc, &data, d3d.graphicsCmdList, L"defaultEmissiveTexture", D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             d3d.defaultEmissiveTextureSRVDesc = {.Format = desc.Format, .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Texture2D = {.MipLevels = desc.MipLevels}};
         }
-        d3dGraphicsCmdListExecute();
+        assert(SUCCEEDED(hr = d3d.graphicsCmdList->Close()));
+        d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
         d3dSignalFence(&d3d.transferFence);
-        d3dWaitFence(&d3d.transferFence);
+        d3dWaitFence(d3d.transferFence);
     }
 }
 
@@ -1809,8 +1891,8 @@ void d3dCompileShaders() {
         std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
         if (lastWriteTime > prevLastWriteTime) {
             prevLastWriteTime = lastWriteTime;
-            d3dWaitFence(&d3d.renderFence);
-            d3dWaitFence(&d3d.renderFencePrevFrame);
+            d3dWaitFence(d3d.renderFence);
+            d3dWaitFence(d3d.renderFencePrevFrame);
             if (d3d.renderScenePSO) d3d.renderScenePSO->Release();
             if (d3d.renderScenePSOProps) d3d.renderScenePSOProps->Release();
             if (d3d.renderSceneRootSig) d3d.renderSceneRootSig->Release();
@@ -1835,8 +1917,8 @@ void d3dCompileShaders() {
         std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
         if (lastWriteTime > prevLastWriteTime) {
             prevLastWriteTime = lastWriteTime;
-            d3dWaitFence(&d3d.renderFence);
-            d3dWaitFence(&d3d.renderFencePrevFrame);
+            d3dWaitFence(d3d.renderFence);
+            d3dWaitFence(d3d.renderFencePrevFrame);
             if (d3d.pathTracerPSO) d3d.pathTracerPSO->Release();
             if (d3d.pathTracerPSOProps) d3d.pathTracerPSOProps->Release();
             if (d3d.pathTracerRootSig) d3d.pathTracerRootSig->Release();
@@ -1859,8 +1941,8 @@ void d3dCompileShaders() {
         std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
         if (lastWriteTime > prevLastWriteTime) {
             prevLastWriteTime = lastWriteTime;
-            d3dWaitFence(&d3d.renderFence);
-            d3dWaitFence(&d3d.renderFencePrevFrame);
+            d3dWaitFence(d3d.renderFence);
+            d3dWaitFence(d3d.renderFencePrevFrame);
             if (d3d.collisionQueryPSO) d3d.collisionQueryPSO->Release();
             if (d3d.collisionQueryProps) d3d.collisionQueryProps->Release();
             if (d3d.collisionQueryRootSig) d3d.collisionQueryRootSig->Release();
@@ -1883,8 +1965,8 @@ void d3dCompileShaders() {
         std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(shaderPath);
         if (lastWriteTime > prevLastWriteTime) {
             prevLastWriteTime = lastWriteTime;
-            d3dWaitFence(&d3d.renderFence);
-            d3dWaitFence(&d3d.renderFencePrevFrame);
+            d3dWaitFence(d3d.renderFence);
+            d3dWaitFence(d3d.renderFencePrevFrame);
             if (d3d.vertexSkinningPSO) d3d.vertexSkinningPSO->Release();
             if (d3d.vertexSkinningRootSig) d3d.vertexSkinningRootSig->Release();
             std::vector<uint8> csByteCode = fileReadBytes(shaderPath);
@@ -1903,8 +1985,8 @@ void d3dCompileShaders() {
         if (lastWriteTimeVS > prevLastWriteTimeVS || lastWriteTimePS > prevLastWriteTimePS) {
             prevLastWriteTimeVS = lastWriteTimeVS;
             prevLastWriteTimePS = lastWriteTimePS;
-            d3dWaitFence(&d3d.renderFence);
-            d3dWaitFence(&d3d.renderFencePrevFrame);
+            d3dWaitFence(d3d.renderFence);
+            d3dWaitFence(d3d.renderFencePrevFrame);
             if (d3d.compositePSO) d3d.compositePSO->Release();
             if (d3d.compositeRootSig) d3d.compositeRootSig->Release();
             std::vector<uint8> vsByteCode = fileReadBytes(shaderPathVS);
@@ -1934,8 +2016,8 @@ void d3dCompileShaders() {
         if (lastWriteTimeVS > prevLastWriteTimeVS || lastWriteTimePS > prevLastWriteTimePS) {
             prevLastWriteTimeVS = lastWriteTimeVS;
             prevLastWriteTimePS = lastWriteTimePS;
-            d3dWaitFence(&d3d.renderFence);
-            d3dWaitFence(&d3d.renderFencePrevFrame);
+            d3dWaitFence(d3d.renderFence);
+            d3dWaitFence(d3d.renderFencePrevFrame);
             if (d3d.imguiPSO) d3d.imguiPSO->Release();
             if (d3d.imguiRootSig) d3d.imguiRootSig->Release();
             std::vector<uint8> vsByteCode = fileReadBytes(shaderPathVS);
@@ -2170,7 +2252,8 @@ Model* modelInitGLTF(const std::filesystem::path& filePath) {
 
     HRESULT hr;
 
-    d3dGraphicsCmdListReset();
+    assert(SUCCEEDED(hr = d3d.graphicsCmdAllocator->Reset()));
+    assert(SUCCEEDED(hr = d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
     d3d.stagingBuffer.offset = 0;
     d3d.bvhBuildScratchBufferOffset = 0;
 
@@ -2574,9 +2657,10 @@ Model* modelInitGLTF(const std::filesystem::path& filePath) {
             }
         }
     }
-    d3dGraphicsCmdListExecute();
+    assert(SUCCEEDED(hr = d3d.graphicsCmdList->Close()));
+    d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
     d3dSignalFence(&d3d.transferFence);
-    d3dWaitFence(&d3d.transferFence);
+    d3dWaitFence(d3d.transferFence);
     {
         std::filesystem::path convexMeshPath = filePath;
         convexMeshPath.replace_extension("convexMesh");
@@ -2627,7 +2711,7 @@ Model* modelInit(const std::filesystem::path& filePath) {
 void modelGenerateDDSImages(const Model& model) {
     auto generateDDSImages = [](const Model& model) {
         std::filesystem::path modelDirPath = (exePath / model.filePath).parent_path();
-        tasksMsg.enqueue("modelGenerateDDSImages started: (" + modelDirPath.string() + ")");
+        editor.tasksMsg.enqueue("modelGenerateDDSImages started: (" + modelDirPath.string() + ")");
         enum TextureType {
             TextureTypeBaseColor,
             TextureTypeMetallicRoughness,
@@ -2661,7 +2745,7 @@ void modelGenerateDDSImages(const Model& model) {
             noError = hashImage(gltfMaterial.normal_texture.texture, {TextureTypeNormal, false});
             noError = hashImage(gltfMaterial.emissive_texture.texture, {TextureTypeEmissive, false});
             if (!noError) {
-                tasksMsg.enqueue("modelGenerateDDSImages error: hashImage (" + modelDirPath.string() + ")");
+                editor.tasksMsg.enqueue("modelGenerateDDSImages error: hashImage (" + modelDirPath.string() + ")");
                 return;
             }
         }
@@ -2674,7 +2758,7 @@ void modelGenerateDDSImages(const Model& model) {
             std::filesystem::path imageFilePathFull = modelDirPath / imageFilePath;
             int width, height, comp;
             if (!stbi_info(imageFilePathFull.string().c_str(), &width, &height, &comp)) {
-                tasksMsg.enqueue("modelGenerateDDSImages error: stbi_info (" + imageFilePathFull.string() + ")");
+                editor.tasksMsg.enqueue("modelGenerateDDSImages error: stbi_info (" + imageFilePathFull.string() + ")");
                 continue;
             }
             if (width < 4 || height < 4) {
@@ -2697,11 +2781,11 @@ void modelGenerateDDSImages(const Model& model) {
                 WaitForSingleObject(processInfo.hProcess, INFINITE);
             }
             else {
-                tasksMsg.enqueue("modelGenerateDDSImages error: CreateProcessA (" + modelDirPath.string() + ")");
+                editor.tasksMsg.enqueue("modelGenerateDDSImages error: CreateProcessA (" + modelDirPath.string() + ")");
                 return;
             }
         }
-        tasksMsg.enqueue("modelGenerateDDSImages finished: (" + modelDirPath.string() + ")");
+        editor.tasksMsg.enqueue("modelGenerateDDSImages finished: (" + modelDirPath.string() + ")");
     };
     std::thread generateDDSImagesThread(generateDDSImages, model);
     generateDDSImagesThread.detach();
@@ -3224,11 +3308,11 @@ void operator<<(ryml::NodeRef n, Transform t) { n |= ryml::SEQ, n |= ryml::_WIP_
 void operator<<(ryml::NodeRef n, PxTransform t) { n |= ryml::SEQ, n |= ryml::_WIP_STYLE_FLOW_SL, n.append_child() << t.q.x, n.append_child() << t.q.y, n.append_child() << t.q.z, n.append_child() << t.q.w, n.append_child() << t.p.x, n.append_child() << t.p.y, n.append_child() << t.p.z; }
 
 void worldInit() {
+    HRESULT hr;
     assert(std::filesystem::exists(worldFilePath));
     std::string yamlStr = fileReadStr(worldFilePath);
     ryml::Tree yamlTree = ryml::parse_in_arena(ryml::to_csubstr(yamlStr));
     ryml::ConstNodeRef yamlRoot = yamlTree.rootref();
-
 #ifdef EDITOR
     if (ryml::ConstNodeRef editorYaml = yamlRoot.find_child("editor"); editorYaml.valid()) {
         if (ryml::ConstNodeRef editorCameraYaml = editorYaml.find_child("camera"); editorCameraYaml.valid()) {
@@ -3249,7 +3333,8 @@ void worldInit() {
 #endif
     {
         d3d.stagingBuffer.offset = 0;
-        d3dGraphicsCmdListReset();
+        assert(SUCCEEDED(hr = d3d.graphicsCmdAllocator->Reset()));
+        assert(SUCCEEDED(hr = d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
         ryml::ConstNodeRef assetsYaml = yamlRoot["assets"];
         ryml::ConstNodeRef skyboxesYaml = assetsYaml["skyboxes"];
         for (ryml::ConstNodeRef skyboxYaml : skyboxesYaml) {
@@ -3260,9 +3345,10 @@ void worldInit() {
             skybox.hdriTexture = d3dCreateImageDDS(exePath / skybox.hdriTextureFilePath, L"SkyboxHDRI", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             skyboxes.push_back(skybox);
         }
-        d3dGraphicsCmdListExecute();
+        assert(SUCCEEDED(hr = d3d.graphicsCmdList->Close()));
+        d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
         d3dSignalFence(&d3d.transferFence);
-        d3dWaitFence(&d3d.transferFence);
+        d3dWaitFence(d3d.transferFence);
 
         const char* simpleModelFiles[] = {".\\assets\\models\\sphere\\gltf\\sphere.gltf", ".\\assets\\models\\cube\\gltf\\cube.gltf", ".\\assets\\models\\cylinder\\gltf\\cylinder.gltf"};
         for (const char* modelFile : simpleModelFiles) {
@@ -3319,26 +3405,25 @@ void worldInit() {
         assert(player.pxController->setFootPosition(player.transformDefault.t.toPxVec3d()));
     }
     for (ryml::ConstNodeRef gameObjectsYaml = yamlRoot["gameObjects"]; ryml::ConstNodeRef objYaml : gameObjectsYaml) {
-        GameObject& obj = gameObjects.emplace_back();
-        assert(gameObjects.size() < gameObjectsMaxCount);
-        objYaml["name"] >> obj.name;
+        GameObject* obj = gameObjects.get(gameObjects.add());
+        objYaml["name"] >> obj->name;
         std::string assetFile;
         objYaml["asset"] >> assetFile;
-        obj.modelInstance = modelInstanceInit(assetFile);
-        objYaml["transform"] >> obj.transformDefault;
-        obj.transform = obj.transformDefault;
-        obj.transformPrevFrame = obj.transform;
+        obj->modelInstance = modelInstanceInit(assetFile);
+        objYaml["transform"] >> obj->transformDefault;
+        obj->transform = obj->transformDefault;
+        obj->transformPrevFrame = obj->transform;
         if (ryml::ConstNodeRef rigidActorYaml = objYaml.find_child("rigidActor"); rigidActorYaml.valid()) {
             if (rigidActorYaml["type"] == "static") {
-                obj.rigidActor = pxPhysics->createRigidStatic(obj.transform.toPxTransform());
-                pxScene->addActor(*obj.rigidActor);
+                obj->rigidActor = pxPhysics->createRigidStatic(obj->transform.toPxTransform());
+                pxScene->addActor(*obj->rigidActor);
             }
             else if (rigidActorYaml["type"] == "dynamic") {
-                obj.rigidActor = pxPhysics->createRigidDynamic(obj.transform.toPxTransform());
+                obj->rigidActor = pxPhysics->createRigidDynamic(obj->transform.toPxTransform());
                 float mass;
                 rigidActorYaml["mass"] >> mass;
-                ((PxRigidDynamic*)obj.rigidActor)->setMass(mass);
-                pxScene->addActor(*obj.rigidActor);
+                ((PxRigidDynamic*)obj->rigidActor)->setMass(mass);
+                pxScene->addActor(*obj->rigidActor);
             }
             else {
                 assert(false);
@@ -3347,21 +3432,21 @@ void worldInit() {
                 for (ryml::ConstNodeRef shapeYaml : shapesYaml) {
                     PxTransform transform(PxIdentity);
                     if (shapeYaml["type"] == "plane") {
-                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxPlaneGeometry(), *pxDefaultMaterial);
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxPlaneGeometry(), *pxDefaultMaterial);
                         shapeYaml["transform"] >> transform;
                         shape->setLocalPose(transform);
                     }
                     else if (shapeYaml["type"] == "box") {
                         float3 halfExtents;
                         shapeYaml["halfExtents"] >> halfExtents;
-                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxBoxGeometry(halfExtents.x, halfExtents.y, halfExtents.z), *pxDefaultMaterial);
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxBoxGeometry(halfExtents.x, halfExtents.y, halfExtents.z), *pxDefaultMaterial);
                         shapeYaml["transform"] >> transform;
                         shape->setLocalPose(transform);
                     }
                     else if (shapeYaml["type"] == "sphere") {
                         float radius;
                         shapeYaml["radius"] >> radius;
-                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxSphereGeometry(radius), *pxDefaultMaterial);
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxSphereGeometry(radius), *pxDefaultMaterial);
                         shapeYaml["transform"] >> transform;
                         shape->setLocalPose(transform);
                     }
@@ -3369,7 +3454,7 @@ void worldInit() {
                         float radius, halfHeight;
                         shapeYaml["radius"] >> radius;
                         shapeYaml["halfHeight"] >> halfHeight;
-                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxCapsuleGeometry(radius, halfHeight), *pxDefaultMaterial);
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxCapsuleGeometry(radius, halfHeight), *pxDefaultMaterial);
                         shapeYaml["transform"] >> transform;
                         shape->setLocalPose(transform);
                     }
@@ -3378,7 +3463,7 @@ void worldInit() {
                         shapeYaml["radius"] >> radius;
                         shapeYaml["height"] >> height;
                         PxCustomGeometryExt::CylinderCallbacks* cylinder = new PxCustomGeometryExt::CylinderCallbacks(height, radius, 0, 0);
-                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxCustomGeometry(*cylinder), *pxDefaultMaterial);
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxCustomGeometry(*cylinder), *pxDefaultMaterial);
                         shapeYaml["transform"] >> transform;
                         shape->setLocalPose(transform);
                     }
@@ -3387,23 +3472,23 @@ void worldInit() {
                         shapeYaml["radius"] >> radius;
                         shapeYaml["height"] >> height;
                         PxCustomGeometryExt::ConeCallbacks* cone = new PxCustomGeometryExt::ConeCallbacks(height, radius, 0, 0);
-                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxCustomGeometry(*cone), *pxDefaultMaterial);
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxCustomGeometry(*cone), *pxDefaultMaterial);
                         shapeYaml["transform"] >> transform;
                         shape->setLocalPose(transform);
                     }
                     else if (shapeYaml["type"] == "convexMesh") {
-                        if (!obj.modelInstance.model->convexMesh) {
-                            assert(modelGenerateConvexMesh(obj.modelInstance.model));
+                        if (!obj->modelInstance.model->convexMesh) {
+                            assert(modelGenerateConvexMesh(obj->modelInstance.model));
                         }
-                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxConvexMeshGeometry(obj.modelInstance.model->convexMesh, PxMeshScale(obj.transform.s.toPxVec3())), *pxDefaultMaterial);
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxConvexMeshGeometry(obj->modelInstance.model->convexMesh, PxMeshScale(obj->transform.s.toPxVec3())), *pxDefaultMaterial);
                         shapeYaml["transform"] >> transform;
                         shape->setLocalPose(transform);
                     }
                     else if (shapeYaml["type"] == "triangleMesh") {
-                        if (!obj.modelInstance.model->triangleMesh) {
-                            assert(modelGenerateTriangleMesh(obj.modelInstance.model));
+                        if (!obj->modelInstance.model->triangleMesh) {
+                            assert(modelGenerateTriangleMesh(obj->modelInstance.model));
                         }
-                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxTriangleMeshGeometry(obj.modelInstance.model->triangleMesh, PxMeshScale(obj.transform.s.toPxVec3())), *pxDefaultMaterial);
+                        PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxTriangleMeshGeometry(obj->modelInstance.model->triangleMesh, PxMeshScale(obj->transform.s.toPxVec3())), *pxDefaultMaterial);
                         shapeYaml["transform"] >> transform;
                         shape->setLocalPose(transform);
                     }
@@ -3413,7 +3498,7 @@ void worldInit() {
                 }
             }
 #ifdef EDITOR
-            obj.rigidActor->setActorFlag(PxActorFlag::eDISABLE_SIMULATION, true);
+            obj->rigidActor->setActorFlag(PxActorFlag::eDISABLE_SIMULATION, true);
 #endif
         }
     }
@@ -3477,31 +3562,31 @@ void editorSave() {
 
     ryml::NodeRef gameObjectsYaml = yamlRoot["gameObjects"];
     gameObjectsYaml |= ryml::SEQ;
-    for (GameObject& obj : gameObjects) {
-        ryml::NodeRef gameObjectYaml = gameObjectsYaml.append_child();
+    gameObjects.forEach(&gameObjectsYaml, [](void* gameObjectsYaml, GameObject* obj) {
+        ryml::NodeRef gameObjectYaml = ((ryml::NodeRef*)gameObjectsYaml)->append_child();
         gameObjectYaml |= ryml::MAP;
-        gameObjectYaml["name"] << obj.name;
-        gameObjectYaml["asset"] << obj.modelInstance.model->filePath.string();
-        gameObjectYaml["transform"] << Transform(obj.transformDefault);
-        if (obj.rigidActor) {
+        gameObjectYaml["name"] << obj->name;
+        gameObjectYaml["asset"] << obj->modelInstance.model->filePath.string();
+        gameObjectYaml["transform"] << Transform(obj->transformDefault);
+        if (obj->rigidActor) {
             ryml::NodeRef rigidActorYaml = gameObjectYaml["rigidActor"];
             rigidActorYaml |= ryml::MAP;
-            PxActorType::Enum actorType = obj.rigidActor->getType();
+            PxActorType::Enum actorType = obj->rigidActor->getType();
             if (actorType == PxActorType::eRIGID_STATIC) {
                 rigidActorYaml["type"] << "static";
             }
             else if (actorType == PxActorType::eRIGID_DYNAMIC) {
                 rigidActorYaml["type"] << "dynamic";
-                rigidActorYaml["mass"] << ((PxRigidDynamic*)obj.rigidActor)->getMass();
+                rigidActorYaml["mass"] << ((PxRigidDynamic*)obj->rigidActor)->getMass();
             }
             else {
                 assert(false);
             }
-            uint shapeCount = obj.rigidActor->getNbShapes();
+            uint shapeCount = obj->rigidActor->getNbShapes();
             if (shapeCount > 0) {
                 static std::vector<PxShape*> shapes;
                 shapes.resize(shapeCount);
-                obj.rigidActor->getShapes(shapes.data(), shapeCount);
+                obj->rigidActor->getShapes(shapes.data(), shapeCount);
                 ryml::NodeRef shapesYaml = rigidActorYaml["shapes"];
                 shapesYaml |= ryml::SEQ, shapesYaml |= ryml::_WIP_STYLE_FLOW_SL;
                 for (PxShape* shape : shapes) {
@@ -3564,7 +3649,7 @@ void editorSave() {
                 }
             }
         }
-    }
+    });
     std::string yamlStr = ryml::emitrs_yaml<std::string>(yamlTree);
     fileWriteStr(worldFilePath, yamlStr);
 #endif
@@ -3583,7 +3668,7 @@ void gameReadSave() {
 #endif
 }
 
-void gameSave() {
+void gameWriteSave() {
 #ifndef EDITOR
     ryml::Tree yamlTree;
     ryml::NodeRef yamlRoot = yamlTree.rootref();
@@ -3598,39 +3683,39 @@ void gameSave() {
 #endif
 }
 
-void gameObjectRelease(GameObject& obj) {
-    modelInstanceRelease(obj.modelInstance);
-    if (obj.rigidActor) {
-        obj.rigidActor->release();
+void gameObjectRelease(GameObject* obj) {
+    modelInstanceRelease(obj->modelInstance);
+    if (obj->rigidActor) {
+        obj->rigidActor->release();
     }
 }
 
 void setRigidActorsVisualization(bool b) {
     player.pxController->getActor()->setActorFlag(PxActorFlag::eVISUALIZATION, b);
-    for (GameObject& obj : gameObjects) {
-        if (obj.rigidActor) {
-            obj.rigidActor->setActorFlag(PxActorFlag::eVISUALIZATION, b);
+    gameObjects.forEach(&b, [](void* b, GameObject* obj) {
+        if (obj->rigidActor) {
+            obj->rigidActor->setActorFlag(PxActorFlag::eVISUALIZATION, *(bool*)b);
         }
-    }
+    });
 }
 
 #ifdef EDITOR
 void toggleBetweenEditorPlay() {
-    editorActive = !editorActive;
-    windowHideCursor(!editorActive);
+    editor.active = !editor.active;
+    windowHideCursor(!editor.active);
     player.transform = player.transformDefault;
     player.pxController->setFootPosition(player.transform.t.toPxVec3d());
     playerCameraReset(true);
-    for (GameObject& obj : gameObjects) {
-        obj.transform = obj.transformDefault;
-        if (obj.rigidActor) {
-            obj.rigidActor->setGlobalPose(obj.transform.toPxTransform());
-            obj.rigidActor->setActorFlag(PxActorFlag::eDISABLE_SIMULATION, editorActive);
-            if (!editorActive && obj.rigidActor->getType() == PxActorType::eRIGID_DYNAMIC) {
-                ((PxRigidDynamic*)obj.rigidActor)->wakeUp();
+    gameObjects.forEach(nullptr, [](void*, GameObject* obj) {
+        obj->transform = obj->transformDefault;
+        if (obj->rigidActor) {
+            obj->rigidActor->setGlobalPose(obj->transform.toPxTransform());
+            obj->rigidActor->setActorFlag(PxActorFlag::eDISABLE_SIMULATION, editor.active);
+            if (!editor.active && obj->rigidActor->getType() == PxActorType::eRIGID_DYNAMIC) {
+                ((PxRigidDynamic*)obj->rigidActor)->wakeUp();
             }
         }
-    }
+    });
 }
 
 void editorMainMenuBar() {
@@ -3682,6 +3767,17 @@ void editorMainMenuBar() {
     }
 }
 
+void editorDeleteGameObject(uint index) {
+    GameObject* obj = gameObjects.get(index);
+    assert(obj);
+    EditorUndoGameObjectDeletion* gameObjectDeletion = new EditorUndoGameObjectDeletion;
+    gameObjectDeletion->gameObject = std::move(*obj);
+    editor.undos.push_back(EditorUndo{.type = EditorUndoTypeGameObjectDeletion, .data = gameObjectDeletion});
+    gameObjects.remove(editor.selectedObjectIndex);
+    editor.selectedObjectType = ObjectTypeNone;
+    editor.selectedObjectIndex = UINT_MAX;
+}
+
 void editorObjectsWindow() {
     if (ImGui::Begin("Objects")) {
         if (ImGui::Selectable("Player", editor.selectedObjectType == ObjectTypePlayer)) {
@@ -3714,29 +3810,21 @@ void editorObjectsWindow() {
             auto getModelFileName = [](void* userData, int index) {
                 return models[index].filePath.string().c_str();
             };
-            auto nameUnique = []() {
-                for (GameObject& object : gameObjects) {
-                    if (object.name == objectName) {
-                        return false;
-                    }
-                }
-                return true;
-            };
             ImGui::InputText("Name", objectName, sizeof(objectName));
             ImGui::Combo("Models", &modelIndex, getModelFileName, nullptr, (int)models.size());
             if (ImGui::Button("Ok") || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
                 if (objectName[0] == '\0') {
                     debugLog("error: object name is empty\n");
                 }
-                else if (!nameUnique()) {
+                else if (gameObjects.anyIf(objectName, [](void* objectName, GameObject* obj) { return obj->name == (char*)objectName; })) {
                     debugLog("error: object name \"%s\" already exists\n", objectName);
                 }
                 else if (modelIndex >= models.size() || modelIndex < 0) {
                     debugLog("error: invalid modelIndex %d\n", modelIndex);
                 }
                 else {
-                    GameObject gameObject = {.name = objectName, .modelInstance = modelInstanceInit(&models[modelIndex])};
-                    gameObjects.push_back(std::move(gameObject));
+                    GameObject* obj = gameObjects.get(gameObjects.add());
+                    *obj = {.name = objectName, .modelInstance = modelInstanceInit(&models[modelIndex])};
                 }
                 ImGui::CloseCurrentPopup();
             }
@@ -3747,8 +3835,7 @@ void editorObjectsWindow() {
             ImGui::EndPopup();
         }
         if (gameObjectTreeOpen) {
-            for (uint objIndex = 0; objIndex < gameObjects.size(); objIndex++) {
-                GameObject& obj = gameObjects[objIndex];
+            gameObjects.forEachWithIndex(nullptr, [](void*, GameObject* obj, uint objIndex) {
                 ImGui::PushID(objIndex);
                 if (objIndex == editor.renameObjectIndex) {
                     static char objectName[32] = {'\0'};
@@ -3759,29 +3846,21 @@ void editorObjectsWindow() {
                         editor.renameObjectIndex = UINT_MAX;
                     }
                     else if (ImGui::IsKeyPressed(ImGuiKey_Enter)) {
-                        auto uniqueName = [](GameObject& obj) {
-                            for (GameObject& object : gameObjects) {
-                                if (object.name == objectName && &object != &obj) {
-                                    return false;
-                                }
-                            }
-                            return true;
-                        };
                         if (objectName[0] == '\0') {
                             debugLog("error: object name empty\n");
                         }
-                        else if (!uniqueName(obj)) {
+                        else if (gameObjects.anyIf(&obj, [](void* selectedObj, GameObject* obj) { return obj->name == objectName && obj != (GameObject*)selectedObj; })) {
                             debugLog("error: object name \"%s\" already exists\n", objectName);
                         }
                         else {
-                            obj.name = objectName;
+                            obj->name = objectName;
                             objectName[0] = '\0';
                             editor.renameObjectIndex = UINT_MAX;
                         }
                     }
                 }
                 else {
-                    if (ImGui::Selectable(obj.name.c_str(), editor.selectedObjectType == ObjectTypeGameObject && editor.selectedObjectIndex == objIndex, ImGuiSelectableFlags_AllowDoubleClick)) {
+                    if (ImGui::Selectable(obj->name.c_str(), editor.selectedObjectType == ObjectTypeGameObject && editor.selectedObjectIndex == objIndex, ImGuiSelectableFlags_AllowDoubleClick)) {
                         editor.selectedObjectType = ObjectTypeGameObject;
                         editor.selectedObjectIndex = objIndex;
                         editor.selectedObjectMeshNodeIndex = 0;
@@ -3794,16 +3873,15 @@ void editorObjectsWindow() {
                             editor.renameObjectIndex = objIndex;
                             ImGui::CloseCurrentPopup();
                         }
-                        if (ImGui::Button("Delete")) {
-                            obj.toBeDeleted = true;
-                            editor.selectedObjectType = ObjectTypeNone;
+                        if (ImGui::Button("delete")) {
+                            editorDeleteGameObject(objIndex);
                             ImGui::CloseCurrentPopup();
                         }
                         ImGui::EndPopup();
                     }
                 }
                 ImGui::PopID();
-            }
+            });
             ImGui::TreePop();
         }
     }
@@ -3926,14 +4004,14 @@ void editorPropertiesPlayer() {
     }
 }
 
-void editorUpdateGameObjectTransformDefault(GameObject& obj, Transform t) {
-    obj.transformDefault = t;
-    obj.transform = t;
-    if (obj.rigidActor) {
-        obj.rigidActor->setGlobalPose(t.toPxTransform());
+void editorUpdateGameObjectTransformDefault(GameObject* obj, Transform t) {
+    obj->transformDefault = t;
+    obj->transform = t;
+    if (obj->rigidActor) {
+        obj->rigidActor->setGlobalPose(t.toPxTransform());
         static std::vector<PxShape*> shapes;
-        shapes.resize(obj.rigidActor->getNbShapes());
-        obj.rigidActor->getShapes(shapes.data(), (uint)shapes.size());
+        shapes.resize(obj->rigidActor->getNbShapes());
+        obj->rigidActor->getShapes(shapes.data(), (uint)shapes.size());
         for (PxShape* shape : shapes) {
             const PxGeometry& geometry = shape->getGeometry();
             if (geometry.getType() == PxGeometryType::eCONVEXMESH) {
@@ -3945,11 +4023,12 @@ void editorUpdateGameObjectTransformDefault(GameObject& obj, Transform t) {
 }
 
 void editorPropertiesGameObject() {
-    GameObject& obj = gameObjects[editor.selectedObjectIndex];
-    ImGui::Text("GameObject \"%s\"", obj.name.c_str());
-    modelInstanceImGui(&obj.modelInstance);
+    GameObject* obj = gameObjects.get(editor.selectedObjectIndex);
+    assert(obj);
+    ImGui::Text("GameObject \"%s\"", obj->name.c_str());
+    modelInstanceImGui(&obj->modelInstance);
     if (ImGui::TreeNode("Spawn")) {
-        Transform transform = obj.transformDefault;
+        Transform transform = obj->transformDefault;
         if (transformImGui(transform, true, true, true)) {
             editorUpdateGameObjectTransformDefault(obj, transform);
         }
@@ -3957,40 +4036,40 @@ void editorPropertiesGameObject() {
     }
     bool rigidActorTreeOpen = ImGui::TreeNode("RigidActor");
     if (ImGui::BeginPopupContextItem()) {
-        if (obj.rigidActor) {
+        if (obj->rigidActor) {
             if (ImGui::Button("delete")) {
-                obj.rigidActor->release();
-                obj.rigidActor = nullptr;
+                obj->rigidActor->release();
+                obj->rigidActor = nullptr;
                 ImGui::CloseCurrentPopup();
             }
         }
         else {
             if (ImGui::Button("new rigid static")) {
-                obj.rigidActor = pxPhysics->createRigidStatic(obj.transform.toPxTransform());
-                pxScene->addActor(*obj.rigidActor);
-                obj.rigidActor->setActorFlag(PxActorFlag::eDISABLE_SIMULATION, true);
+                obj->rigidActor = pxPhysics->createRigidStatic(obj->transform.toPxTransform());
+                pxScene->addActor(*obj->rigidActor);
+                obj->rigidActor->setActorFlag(PxActorFlag::eDISABLE_SIMULATION, true);
                 ImGui::CloseCurrentPopup();
             }
             if (ImGui::Button("new rigid dynamic")) {
-                obj.rigidActor = pxPhysics->createRigidDynamic(obj.transform.toPxTransform());
-                pxScene->addActor(*obj.rigidActor);
-                obj.rigidActor->setActorFlag(PxActorFlag::eDISABLE_SIMULATION, true);
+                obj->rigidActor = pxPhysics->createRigidDynamic(obj->transform.toPxTransform());
+                pxScene->addActor(*obj->rigidActor);
+                obj->rigidActor->setActorFlag(PxActorFlag::eDISABLE_SIMULATION, true);
                 ImGui::CloseCurrentPopup();
             }
         }
         ImGui::EndPopup();
     }
     if (rigidActorTreeOpen) {
-        if (obj.rigidActor) {
-            PxActorType::Enum actorType = obj.rigidActor->getType();
+        if (obj->rigidActor) {
+            PxActorType::Enum actorType = obj->rigidActor->getType();
             if (actorType == PxActorType::eRIGID_STATIC) {
                 ImGui::Text("Type: Static");
             }
             else if (actorType == PxActorType::eRIGID_DYNAMIC) {
                 ImGui::Text("Type: Dyanamic");
-                float mass = ((PxRigidDynamic*)obj.rigidActor)->getMass();
+                float mass = ((PxRigidDynamic*)obj->rigidActor)->getMass();
                 if (ImGui::InputFloat("mass", &mass)) {
-                    ((PxRigidDynamic*)obj.rigidActor)->setMass(mass);
+                    ((PxRigidDynamic*)obj->rigidActor)->setMass(mass);
                 }
             }
             else {
@@ -3998,33 +4077,33 @@ void editorPropertiesGameObject() {
             }
             bool shapesNodeOpen = ImGui::TreeNode("shapes");
             static std::vector<PxShape*> shapes;
-            shapes.resize(obj.rigidActor->getNbShapes());
-            obj.rigidActor->getShapes(shapes.data(), (uint)shapes.size());
+            shapes.resize(obj->rigidActor->getNbShapes());
+            obj->rigidActor->getShapes(shapes.data(), (uint)shapes.size());
             if (ImGui::BeginPopupContextItem()) {
                 if (ImGui::Button("new plane")) {
-                    assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxPlaneGeometry(), *pxDefaultMaterial));
+                    assert(PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxPlaneGeometry(), *pxDefaultMaterial));
                     ImGui::CloseCurrentPopup();
                 }
                 if (ImGui::Button("new box")) {
-                    assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxBoxGeometry(1, 1, 1), *pxDefaultMaterial));
+                    assert(PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxBoxGeometry(1, 1, 1), *pxDefaultMaterial));
                     ImGui::CloseCurrentPopup();
                 }
                 if (ImGui::Button("new sphere")) {
-                    assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxSphereGeometry(1), *pxDefaultMaterial));
+                    assert(PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxSphereGeometry(1), *pxDefaultMaterial));
                     ImGui::CloseCurrentPopup();
                 }
                 if (ImGui::Button("new capsule")) {
-                    assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxCapsuleGeometry(1, 1), *pxDefaultMaterial));
+                    assert(PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxCapsuleGeometry(1, 1), *pxDefaultMaterial));
                     ImGui::CloseCurrentPopup();
                 }
                 if (ImGui::Button("new cylinder")) {
                     PxCustomGeometryExt::CylinderCallbacks* cylinder = new PxCustomGeometryExt::CylinderCallbacks(1, 0.5f, 0, 0);
-                    assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxCustomGeometry(*cylinder), *pxDefaultMaterial));
+                    assert(PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxCustomGeometry(*cylinder), *pxDefaultMaterial));
                     ImGui::CloseCurrentPopup();
                 }
                 if (ImGui::Button("new cone")) {
                     PxCustomGeometryExt::ConeCallbacks* cone = new PxCustomGeometryExt::ConeCallbacks(1, 1, 0, 0);
-                    assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxCustomGeometry(*cone), *pxDefaultMaterial));
+                    assert(PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxCustomGeometry(*cone), *pxDefaultMaterial));
                     ImGui::CloseCurrentPopup();
                 }
                 if (ImGui::Button("new convex mesh")) {
@@ -4039,12 +4118,12 @@ void editorPropertiesGameObject() {
                         debugLog("a convex mesh already exists\n");
                     }
                     else {
-                        if (obj.modelInstance.model->convexMesh) {
-                            assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxConvexMeshGeometry(obj.modelInstance.model->convexMesh, PxMeshScale(obj.transform.s.toPxVec3())), *pxDefaultMaterial));
+                        if (obj->modelInstance.model->convexMesh) {
+                            assert(PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxConvexMeshGeometry(obj->modelInstance.model->convexMesh, PxMeshScale(obj->transform.s.toPxVec3())), *pxDefaultMaterial));
                         }
                         else {
-                            if (modelGenerateConvexMesh(obj.modelInstance.model)) {
-                                assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxConvexMeshGeometry(obj.modelInstance.model->convexMesh, PxMeshScale(obj.transform.s.toPxVec3())), *pxDefaultMaterial));
+                            if (modelGenerateConvexMesh(obj->modelInstance.model)) {
+                                assert(PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxConvexMeshGeometry(obj->modelInstance.model->convexMesh, PxMeshScale(obj->transform.s.toPxVec3())), *pxDefaultMaterial));
                             }
                             else {
                                 debugLog("failed to generate convex mesh\n");
@@ -4065,12 +4144,12 @@ void editorPropertiesGameObject() {
                         debugLog("a triangle mesh already exists\n");
                     }
                     else {
-                        if (obj.modelInstance.model->triangleMesh) {
-                            assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxTriangleMeshGeometry(obj.modelInstance.model->triangleMesh, PxMeshScale(obj.transform.s.toPxVec3())), *pxDefaultMaterial));
+                        if (obj->modelInstance.model->triangleMesh) {
+                            assert(PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxTriangleMeshGeometry(obj->modelInstance.model->triangleMesh, PxMeshScale(obj->transform.s.toPxVec3())), *pxDefaultMaterial));
                         }
                         else {
-                            if (modelGenerateTriangleMesh(obj.modelInstance.model)) {
-                                assert(PxRigidActorExt::createExclusiveShape(*obj.rigidActor, PxTriangleMeshGeometry(obj.modelInstance.model->triangleMesh, PxMeshScale(obj.transform.s.toPxVec3())), *pxDefaultMaterial));
+                            if (modelGenerateTriangleMesh(obj->modelInstance.model)) {
+                                assert(PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxTriangleMeshGeometry(obj->modelInstance.model->triangleMesh, PxMeshScale(obj->transform.s.toPxVec3())), *pxDefaultMaterial));
                             }
                             else {
                                 debugLog("failed to generate a triangle mesh\n");
@@ -4218,7 +4297,7 @@ void editorPropertiesGameObject() {
                     ImGui::PopID();
                 }
                 if (shapeToDelete) {
-                    obj.rigidActor->detachShape(*shapeToDelete);
+                    obj->rigidActor->detachShape(*shapeToDelete);
                 }
                 ImGui::TreePop();
             }
@@ -4227,8 +4306,8 @@ void editorPropertiesGameObject() {
     }
     if (ImGui::TreeNode("MeshNode")) {
         ImGui::Text("Index: %d", editor.selectedObjectMeshNodeIndex);
-        ImGui::Text("Node Name: %s", obj.modelInstance.model->meshNodes[editor.selectedObjectMeshNodeIndex]->name.c_str());
-        ImGui::Text("Mesh Name: %s", obj.modelInstance.model->meshNodes[editor.selectedObjectMeshNodeIndex]->mesh->name.c_str());
+        ImGui::Text("Node Name: %s", obj->modelInstance.model->meshNodes[editor.selectedObjectMeshNodeIndex]->name.c_str());
+        ImGui::Text("Mesh Name: %s", obj->modelInstance.model->meshNodes[editor.selectedObjectMeshNodeIndex]->mesh->name.c_str());
         ImGui::TreePop();
     }
 }
@@ -4269,9 +4348,6 @@ void editorAssetsWindow() {
                         modelGenerateDDSImages(model);
                         ImGui::CloseCurrentPopup();
                     }
-                    if (ImGui::Selectable("delete")) {
-                        ImGui::CloseCurrentPopup();
-                    }
                     ImGui::EndPopup();
                 }
                 if (editor.mode == EditorModeFreeCam) {
@@ -4299,16 +4375,8 @@ void editorAssetsWindow() {
                 static int n = 0;
                 while (true) {
                     std::string name = std::format("gameObject{}", n++);
-                    bool unique = true;
-                    for (GameObject& obj : gameObjects) {
-                        if (obj.name == name) {
-                            unique = false;
-                            break;
-                        }
-                    }
-                    if (unique) {
-                        return name;
-                    }
+                    bool exist = gameObjects.anyIf(&name, [](void* name, GameObject* obj) { return obj->name == *(std::string*)name; });
+                    if (!exist) return name;
                 }
             };
             if (!editor.beginDragDropGameObject) {
@@ -4323,26 +4391,12 @@ void editorAssetsWindow() {
     }
     else if (editor.beginDragDropGameObject) {
         editor.beginDragDropGameObject = false;
-        gameObjects.push_back(editor.dragDropGameObject);
+        gameObjects.add(std::move(editor.dragDropGameObject));
     }
 }
 
 void editorUpdate() {
     ZoneScopedN("editorUpdate");
-    if (d3d.collisionQueriesFence.value > 0) {
-        d3dWaitFence(&d3d.collisionQueriesFence);
-        if (mouseSelectX != UINT_MAX && mouseSelectY != UINT_MAX) {
-            CollisionQueryResult collisionQueryResult = ((CollisionQueryResult*)d3d.collisionQueryResultsBuffer.ptr)[0];
-            if (editor.selectedObjectType == collisionQueryResult.objectType && editor.selectedObjectIndex == collisionQueryResult.objectIndex) {
-                editor.selectedObjectMeshNodeIndex = collisionQueryResult.meshNodeIndex;
-            }
-            else {
-                editor.selectedObjectType = collisionQueryResult.objectType;
-                editor.selectedObjectIndex = collisionQueryResult.objectIndex;
-                editor.selectedObjectMeshNodeIndex = collisionQueryResult.meshNodeIndex;
-            }
-        }
-    }
     {
         pxTimeAccumulated += frameTime;
         while (pxTimeAccumulated >= pxTimeStep) {
@@ -4353,46 +4407,53 @@ void editorUpdate() {
     }
     {
         player.transformPrevFrame = player.transform;
-        for (GameObject& obj : gameObjects) {
-            obj.transformPrevFrame = obj.transform;
-        }
+        gameObjects.forEach(nullptr, [](void*, GameObject* obj) {
+            obj->transformPrevFrame = obj->transform;
+        });
     }
     {
         modelInstanceUpdateAnimation(&player.modelInstance, frameTime);
-        for (GameObject& obj : gameObjects) {
-            modelInstanceUpdateAnimation(&obj.modelInstance, frameTime);
-        }
+        gameObjects.forEach(nullptr, [](void*, GameObject* obj) {
+            modelInstanceUpdateAnimation(&obj->modelInstance, frameTime);
+        });
     }
 
     static ImVec2 mousePosPrev = ImGui::GetMousePos();
     ImVec2 mousePos = ImGui::GetMousePos();
     ImVec2 mouseDelta = {mousePos.x - mousePosPrev.x, mousePos.y - mousePosPrev.y};
     mousePosPrev = mousePos;
-
+    if (mouseSelectState == mouseSelectOngoing && d3dTryWaitFence(d3d.collisionQueriesFence)) {
+        mouseSelectState = mouseSelectEnded;
+        CollisionQueryResult collisionQueryResult = ((CollisionQueryResult*)d3d.collisionQueryResultsBuffer.ptr)[0];
+        if (editor.selectedObjectType == collisionQueryResult.objectType && editor.selectedObjectIndex == collisionQueryResult.objectIndex) {
+            editor.selectedObjectMeshNodeIndex = collisionQueryResult.meshNodeIndex;
+        }
+        else {
+            editor.selectedObjectType = collisionQueryResult.objectType;
+            editor.selectedObjectIndex = collisionQueryResult.objectIndex;
+            editor.selectedObjectMeshNodeIndex = collisionQueryResult.meshNodeIndex;
+        }
+    }
     editorMainMenuBar();
     ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
     editorObjectsWindow();
     editorPropertiesWindow();
     editorAssetsWindow();
     std::string taskMsg;
-    if (tasksMsg.try_dequeue(taskMsg)) {
+    if (editor.tasksMsg.try_dequeue(taskMsg)) {
         debugLog("%s\n", taskMsg.c_str());
     }
-
     if (editor.mode == EditorModeFreeCam) {
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && !ImGui::GetIO().WantCaptureMouse) {
+        if (mouseSelectState == mouseSelectEnded && !ImGui::GetIO().WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            mouseSelectState = mouseSelectStarted;
             mouseSelectX = (uint)mousePos.x;
             mouseSelectY = (uint)mousePos.y;
-        }
-        else {
-            mouseSelectX = UINT_MAX;
-            mouseSelectY = UINT_MAX;
         }
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && editor.selectedObjectType != ObjectTypeNone && !ImGui::GetIO().WantCaptureMouse) {
             ImGui::OpenPopup("selected object popup");
         }
         if (ImGui::BeginPopup("selected object popup")) {
-            if (ImGui::Selectable("Edit Object")) {
+            if (ImGui::Selectable("edit")) {
                 editor.mode = EditorModeEditObject;
                 setRigidActorsVisualization(false);
                 if (editor.selectedObjectType == ObjectTypePlayer) {
@@ -4401,21 +4462,20 @@ void editorUpdate() {
                     player.pxController->getActor()->setActorFlag(PxActorFlag::eVISUALIZATION, true);
                 }
                 else if (editor.selectedObjectType == ObjectTypeGameObject) {
-                    GameObject& obj = gameObjects[editor.selectedObjectIndex];
-                    obj.transform.t = float3(0, 0, 0);
-                    obj.transform.r = float4(0, 0, 0, 1);
-                    if (obj.rigidActor) {
-                        obj.rigidActor->setGlobalPose(PxTransform(PxIdentity));
-                        obj.rigidActor->setActorFlag(PxActorFlag::eVISUALIZATION, true);
+                    GameObject* obj = gameObjects.get(editor.selectedObjectIndex);
+                    assert(obj);
+                    obj->transform.t = float3(0, 0, 0);
+                    obj->transform.r = float4(0, 0, 0, 1);
+                    if (obj->rigidActor) {
+                        obj->rigidActor->setGlobalPose(PxTransform(PxIdentity));
+                        obj->rigidActor->setActorFlag(PxActorFlag::eVISUALIZATION, true);
                     }
                 }
                 ImGui::CloseCurrentPopup();
             }
             if (editor.selectedObjectType == ObjectTypeGameObject) {
-                if (ImGui::Selectable("Delete Object")) {
-                    gameObjects[editor.selectedObjectIndex].toBeDeleted = true;
-                    editor.selectedObjectType = ObjectTypeNone;
-                    editor.selectedObjectIndex = UINT_MAX;
+                if (ImGui::Selectable("delete")) {
+                    editorDeleteGameObject(editor.selectedObjectIndex);
                     ImGui::CloseCurrentPopup();
                 }
             }
@@ -4449,44 +4509,14 @@ void editorUpdate() {
                 player.pxController->setFootPosition(player.transform.t.toPxVec3d());
             }
             else if (editor.selectedObjectType == ObjectTypeGameObject) {
-                GameObject& obj = gameObjects[editor.selectedObjectIndex];
-                obj.transform = obj.transformDefault;
-                if (obj.rigidActor) {
-                    obj.rigidActor->setGlobalPose(obj.transform.toPxTransform());
+                GameObject* obj = gameObjects.get(editor.selectedObjectIndex);
+                assert(obj);
+                obj->transform = obj->transformDefault;
+                if (obj->rigidActor) {
+                    obj->rigidActor->setGlobalPose(obj->transform.toPxTransform());
                 }
             }
             editor.mode = EditorModeFreeCam;
-        }
-    }
-    {
-        CameraEditor& camera = editor.mode == EditorModeFreeCam ? editor.camera : editor.editCamera;
-        if (camera.moving || controllerStickMoved()) {
-            float pitch = (mouseDeltaRaw.y * mouseSensitivity) - (controller.rsY * controllerSensitivity * frameTime);
-            float yaw = (mouseDeltaRaw.x * mouseSensitivity) + (controller.rsX * controllerSensitivity * frameTime);
-            float distance = frameTime * camera.moveSpeed;
-            float3 translate = {-controller.lsX * distance, 0, controller.lsY * distance};
-            if (ImGui::IsKeyDown(ImGuiKey_W)) translate.z = distance;
-            if (ImGui::IsKeyDown(ImGuiKey_S)) translate.z = -distance;
-            if (ImGui::IsKeyDown(ImGuiKey_A)) translate.x = distance;
-            if (ImGui::IsKeyDown(ImGuiKey_D)) translate.x = -distance;
-            if (ImGui::IsKeyDown(ImGuiKey_Q)) translate.y = distance;
-            if (ImGui::IsKeyDown(ImGuiKey_E)) translate.y = -distance;
-            editorCameraRotate(camera, float2(pitch, yaw));
-            editorCameraTranslate(camera, translate);
-            if (pitch != 0 || yaw != 0 || translate != float3(0, 0, 0)) {
-                if (pathTracer) {
-                    d3d.pathTracerAccumulationCount = 0;
-                }
-            }
-        }
-        {
-            cameraFovY = radian(camera.fovVertical);
-            cameraViewProjectMatPrevFrame = cameraViewProjectMat;
-            cameraViewMat = XMMatrixLookAtLH(camera.position.toXMVector(), camera.lookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
-            cameraViewMatInverseTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, cameraViewMat));
-            cameraProjectMat = XMMatrixPerspectiveFovLH(cameraFovY, (float)renderW / (float)renderH, CAMERA_Z_MIN, CAMERA_Z_MAX);
-            cameraViewProjectMat = XMMatrixMultiply(cameraViewMat, cameraProjectMat);
-            cameraViewProjectMatInverse = XMMatrixInverse(nullptr, cameraViewProjectMat);
         }
     }
     ImGuizmo::SetRect(0, 0, (float)renderW, (float)renderH);
@@ -4517,22 +4547,44 @@ void editorUpdate() {
                 editor.gizmoOperation = ImGuizmo::SCALE;
             }
         }
-        return ImGuizmo::Manipulate((const float*)&cameraViewMat, (const float*)&cameraProjectMat, editor.gizmoOperation, editor.gizmoMode, (float*)transformMat);
+        bool manipulated = ImGuizmo::Manipulate((const float*)&cameraViewMat, (const float*)&cameraProjectMat, editor.gizmoOperation, editor.gizmoMode, (float*)transformMat);
+        return manipulated;
     };
     if (editor.mode == EditorModeFreeCam) {
+        static bool gizmoActive = false;
+        static Transform oldTransform;
         if (editor.selectedObjectType == ObjectTypePlayer) {
             XMMatrix transformMat = player.transformDefault.toMat();
             if (transformGizmo(&transformMat)) {
+                if (!gizmoActive) {
+                    gizmoActive = true;
+                    oldTransform = player.transformDefault;
+                }
                 player.transformDefault = Transform(transformMat);
                 player.transform = player.transformDefault;
                 player.pxController->setFootPosition(player.transform.t.toPxVec3d());
             }
+            else if (gizmoActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                gizmoActive = false;
+                EditorUndoPlayerTransform* undoTransform = new EditorUndoPlayerTransform{.transform = oldTransform};
+                editor.undos.push_back({.type = EditorUndoTypePlayerTransform, .data = undoTransform});
+            }
         }
-        else if (editor.selectedObjectType == ObjectTypeGameObject && editor.selectedObjectIndex < gameObjects.size()) {
-            GameObject& obj = gameObjects[editor.selectedObjectIndex];
-            XMMatrix transformMat = obj.transformDefault.toMat();
+        else if (editor.selectedObjectType == ObjectTypeGameObject) {
+            GameObject* obj = gameObjects.get(editor.selectedObjectIndex);
+            assert(obj);
+            XMMatrix transformMat = obj->transformDefault.toMat();
             if (transformGizmo(&transformMat)) {
+                if (!gizmoActive) {
+                    gizmoActive = true;
+                    oldTransform = obj->transformDefault;
+                }
                 editorUpdateGameObjectTransformDefault(obj, Transform(transformMat));
+            }
+            else if (gizmoActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                gizmoActive = false;
+                EditorUndoGameObjectTransform* undoTransform = new EditorUndoGameObjectTransform{.objectName = obj->name, .transform = oldTransform};
+                editor.undos.push_back({.type = EditorUndoTypeGameObjectTransform, .data = undoTransform});
             }
         }
     }
@@ -4584,16 +4636,59 @@ void editorUpdate() {
     //         }
     //     }
     // }
+    if (ImGui::IsKeyPressed(ImGuiKey_Z) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl)) {
+        if (!editor.undos.empty()) {
+            EditorUndo undo = editor.undos.back();
+            editor.undos.pop_back();
+            switch (undo.type) {
+                case EditorUndoTypePlayerTransform: break;
+                case EditorUndoTypeGameObjectTransform: {
+                    EditorUndoGameObjectTransform* transform = (EditorUndoGameObjectTransform*)undo.data;
+                    gameObjects.forEach(transform, [](void* transform, GameObject* obj) {
+                        if (obj->name == ((EditorUndoGameObjectTransform*)transform)->objectName) {
+                            obj->transformDefault = ((EditorUndoGameObjectTransform*)transform)->transform;
+                            obj->transform = obj->transformDefault;
+                        }
+                    });
+                    delete transform;
+                } break;
+                case EditorUndoTypeGameObjectDeletion: {
+                    EditorUndoGameObjectDeletion* deletion = (EditorUndoGameObjectDeletion*)undo.data;
+                    gameObjects.add(std::move(deletion->gameObject));
+                    delete deletion;
+                } break;
+            }
+        }
+    }
     {
-        auto objIter = gameObjects.begin();
-        while (objIter != gameObjects.end()) {
-            if (objIter->toBeDeleted) {
-                gameObjectRelease(*objIter);
-                objIter = gameObjects.erase(objIter);
+        CameraEditor& camera = editor.mode == EditorModeFreeCam ? editor.camera : editor.editCamera;
+        if (camera.moving || controllerStickMoved()) {
+            float pitch = (mouseDeltaRaw.y * mouseSensitivity) - (controller.rsY * controllerSensitivity * frameTime);
+            float yaw = (mouseDeltaRaw.x * mouseSensitivity) + (controller.rsX * controllerSensitivity * frameTime);
+            float distance = frameTime * camera.moveSpeed;
+            float3 translate = {-controller.lsX * distance, 0, controller.lsY * distance};
+            if (ImGui::IsKeyDown(ImGuiKey_W)) translate.z = distance;
+            if (ImGui::IsKeyDown(ImGuiKey_S)) translate.z = -distance;
+            if (ImGui::IsKeyDown(ImGuiKey_A)) translate.x = distance;
+            if (ImGui::IsKeyDown(ImGuiKey_D)) translate.x = -distance;
+            if (ImGui::IsKeyDown(ImGuiKey_Q)) translate.y = distance;
+            if (ImGui::IsKeyDown(ImGuiKey_E)) translate.y = -distance;
+            editorCameraRotate(camera, float2(pitch, yaw));
+            editorCameraTranslate(camera, translate);
+            if (pitch != 0 || yaw != 0 || translate != float3(0, 0, 0)) {
+                if (pathTracer) {
+                    d3d.pathTracerAccumulationCount = 0;
+                }
             }
-            else {
-                objIter++;
-            }
+        }
+        {
+            cameraFovY = radian(camera.fovVertical);
+            cameraViewProjectMatPrevFrame = cameraViewProjectMat;
+            cameraViewMat = XMMatrixLookAtLH(camera.position.toXMVector(), camera.lookAt.toXMVector(), XMVectorSet(0, 1, 0, 0));
+            cameraViewMatInverseTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, cameraViewMat));
+            cameraProjectMat = XMMatrixPerspectiveFovLH(cameraFovY, (float)renderW / (float)renderH, CAMERA_Z_MIN, CAMERA_Z_MAX);
+            cameraViewProjectMat = XMMatrixMultiply(cameraViewMat, cameraProjectMat);
+            cameraViewProjectMatInverse = XMMatrixInverse(nullptr, cameraViewProjectMat);
         }
     }
 }
@@ -4620,9 +4715,7 @@ void imguiGameMenu() {
     ImVec2 size = imguiIO.DisplaySize;
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(size);
-    ImGuiWindowFlags windowFlags =
-        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoInputs;
+    ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoInputs;
     ImGui::Begin("GameMenuWindow", nullptr, windowFlags);
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     imguiFont->RenderText(drawList, imguiFont->FontSize, ImVec2(size.x * 0.2f, size.y * 0.2f), 0xffffffff, ImVec4(0, 0, size.x, size.y), "test0 test0 test0", nullptr);
@@ -4653,14 +4746,14 @@ void gameUpdate() {
             pxScene->fetchResults(true);
             pxTimeAccumulated -= pxTimeStep;
         }
-        for (GameObject& obj : gameObjects) {
-            obj.transformPrevFrame = obj.transform;
-            if (obj.rigidActor && obj.rigidActor->getType() == PxActorType::eRIGID_DYNAMIC) {
-                PxTransform pxTransform = obj.rigidActor->getGlobalPose();
-                obj.transform.t = pxTransform.p;
-                obj.transform.r = pxTransform.q;
+        gameObjects.forEach(nullptr, [](void*, GameObject* obj) {
+            obj->transformPrevFrame = obj->transform;
+            if (obj->rigidActor && obj->rigidActor->getType() == PxActorType::eRIGID_DYNAMIC) {
+                PxTransform pxTransform = obj->rigidActor->getGlobalPose();
+                obj->transform.t = pxTransform.p;
+                obj->transform.r = pxTransform.q;
             }
-        }
+        });
     }
     {
         float3 playerMoveDir(0, 0, 0);
@@ -4687,7 +4780,7 @@ void gameUpdate() {
             player.modelInstance.animation = &player.modelInstance.model->animations[player.idleAnimationIndex];
         }
         else {
-            if (!ImGui::IsKeyDown(ImGuiKey_LeftShift) && (controller.lsX * controller.lsX + controller.lsY * controller.lsY) < 0.6f) {
+            if (!ImGui::IsKeyDown(ImGuiKey_LeftShift) && !ImGui::IsKeyDown(ImGuiKey_RightShift) && (controller.lsX * controller.lsX + controller.lsY * controller.lsY) < 0.6f) {
                 player.state = PlayerStateWalk;
                 player.velocity = playerMoveDir * player.walkSpeed;
                 player.modelInstance.animation = &player.modelInstance.model->animations[player.walkAnimationIndex];
@@ -4714,9 +4807,9 @@ void gameUpdate() {
     }
     {
         modelInstanceUpdateAnimation(&player.modelInstance, frameTime);
-        for (GameObject& obj : gameObjects) {
-            modelInstanceUpdateAnimation(&obj.modelInstance, frameTime);
-        }
+        gameObjects.forEach(nullptr, [](void*, GameObject* obj) {
+            modelInstanceUpdateAnimation(&obj->modelInstance, frameTime);
+        });
     }
     {
         float pitch = (-mouseDeltaRaw.y * mouseSensitivity) + (controller.rsY * controllerSensitivity * frameTime);
@@ -4742,10 +4835,10 @@ void update() {
         quit = true;
     }
 #ifdef EDITOR
-    if (ImGui::IsKeyPressed(ImGuiKey_P) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
+    if (ImGui::IsKeyPressed(ImGuiKey_P) && (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl))) {
         toggleBetweenEditorPlay();
     }
-    if (editorActive) {
+    if (editor.active) {
         editorUpdate();
     }
     else {
@@ -4761,11 +4854,12 @@ void update() {
             }
         }
         else if (editor.selectedObjectType == ObjectTypeGameObject) {
-            GameObject& gameObject = gameObjects[editor.selectedObjectIndex];
-            if (gameObject.modelInstance.model->skeletonRootNode) {
-                XMMatrix objTransformMat = (editor.mode == EditorModeEditObject) ? xmMatrixIdentity : gameObject.transform.toMat();
-                XMMatrix transformMat = XMMatrixMultiply(XMMatrixMultiply(gameObject.modelInstance.model->meshNodes[0]->globalTransform, XMMatrixScaling(1, 1, -1)), objTransformMat);
-                modelInstanceGetSkeletonVisualization(&gameObject.modelInstance, gameObject.modelInstance.model->skeletonRootNode, transformMat);
+            GameObject* obj = gameObjects.get(editor.selectedObjectIndex);
+            assert(obj);
+            if (obj->modelInstance.model->skeletonRootNode) {
+                XMMatrix objTransformMat = (editor.mode == EditorModeEditObject) ? xmMatrixIdentity : obj->transform.toMat();
+                XMMatrix transformMat = XMMatrixMultiply(XMMatrixMultiply(obj->modelInstance.model->meshNodes[0]->globalTransform, XMMatrixScaling(1, 1, -1)), objTransformMat);
+                modelInstanceGetSkeletonVisualization(&obj->modelInstance, obj->modelInstance.model->skeletonRootNode, transformMat);
             }
         }
     }
@@ -4820,7 +4914,7 @@ D3D12_DISPATCH_RAYS_DESC fillRayTracingShaderTable(D3DUploadBuffer* buffer, void
 void d3dRender() {
     ZoneScopedN("d3dRender");
 
-    d3dWaitFence(&d3d.renderFence);
+    d3dWaitFence(d3d.renderFence);
     HRESULT hr;
     blasInstancesDescs.resize(0);
     blasInstancesInfos.resize(0);
@@ -4830,7 +4924,8 @@ void d3dRender() {
     d3d.cbvSrvUavDescriptorHeap.offset = 0;
     d3d.bvhBuildScratchBufferOffset = 0;
 
-    d3dGraphicsCmdListReset();
+    assert(SUCCEEDED(hr = d3d.graphicsCmdAllocator->Reset()));
+    assert(SUCCEEDED(hr = d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
     d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap.heap);
     {
         RenderInfo renderInfo = {
@@ -4870,11 +4965,11 @@ void d3dRender() {
         blasBarriers.resize(0);
 
         skinnedModelInstances.push_back(&player.modelInstance);
-        for (GameObject& object : gameObjects) {
-            if (object.modelInstance.skins.size() > 0 && object.modelInstance.animation) {
-                skinnedModelInstances.push_back(&object.modelInstance);
+        gameObjects.forEach(nullptr, [](void*, GameObject* obj) {
+            if (obj->modelInstance.skins.size() > 0 && obj->modelInstance.animation) {
+                skinnedModelInstances.push_back(&obj->modelInstance);
             }
-        }
+        });
         for (ModelInstance* modelInstance : skinnedModelInstances) {
             for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance->model->meshNodes.size(); meshNodeIndex++) {
                 ModelNode* meshNode = modelInstance->model->meshNodes[meshNodeIndex];
@@ -4939,10 +5034,9 @@ void d3dRender() {
 #ifdef EDITOR
         if (editor.mode == EditorModeFreeCam) {
             modelInstanceAddBLASInstancesToTLAS(player.modelInstance, player.transform.toMat(), player.transformPrevFrame.toMat(), ObjectTypePlayer, 0);
-            for (uint objIndex = 0; objIndex < gameObjects.size(); objIndex++) {
-                GameObject& obj = gameObjects[objIndex];
-                modelInstanceAddBLASInstancesToTLAS(obj.modelInstance, obj.transform.toMat(), obj.transformPrevFrame.toMat(), ObjectTypeGameObject, objIndex);
-            }
+            gameObjects.forEachWithIndex(nullptr, [](void*, GameObject* obj, uint objIndex) {
+                modelInstanceAddBLASInstancesToTLAS(obj->modelInstance, obj->transform.toMat(), obj->transformPrevFrame.toMat(), ObjectTypeGameObject, objIndex);
+            });
             if (editor.beginDragDropGameObject) {
                 editor.dragDropGameObject.transformPrevFrame = editor.dragDropGameObject.transform;
                 modelInstanceAddBLASInstancesToTLAS(editor.dragDropGameObject.modelInstance, editor.dragDropGameObject.transform.toMat(), editor.dragDropGameObject.transformPrevFrame.toMat(), ObjectTypeGameObject, UINT_MAX);
@@ -4953,8 +5047,9 @@ void d3dRender() {
                 modelInstanceAddBLASInstancesToTLAS(player.modelInstance, player.transform.toMat(), player.transformPrevFrame.toMat(), ObjectTypePlayer, 0);
             }
             else if (editor.selectedObjectType == ObjectTypeGameObject) {
-                GameObject& obj = gameObjects[editor.selectedObjectIndex];
-                modelInstanceAddBLASInstancesToTLAS(obj.modelInstance, obj.transform.toMat(), obj.transformPrevFrame.toMat(), ObjectTypeGameObject, editor.selectedObjectIndex);
+                GameObject* obj = gameObjects.get(editor.selectedObjectIndex);
+                assert(obj);
+                modelInstanceAddBLASInstancesToTLAS(obj->modelInstance, obj->transform.toMat(), obj->transformPrevFrame.toMat(), ObjectTypeGameObject, editor.selectedObjectIndex);
             }
         }
         // for (Sphere& sphere : debugSpheres) {
@@ -5018,7 +5113,8 @@ void d3dRender() {
         D3D12_RESOURCE_BARRIER tlasBarrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = d3d.tlasBuffer->GetResource()}};
         d3d.graphicsCmdList->ResourceBarrier(1, &tlasBarrier);
     }
-    {
+    if (mouseSelectState == mouseSelectStarted) {
+        mouseSelectState = mouseSelectOngoing;
         XMFloat4x4 viewMat;
         XMFloat4x4 projMat;
         XMStoreFloat4x4(&viewMat, cameraViewMatInverseTranspose);
@@ -5029,7 +5125,6 @@ void d3dRender() {
         float tanHalfFovY = 1.0f / projMat.m[1][1];
         rayDesc.dir = (float3(viewMat.m[0][0], viewMat.m[1][0], viewMat.m[2][0]) * pixelCoord.x * tanHalfFovY * aspect) - (float3(viewMat.m[0][1], viewMat.m[1][1], viewMat.m[2][1]) * pixelCoord.y * tanHalfFovY) + (float3(viewMat.m[0][2], viewMat.m[1][2], viewMat.m[2][2]));
         rayDesc.dir = rayDesc.dir.normalize();
-        if (mouseSelectX == UINT_MAX || mouseSelectY == UINT_MAX) rayDesc.max = 0.0f;
         ((CollisionQuery*)d3d.collisionQueriesBuffer.ptr)[0] = {.rayDesc = rayDesc, .instanceInclusionMask = 0xff & ~ObjectTypeNone};
 
         D3D12_RESOURCE_BARRIER barrier = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = d3d.collisionQueryResultsBuffer.bufferUAV->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}};
@@ -5054,7 +5149,8 @@ void d3dRender() {
         d3d.graphicsCmdList->ResourceBarrier(1, &barrier);
         d3d.graphicsCmdList->CopyBufferRegion(d3d.collisionQueryResultsBuffer.buffer->GetResource(), 0, d3d.collisionQueryResultsBuffer.bufferUAV->GetResource(), 0, d3d.collisionQueryResultsBuffer.capacity);
 
-        d3dGraphicsCmdListExecute();
+        d3d.graphicsCmdList->Close();
+        d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
         d3dSignalFence(&d3d.collisionQueriesFence);
         assert(SUCCEEDED(hr = d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
         d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap.heap);
@@ -5193,15 +5289,13 @@ void d3dRender() {
         d3d.graphicsCmdList->ResourceBarrier(countof(transitions), transitions);
     }
     {
-        ZoneScopedN("ExecuteCommandLists");
-        d3dGraphicsCmdListExecute();
+        assert(SUCCEEDED(hr = d3d.graphicsCmdList->Close()));
+        d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
+        d3dSignalFence(&d3d.renderFence);
     }
     {
         ZoneScopedN("Present");
         assert(SUCCEEDED(hr = d3d.swapChain->Present(0, 0)));
-    }
-    {
-        d3dSignalFence(&d3d.renderFence);
     }
     //{
     //    std::swap(d3d.graphicsCmdAllocator, d3d.graphicsCmdAllocatorPrevFrame);
@@ -5352,8 +5446,8 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
                 renderH = prevRenderH;
             }
             if (d3d.swapChain && renderW > 0 && renderH > 0 && (prevRenderW != renderW || prevRenderH != renderH)) {
-                d3dWaitFence(&d3d.renderFence);
-                d3dWaitFence(&d3d.renderFencePrevFrame);
+                d3dWaitFence(d3d.renderFence);
+                d3dWaitFence(d3d.renderFencePrevFrame);
                 for (ID3D12Resource* image : d3d.swapChainImages) {
                     image->Release();
                 }
@@ -5498,7 +5592,7 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
         frameTime = (float)((double)(perfCounterEnd.QuadPart - perfCounterStart.QuadPart) / (double)perfFrequency.QuadPart);
     }
     editorSave();
-    gameSave();
+    gameWriteSave();
     settingsSave();
     return EXIT_SUCCESS;
 }
