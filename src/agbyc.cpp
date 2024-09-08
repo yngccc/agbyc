@@ -861,7 +861,7 @@ static HRESULT setDPIAwareness = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_
 static int screenW = GetSystemMetrics(SM_CXSCREEN);
 static int screenH = GetSystemMetrics(SM_CYSCREEN);
 static WindowMode windowMode = WindowModeWindowed;
-static int windowX, windowY;
+static int windowX = 0, windowY = 0;
 static int windowW = 1920, windowH = 1080;
 static int renderW = 1920, renderH = 1080;
 static DXGI_RATIONAL refreshRate = {60, 1};
@@ -1337,8 +1337,9 @@ void imguiDebugLogWindow() {
             for (int line_no = 0; line_no < debugLogLineOffsets.Size; line_no++) {
                 const char* line_start = buf + debugLogLineOffsets[line_no];
                 const char* line_end = (line_no + 1 < debugLogLineOffsets.Size) ? (buf + debugLogLineOffsets[line_no + 1] - 1) : buf_end;
-                if (debugLogFilter.PassFilter(line_start, line_end))
+                if (debugLogFilter.PassFilter(line_start, line_end)) {
                     ImGui::TextUnformatted(line_start, line_end);
+                }
             }
         }
         else {
@@ -1710,7 +1711,6 @@ void d3dInit() {
             .SampleDesc = {.Count = 1},
             .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_BACK_BUFFER,
             .BufferCount = countof(d3d.swapChainImages),
-            .Scaling = DXGI_SCALING_NONE,
             .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
             .AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED,
         };
@@ -3770,10 +3770,9 @@ void editorMainMenuBar() {
 void editorDeleteGameObject(uint index) {
     GameObject* obj = gameObjects.get(index);
     assert(obj);
-    EditorUndoGameObjectDeletion* gameObjectDeletion = new EditorUndoGameObjectDeletion;
-    gameObjectDeletion->gameObject = std::move(*obj);
+    EditorUndoGameObjectDeletion* gameObjectDeletion = new EditorUndoGameObjectDeletion{.gameObject = std::move(*obj)};
     editor.undos.push_back(EditorUndo{.type = EditorUndoTypeGameObjectDeletion, .data = gameObjectDeletion});
-    gameObjects.remove(editor.selectedObjectIndex);
+    gameObjects.remove(index);
     editor.selectedObjectType = ObjectTypeNone;
     editor.selectedObjectIndex = UINT_MAX;
 }
@@ -3869,11 +3868,11 @@ void editorObjectsWindow() {
                         }
                     }
                     if (ImGui::BeginPopupContextItem()) {
-                        if (ImGui::Button("Rename")) {
+                        if (ImGui::Selectable("rename")) {
                             editor.renameObjectIndex = objIndex;
                             ImGui::CloseCurrentPopup();
                         }
-                        if (ImGui::Button("delete")) {
+                        if (ImGui::Selectable("delete")) {
                             editorDeleteGameObject(objIndex);
                             ImGui::CloseCurrentPopup();
                         }
@@ -3940,11 +3939,39 @@ bool transformImGui(PxTransform& pxTransform) {
     return false;
 }
 
-void editorPropertiesPlayer() {
+void editorNewUndoPlayerTransform(const Transform& transform) {
+    EditorUndoPlayerTransform* undoTransform = new EditorUndoPlayerTransform{.transform = transform};
+    editor.undos.push_back({.type = EditorUndoTypePlayerTransform, .data = undoTransform});
+    editor.redos.remove_if([](EditorUndo& undo) {
+        if (undo.type == EditorUndoTypePlayerTransform) {
+            delete (EditorUndoPlayerTransform*)undo.data;
+            return true;
+        }
+        return false;
+    });
+}
+
+void editorNewUndoGameObjectTransform(const std::string& objName, const Transform& transform) {
+    EditorUndoGameObjectTransform* undoTransform = new EditorUndoGameObjectTransform{.objectName = objName, .transform = transform};
+    editor.undos.push_back({.type = EditorUndoTypeGameObjectTransform, .data = undoTransform});
+    editor.redos.remove_if([&objName](EditorUndo& undo) {
+        if (undo.type == EditorUndoTypeGameObjectTransform) {
+            EditorUndoGameObjectTransform* transform = (EditorUndoGameObjectTransform*)undo.data;
+            if (transform->objectName == objName) {
+                delete transform;
+                return true;
+            }
+        }
+        return false;
+    });
+}
+
+void editorPlayerProperties() {
     ImGui::Text("Player");
     modelInstanceImGui(&player.modelInstance);
     if (ImGui::TreeNode("Spawn")) {
         if (transformImGui(player.transformDefault, true, true, true)) {
+            editorNewUndoPlayerTransform(player.transform);
             player.transform = player.transformDefault;
             player.pxController->setFootPosition(player.transform.t.toPxVec3d());
         }
@@ -4022,7 +4049,7 @@ void editorUpdateGameObjectTransformDefault(GameObject* obj, Transform t) {
     }
 }
 
-void editorPropertiesGameObject() {
+void editorGameObjectProperties() {
     GameObject* obj = gameObjects.get(editor.selectedObjectIndex);
     assert(obj);
     ImGui::Text("GameObject \"%s\"", obj->name.c_str());
@@ -4030,6 +4057,7 @@ void editorPropertiesGameObject() {
     if (ImGui::TreeNode("Spawn")) {
         Transform transform = obj->transformDefault;
         if (transformImGui(transform, true, true, true)) {
+            editorNewUndoGameObjectTransform(obj->name, obj->transformDefault);
             editorUpdateGameObjectTransformDefault(obj, transform);
         }
         ImGui::TreePop();
@@ -4315,10 +4343,10 @@ void editorPropertiesGameObject() {
 void editorPropertiesWindow() {
     if (ImGui::Begin("Properties")) {
         if (editor.selectedObjectType == ObjectTypePlayer) {
-            editorPropertiesPlayer();
+            editorPlayerProperties();
         }
         else if (editor.selectedObjectType == ObjectTypeGameObject) {
-            editorPropertiesGameObject();
+            editorGameObjectProperties();
         }
     }
     ImGui::End();
@@ -4397,14 +4425,12 @@ void editorAssetsWindow() {
 
 void editorUpdate() {
     ZoneScopedN("editorUpdate");
-    {
-        pxTimeAccumulated += frameTime;
-        while (pxTimeAccumulated >= pxTimeStep) {
-            pxScene->simulate(pxTimeStep);
-            pxScene->fetchResults(true);
-            pxTimeAccumulated -= pxTimeStep;
-        }
-    }
+    //pxTimeAccumulated += frameTime;
+    //while (pxTimeAccumulated >= pxTimeStep) {
+    //    pxScene->simulate(pxTimeStep);
+    //    pxScene->fetchResults(true);
+    //    pxTimeAccumulated -= pxTimeStep;
+    //}
     {
         player.transformPrevFrame = player.transform;
         gameObjects.forEach(nullptr, [](void*, GameObject* obj) {
@@ -4417,7 +4443,6 @@ void editorUpdate() {
             modelInstanceUpdateAnimation(&obj->modelInstance, frameTime);
         });
     }
-
     static ImVec2 mousePosPrev = ImGui::GetMousePos();
     ImVec2 mousePos = ImGui::GetMousePos();
     ImVec2 mouseDelta = {mousePos.x - mousePosPrev.x, mousePos.y - mousePosPrev.y};
@@ -4566,8 +4591,7 @@ void editorUpdate() {
             }
             else if (gizmoActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                 gizmoActive = false;
-                EditorUndoPlayerTransform* undoTransform = new EditorUndoPlayerTransform{.transform = oldTransform};
-                editor.undos.push_back({.type = EditorUndoTypePlayerTransform, .data = undoTransform});
+                editorNewUndoPlayerTransform(oldTransform);
             }
         }
         else if (editor.selectedObjectType == ObjectTypeGameObject) {
@@ -4583,8 +4607,7 @@ void editorUpdate() {
             }
             else if (gizmoActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                 gizmoActive = false;
-                EditorUndoGameObjectTransform* undoTransform = new EditorUndoGameObjectTransform{.objectName = obj->name, .transform = oldTransform};
-                editor.undos.push_back({.type = EditorUndoTypeGameObjectTransform, .data = undoTransform});
+                editorNewUndoGameObjectTransform(obj->name, oldTransform);
             }
         }
     }
@@ -4637,26 +4660,72 @@ void editorUpdate() {
     //     }
     // }
     if (ImGui::IsKeyPressed(ImGuiKey_Z) && ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl)) {
-        if (!editor.undos.empty()) {
-            EditorUndo undo = editor.undos.back();
-            editor.undos.pop_back();
-            switch (undo.type) {
-                case EditorUndoTypePlayerTransform: break;
-                case EditorUndoTypeGameObjectTransform: {
-                    EditorUndoGameObjectTransform* transform = (EditorUndoGameObjectTransform*)undo.data;
-                    gameObjects.forEach(transform, [](void* transform, GameObject* obj) {
-                        if (obj->name == ((EditorUndoGameObjectTransform*)transform)->objectName) {
-                            obj->transformDefault = ((EditorUndoGameObjectTransform*)transform)->transform;
-                            obj->transform = obj->transformDefault;
-                        }
-                    });
-                    delete transform;
-                } break;
-                case EditorUndoTypeGameObjectDeletion: {
-                    EditorUndoGameObjectDeletion* deletion = (EditorUndoGameObjectDeletion*)undo.data;
-                    gameObjects.add(std::move(deletion->gameObject));
-                    delete deletion;
-                } break;
+        if (!ImGui::IsKeyDown(ImGuiKey_LeftShift) && !ImGui::IsKeyDown(ImGuiKey_RightShift)) {
+            if (!editor.undos.empty()) {
+                EditorUndo undo = editor.undos.back();
+                editor.undos.pop_back();
+                switch (undo.type) {
+                    case EditorUndoTypePlayerTransform: {
+                        debugLog("undo\n");
+                        EditorUndoPlayerTransform* transform = (EditorUndoPlayerTransform*)undo.data;
+                        std::swap(player.transformDefault, transform->transform);
+                        player.transform = player.transformDefault;
+                        editor.redos.push_back({.type = EditorUndoTypePlayerTransform, .data = transform});
+                    } break;
+                    case EditorUndoTypeGameObjectTransform: {
+                        EditorUndoGameObjectTransform* transform = (EditorUndoGameObjectTransform*)undo.data;
+                        gameObjects.forEach(transform, [](void* transform, GameObject* obj) {
+                            if (obj->name == ((EditorUndoGameObjectTransform*)transform)->objectName) {
+                                std::swap(obj->transformDefault, ((EditorUndoGameObjectTransform*)transform)->transform);
+                                obj->transform = obj->transformDefault;
+                            }
+                        });
+                        editor.redos.push_back({.type = EditorUndoTypeGameObjectTransform, .data = transform});
+                    } break;
+                    case EditorUndoTypeGameObjectDeletion: {
+                        EditorUndoGameObjectDeletion* deletion = (EditorUndoGameObjectDeletion*)undo.data;
+                        auto objHandle = gameObjects.add(std::move(deletion->gameObject));
+                        deletion->gameObject.name = gameObjects.get(objHandle)->name;
+                        editor.redos.push_back({.type = EditorUndoTypeGameObjectDeletion, .data = deletion});
+                    } break;
+                }
+            }
+        }
+        else {
+            if (!editor.redos.empty()) {
+                EditorUndo redo = editor.redos.back();
+                editor.redos.pop_back();
+                switch (redo.type) {
+                    case EditorUndoTypePlayerTransform: {
+                        EditorUndoPlayerTransform* transform = (EditorUndoPlayerTransform*)redo.data;
+                        std::swap(player.transformDefault, transform->transform);
+                        player.transform = player.transformDefault;
+                        editor.undos.push_back({.type = EditorUndoTypePlayerTransform, .data = transform});
+                    } break;
+                    case EditorUndoTypeGameObjectTransform: {
+                        EditorUndoGameObjectTransform* transform = (EditorUndoGameObjectTransform*)redo.data;
+                        gameObjects.forEach(transform, [](void* transform, GameObject* obj) {
+                            if (obj->name == ((EditorUndoGameObjectTransform*)transform)->objectName) {
+                                std::swap(obj->transformDefault, ((EditorUndoGameObjectTransform*)transform)->transform);
+                                obj->transform = obj->transformDefault;
+                            }
+                        });
+                        editor.undos.push_back({.type = EditorUndoTypeGameObjectTransform, .data = transform});
+                    } break;
+                    case EditorUndoTypeGameObjectDeletion: {
+                        EditorUndoGameObjectDeletion* deletion = (EditorUndoGameObjectDeletion*)redo.data;
+                        static uint objIndex = UINT_MAX;
+                        objIndex = UINT_MAX;
+                        gameObjects.forEachWithIndex(&deletion->gameObject.name, [](void* name, GameObject* obj, uint index) {
+                            if (obj->name == *(std::string*)name) {
+                                objIndex = index;
+                            }
+                        });
+                        assert(objIndex != UINT_MAX);
+                        delete deletion;
+                        editorDeleteGameObject(objIndex);
+                    } break;
+                }
             }
         }
     }
@@ -4740,12 +4809,12 @@ void gameUpdate() {
         }
     }
     {
-        pxTimeAccumulated += frameTime;
-        while (pxTimeAccumulated >= pxTimeStep) {
-            pxScene->simulate(pxTimeStep);
-            pxScene->fetchResults(true);
-            pxTimeAccumulated -= pxTimeStep;
-        }
+        // pxTimeAccumulated += frameTime;
+        // while (pxTimeAccumulated >= pxTimeStep) {
+        //     pxScene->simulate(pxTimeStep);
+        //     pxScene->fetchResults(true);
+        //     pxTimeAccumulated -= pxTimeStep;
+        // }
         gameObjects.forEach(nullptr, [](void*, GameObject* obj) {
             obj->transformPrevFrame = obj->transform;
             if (obj->rigidActor && obj->rigidActor->getType() == PxActorType::eRIGID_DYNAMIC) {
@@ -5567,7 +5636,7 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
     imguiInit();
     d3dInit();
     d3dApplySettings();
-    // dlssInit();
+    //dlssInit();
     physxInit();
     worldInit();
     gameReadSave();

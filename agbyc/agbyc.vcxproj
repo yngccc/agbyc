@@ -61,7 +61,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
@@ -69,7 +69,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;shcore.lib;shlwapi.lib;xinput.lib;nvsdk_ngx_d_dbg.lib;physx_64.lib;physxcommon_64.lib;physxfoundation_64.lib;physxcooking_64.lib;physxpvdsdk_static_64.lib;pvdruntime_64.lib;lowlevel_static_64.lib;lowlevelaabb_static_64.lib;lowleveldynamics_static_64.lib;physxcharacterkinematic_static_64.lib;physxvehicle_static_64.lib;physxvehicle2_static_64.lib;physxextensions_static_64.lib;physxtask_static_64.lib;scenequery_static_64.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;shcore.lib;shlwapi.lib;xinput.lib;directxtex.lib;nvsdk_ngx_s_dbg.lib;physx_64.lib;physxcommon_64.lib;physxfoundation_64.lib;physxcooking_64.lib;physxpvdsdk_static_64.lib;pvdruntime_64.lib;lowlevel_static_64.lib;lowlevelaabb_static_64.lib;lowleveldynamics_static_64.lib;physxcharacterkinematic_static_64.lib;physxvehicle_static_64.lib;physxvehicle2_static_64.lib;physxextensions_static_64.lib;physxtask_static_64.lib;scenequery_static_64.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /y /d  "$(SolutionDir)external\lib_debug\*.dll" "$(TargetDir)"
@@ -87,13 +87,14 @@ xcopy /y /d  "$(SolutionDir)external\bin\*" "$(TargetDir)"</Command>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;shcore.lib;shlwapi.lib;xinput.lib;nvsdk_ngx_d.lib;physx_64.lib;physxcommon_64.lib;physxfoundation_64.lib;physxcooking_64.lib;physxpvdsdk_static_64.lib;pvdruntime_64.lib;lowlevel_static_64.lib;lowlevelaabb_static_64.lib;lowleveldynamics_static_64.lib;physxcharacterkinematic_static_64.lib;physxvehicle_static_64.lib;physxvehicle2_static_64.lib;physxextensions_static_64.lib;physxtask_static_64.lib;scenequery_static_64.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;shcore.lib;shlwapi.lib;xinput.lib;directxtex.lib;nvsdk_ngx_s.lib;physx_64.lib;physxcommon_64.lib;physxfoundation_64.lib;physxcooking_64.lib;physxpvdsdk_static_64.lib;pvdruntime_64.lib;lowlevel_static_64.lib;lowlevelaabb_static_64.lib;lowleveldynamics_static_64.lib;physxcharacterkinematic_static_64.lib;physxvehicle_static_64.lib;physxvehicle2_static_64.lib;physxextensions_static_64.lib;physxtask_static_64.lib;scenequery_static_64.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /y /d  "$(SolutionDir)external\lib_release\*.dll" "$(TargetDir)"
@@ -208,7 +209,6 @@ xcopy /y /d  "$(SolutionDir)external\bin\*" "$(TargetDir)"</Command>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
     <Import Project="..\packages\WinPixEventRuntime.1.0.240308001\build\WinPixEventRuntime.targets" Condition="Exists('..\packages\WinPixEventRuntime.1.0.240308001\build\WinPixEventRuntime.targets')" />
-    <Import Project="..\packages\directxtex_desktop_win10.2024.6.5.1\build\native\directxtex_desktop_win10.targets" Condition="Exists('..\packages\directxtex_desktop_win10.2024.6.5.1\build\native\directxtex_desktop_win10.targets')" />
     <Import Project="..\packages\Microsoft.Direct3D.D3D12.1.614.1\build\native\Microsoft.Direct3D.D3D12.targets" Condition="Exists('..\packages\Microsoft.Direct3D.D3D12.1.614.1\build\native\Microsoft.Direct3D.D3D12.targets')" />
   </ImportGroup>
   <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
@@ -216,7 +216,6 @@ xcopy /y /d  "$(SolutionDir)external\bin\*" "$(TargetDir)"</Command>
       <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
     </PropertyGroup>
     <Error Condition="!Exists('..\packages\WinPixEventRuntime.1.0.240308001\build\WinPixEventRuntime.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\WinPixEventRuntime.1.0.240308001\build\WinPixEventRuntime.targets'))" />
-    <Error Condition="!Exists('..\packages\directxtex_desktop_win10.2024.6.5.1\build\native\directxtex_desktop_win10.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\directxtex_desktop_win10.2024.6.5.1\build\native\directxtex_desktop_win10.targets'))" />
     <Error Condition="!Exists('..\packages\Microsoft.Direct3D.D3D12.1.614.1\build\native\Microsoft.Direct3D.D3D12.props')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\Microsoft.Direct3D.D3D12.1.614.1\build\native\Microsoft.Direct3D.D3D12.props'))" />
     <Error Condition="!Exists('..\packages\Microsoft.Direct3D.D3D12.1.614.1\build\native\Microsoft.Direct3D.D3D12.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\Microsoft.Direct3D.D3D12.1.614.1\build\native\Microsoft.Direct3D.D3D12.targets'))" />
   </Target>

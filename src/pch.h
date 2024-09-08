@@ -43,8 +43,8 @@
 
 #define _XM_SSE4_INTRINSICS_
 #include <directxmath.h>
-#include <directxtex.h>
-#include <directxcollision.h>
+#include <DirectXCollision.h>
+#include <directxtex/directxtex.h>
 
 #undef near
 #undef far
