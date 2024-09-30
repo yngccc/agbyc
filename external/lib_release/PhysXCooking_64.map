@@ -1,6 +1,6 @@
  PhysXCooking_64
 
- Timestamp is 66ddab11 (Sun Sep  8 09:48:01 2024)
+ Timestamp is 66fa0834 (Sun Sep 29 22:08:52 2024)
 
  Preferred load address is 0000000180000000
 
@@ -838,8 +838,8 @@
  0002:00000340       __xt_a                     0000000180021340     LIBCMT:initializers.obj
  0002:00000348       __xt_z                     0000000180021348     LIBCMT:initializers.obj
  0002:00000370       ??_7PxFoundation@physx@@6B@ 0000000180021370     Cooking.obj
- 0002:000003e0       ??_C@_0EK@HPCJOIFF@C?3?2Code?2PhysX?9106?40?9physx?95?44?41@ 00000001800213e0     Cooking.obj
- 0002:00000430       ??_C@_0ED@MPFEIIED@C?3?2Code?2PhysX?9106?40?9physx?95?44?41@ 0000000180021430     Cooking.obj
+ 0002:000003e0       ??_C@_0EK@BMMELDCE@C?3?2Code?2PhysX?9106?41?9physx?95?44?42@ 00000001800213e0     Cooking.obj
+ 0002:00000430       ??_C@_0ED@BKGNJIDA@C?3?2Code?2PhysX?9106?41?9physx?95?44?42@ 0000000180021430     Cooking.obj
  0002:00000478       ??_C@_0BM@OIFKLHDN@?$DMallocation?5names?5disabled?$DO@ 0000000180021478     Cooking.obj
  0002:000004a0       __xmm@000000003a83126f3a83126f3a83126f 00000001800214a0     Cooking.obj
  0002:000004b0       __xmm@00000000ba83126fba83126fba83126f 00000001800214b0     Cooking.obj
@@ -2215,7 +2215,7 @@
  0002:000002d0       ?maxV3Error$initializer$@vecMathTests@aos@physx@@3P6AXXZEA 00000001800212d0     Cooking.obj
  0002:000002d8       ?minV4Error$initializer$@vecMathTests@aos@physx@@3P6AXXZEA 00000001800212d8     Cooking.obj
  0002:000002e0       ?maxV4Error$initializer$@vecMathTests@aos@physx@@3P6AXXZEA 00000001800212e0     Cooking.obj
- 0002:00000350       ?minus1w@?A0x09054a04@aos@physx@@3QBMB 0000000180021350     Cooking.obj
+ 0002:00000350       ?minus1w@?A0x6ae81175@aos@physx@@3QBMB 0000000180021350     Cooking.obj
  0002:00000360       ?gMaskXYZ@internalWindowsSimd@aos@physx@@3QBIB 0000000180021360     Cooking.obj
  0002:00000710       ?tokenTable@@3QBUStringLiteral@@B 0000000180021710     libvcruntime:undname.obj
  0002:00000820       ?nameTable@@3QBUStringLiteral@@B 0000000180021820     libvcruntime:undname.obj

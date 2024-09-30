@@ -1,6 +1,6 @@
  PhysXCooking_64
 
- Timestamp is 66ddaad1 (Sun Sep  8 09:46:57 2024)
+ Timestamp is 66fa07ce (Sun Sep 29 22:07:10 2024)
 
  Preferred load address is 0000000180000000
 
@@ -3097,9 +3097,9 @@
  0002:00000440       ?g_PXReciprocalTwoPi@aos@physx@@3UPX_VECTORF32@12@B 00000001800b3440     Cooking.obj
  0002:00000450       ?g_PXTwoPi@aos@physx@@3UPX_VECTORF32@12@B 00000001800b3450     Cooking.obj
  0002:00000480       ??_7PxFoundation@physx@@6B@ 00000001800b3480     Cooking.obj
- 0002:000004f0       ??_C@_0EK@HPCJOIFF@C?3?2Code?2PhysX?9106?40?9physx?95?44?41@ 00000001800b34f0     Cooking.obj
+ 0002:000004f0       ??_C@_0EK@BMMELDCE@C?3?2Code?2PhysX?9106?41?9physx?95?44?42@ 00000001800b34f0     Cooking.obj
  0002:00000540       ??_C@_0BM@OIFKLHDN@?$DMallocation?5names?5disabled?$DO@ 00000001800b3540     Cooking.obj
- 0002:00000560       ??_C@_0ED@MPFEIIED@C?3?2Code?2PhysX?9106?40?9physx?95?44?41@ 00000001800b3560     Cooking.obj
+ 0002:00000560       ??_C@_0ED@BKGNJIDA@C?3?2Code?2PhysX?9106?41?9physx?95?44?42@ 00000001800b3560     Cooking.obj
  0002:000005a8       ??_C@_0BM@BMFMDKFG@this?9?$DOcapacity?$CI?$CJ?5?$DM?5capacity@ 00000001800b35a8     Cooking.obj
  0002:000005c8       ??_C@_0CP@CPGGIPKL@?$CI?$CBcapacity?$CJ?5?$HM?$HM?5?$CInewData?5?$CG?$CG?5?$CInew@ 00000001800b35c8     Cooking.obj
  0002:000005f8       __real@3a83126f            00000001800b35f8     Cooking.obj
@@ -10677,7 +10677,7 @@
  0002:00000360       ?maxV3Error$initializer$@vecMathTests@aos@physx@@3P6AXXZEA 00000001800b3360     Cooking.obj
  0002:00000368       ?minV4Error$initializer$@vecMathTests@aos@physx@@3P6AXXZEA 00000001800b3368     Cooking.obj
  0002:00000370       ?maxV4Error$initializer$@vecMathTests@aos@physx@@3P6AXXZEA 00000001800b3370     Cooking.obj
- 0002:00000460       ?minus1w@?A0x09054a04@aos@physx@@3QBMB 00000001800b3460     Cooking.obj
+ 0002:00000460       ?minus1w@?A0x6ae81175@aos@physx@@3QBMB 00000001800b3460     Cooking.obj
  0002:00000470       ?gMaskXYZ@internalWindowsSimd@aos@physx@@3QBIB 00000001800b3470     Cooking.obj
  0002:00000810       ?_RTC_errlist@@3QBQEBDB    00000001800b3810     LIBCMTD:userapi.obj
  0002:000008f0       ?_RTC_ErrorMessages@@3QBQEBDB 00000001800b38f0     LIBCMTD:error.obj

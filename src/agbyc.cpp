@@ -4425,12 +4425,12 @@ void editorAssetsWindow() {
 
 void editorUpdate() {
     ZoneScopedN("editorUpdate");
-    //pxTimeAccumulated += frameTime;
-    //while (pxTimeAccumulated >= pxTimeStep) {
-    //    pxScene->simulate(pxTimeStep);
-    //    pxScene->fetchResults(true);
-    //    pxTimeAccumulated -= pxTimeStep;
-    //}
+    pxTimeAccumulated += frameTime;
+    while (pxTimeAccumulated >= pxTimeStep) {
+        pxScene->simulate(pxTimeStep);
+        pxScene->fetchResults(true);
+        pxTimeAccumulated -= pxTimeStep;
+    }
     {
         player.transformPrevFrame = player.transform;
         gameObjects.forEach(nullptr, [](void*, GameObject* obj) {
@@ -5366,16 +5366,19 @@ void d3dRender() {
         ZoneScopedN("Present");
         assert(SUCCEEDED(hr = d3d.swapChain->Present(0, 0)));
     }
-    //{
-    //    std::swap(d3d.graphicsCmdAllocator, d3d.graphicsCmdAllocatorPrevFrame);
-    //    std::swap(d3d.graphicsCmdList, d3d.graphicsCmdListPrevFrame);
-    //    std::swap(d3d.renderFence, d3d.renderFencePrevFrame);
-    //    std::swap(d3d.cbvSrvUavDescriptorHeap, d3d.cbvSrvUavDescriptorHeapPrevFrame);
-    //    std::swap(d3d.constantsBuffer, d3d.constantsBufferPrevFrame);
-    //    std::swap(d3d.renderTexture, d3d.renderTexturePrevFrame);
-    //    std::swap(d3d.imguiVertexBuffer, d3d.imguiVertexBufferPrevFrame);
-    //    std::swap(d3d.imguiIndexBuffer, d3d.imguiIndexBufferPrevFrame);
-    //}
+    {
+        std::swap(d3d.graphicsCmdAllocator, d3d.graphicsCmdAllocatorPrevFrame);
+        std::swap(d3d.graphicsCmdList, d3d.graphicsCmdListPrevFrame);
+        std::swap(d3d.renderFence, d3d.renderFencePrevFrame);
+        std::swap(d3d.cbvSrvUavDescriptorHeap, d3d.cbvSrvUavDescriptorHeapPrevFrame);
+        std::swap(d3d.constantsBuffer, d3d.constantsBufferPrevFrame);
+        std::swap(d3d.renderTexture, d3d.renderTexturePrevFrame);
+        std::swap(d3d.imguiVertexBuffer, d3d.imguiVertexBufferPrevFrame);
+        std::swap(d3d.imguiIndexBuffer, d3d.imguiIndexBufferPrevFrame);
+        std::swap(d3d.blasInstanceDescsBuffer, d3d.blasInstanceDescsBufferPrevFrame);
+        std::swap(d3d.blasInstancesInfosBuffer, d3d.blasInstancesInfosBufferPrevFrame);
+        std::swap(d3d.blasGeometriesInfosBuffer, d3d.blasGeometriesInfosBufferPrevFrame);
+    }
 }
 
 ImGuiKey virtualKeytoImGuiKey(WPARAM wparam) {
