@@ -342,7 +342,6 @@ FUNCTION float3 rotatePoint(float4 q, float3 v) {
 // Samples a direction within a hemisphere oriented along +Z axis with a cosine-weighted distribution 
 // Source: "Sampling Transformations Zoo" in Ray Tracing Gems by Shirley et al.
 FUNCTION float3 sampleHemisphere(float2 u, OUT_PARAMETER(float) pdf) {
-
 	float a = sqrt(u.x);
 	float b = TWO_PI * u.y;
 

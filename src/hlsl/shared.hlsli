@@ -94,7 +94,7 @@ float luminance_bt2020(float3 rgb) {
     return dot(rgb, float3(0.2627f, 0.6780f, 0.0593f));
 }
 
-uint packRGBA(float4 rgba){
+uint packRGBA(float4 rgba) {
     return 0;
 }
 
@@ -208,7 +208,32 @@ RayDesc cameraRayPinhole(in float2 pixelCoord, in float4x4 cameraViewMat, in flo
     ray.TMax = CAMERA_Z_MAX;
     float aspect = cameraProjMat[1][1] / cameraProjMat[0][0];
     float tanHalfFovY = 1.0f / cameraProjMat[1][1];
-    ray.Direction = normalize((pixelCoord.x * cameraViewMat[0].xyz * tanHalfFovY * aspect) - (pixelCoord.y * cameraViewMat[1].xyz * tanHalfFovY) + cameraViewMat[2].xyz);
+    ray.Direction = normalize(
+        (pixelCoord.x * cameraViewMat[0].xyz * tanHalfFovY * aspect) -
+        (pixelCoord.y * cameraViewMat[1].xyz * tanHalfFovY) +
+        cameraViewMat[2].xyz
+    );
+    return ray;
+}
+
+RayDesc cameraRayThinLens(in float2 pixelCoord, in float4x4 cameraViewMat, in float4x4 cameraProjMat, float focusDistance, float apertureSize, inout uint rngState) {
+	// First find the point in distance at which we want perfect focus 
+    RayDesc ray = cameraRayPinhole(pixelCoord, cameraViewMat, cameraProjMat);
+    float3 focalPoint = ray.Origin + ray.Direction * focusDistance;
+	// Sample the aperture shape, cosine weighted hemisphere
+    float2 apertureSample;
+    {
+        float2 u = float2(rand(rngState), rand(rngState));
+        float a = sqrt(u.x);
+        float b = TWO_PI * u.y;
+        apertureSample = float2(a * cos(b), a * sin(b)) * apertureSize;
+    }
+	// Jitter the ray origin within camera plane using aperture sample
+    float3 rightVector = cameraViewMat[0].xyz;
+    float3 upVector = cameraViewMat[1].xyz;
+    ray.Origin = ray.Origin + rightVector * apertureSample.x + upVector * apertureSample.y;
+	// Set ray direction from jittered origin towards the focal point
+    ray.Direction = normalize(focalPoint - ray.Origin);
     return ray;
 }
 

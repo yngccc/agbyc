@@ -22,6 +22,7 @@
 
 #define TRACY_ENABLE
 #include <tracy/tracy/tracy.hpp>
+#include <tracy/tracy/tracyd3d12.hpp>
 #define EDITOR
 #define LIVE_RELOAD_SHADERS
 #define LIVE_RELOAD_FUNCS
@@ -515,6 +516,10 @@ struct D3D {
 
     ID3D12PipelineState* imguiPSO;
     ID3D12RootSignature* imguiRootSig;
+
+#ifdef TRACY_ENABLE
+    tracy::D3D12QueueCtx* tracyContext;
+#endif
 };
 
 struct Sphere {
@@ -1880,6 +1885,12 @@ void d3dInit() {
         d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
         d3dSignalFence(&d3d.transferFence);
         d3dWaitFence(d3d.transferFence);
+    }
+    {
+#ifdef TRACY_ENABLE
+        d3d.tracyContext = TracyD3D12Context(d3d.device, d3d.graphicsQueue);
+        assert(d3d.tracyContext);
+#endif
     }
 }
 
@@ -4995,6 +5006,7 @@ void d3dRender() {
 
     assert(SUCCEEDED(hr = d3d.graphicsCmdAllocator->Reset()));
     assert(SUCCEEDED(hr = d3d.graphicsCmdList->Reset(d3d.graphicsCmdAllocator, nullptr)));
+    TracyD3D12NewFrame(d3d.tracyContext);
     d3d.graphicsCmdList->SetDescriptorHeaps(1, &d3d.cbvSrvUavDescriptorHeap.heap);
     {
         RenderInfo renderInfo = {
@@ -5358,6 +5370,7 @@ void d3dRender() {
         d3d.graphicsCmdList->ResourceBarrier(countof(transitions), transitions);
     }
     {
+        TracyD3D12Collect(d3d.tracyContext);
         assert(SUCCEEDED(hr = d3d.graphicsCmdList->Close()));
         d3d.graphicsQueue->ExecuteCommandLists(1, (ID3D12CommandList**)&d3d.graphicsCmdList);
         d3dSignalFence(&d3d.renderFence);
@@ -5639,7 +5652,7 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
     imguiInit();
     d3dInit();
     d3dApplySettings();
-    //dlssInit();
+    // dlssInit();
     physxInit();
     worldInit();
     gameReadSave();
