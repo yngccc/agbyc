@@ -69,6 +69,7 @@ using DirectX::XMVector3Transform;
 using DirectX::XMVector3Unproject;
 using DirectX::XMMatrixIdentity;
 using DirectX::XMMatrixScaling;
+using DirectX::XMMatrixRotationRollPitchYaw;
 using DirectX::XMMatrixAffineTransformation;
 using DirectX::XMMatrixLookAtLH;
 using DirectX::XMMatrixPerspectiveFovLH;

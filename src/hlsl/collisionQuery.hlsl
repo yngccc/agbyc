@@ -45,7 +45,7 @@ void miss(inout RayPayload payload) {
 }
 
 [shader("closesthit")]
-void closestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
+void closestHit(inout RayPayload payload, BuiltInTriangleIntersectionAttributes trigAttribs) {
     BLASInstanceInfo info = blasInstanceInfos[InstanceIndex()];
     payload.distance = WorldRayDirection() * RayTCurrent();
     payload.objectType = info.objectType;

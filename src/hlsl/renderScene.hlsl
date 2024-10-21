@@ -45,12 +45,14 @@ struct RayPayloadShadow {
 void rayGen() {
     uint2 resolution = DispatchRaysDimensions().xy;
     uint2 pixelIndex = DispatchRaysIndex().xy;
-    float2 pixelCoord = ((float2(pixelIndex) + 0.5) / float2(resolution)) * 2.0 - 1.0;
-
-    RayDesc ray = cameraRayPinhole(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjectMat);
-    RayPayloadPrimary payload = (RayPayloadPrimary) 0;
+    float2 pixelCoord = float2(pixelIndex) + 0.5;
+    RayDesc ray = cameraRayPinhole(pixelCoord, resolution, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjectMat);
+    RayPayloadPrimary payload;
+    payload.color = float3(0, 0, 0);
+    payload.depth = 0;
     payload.transmissions = (1, 1, 1, 1);
     payload.depths = (1, 1, 1, 1);
+    payload.colors = uint4(0, 0, 0, 0);
     TraceRay(bvh, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, payload);
     //payload.color = payload.color * payload.transmissions[3] + (1.0 - payload.transmissions[3]) * unpackRGB(payload.colors[3]);
     //payload.color = payload.color * payload.transmissions[2] + (1.0 - payload.transmissions[2]) * unpackRGB(payload.colors[2]);
@@ -117,13 +119,13 @@ void rayClosestHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInt
     normalTexture.GetDimensions(normalTextureWidth, normalTextureHeight);
 
     float2 texGrad1, texGrad2;
-    float alpha = atan(2.0 * tan(renderInfo.fovy * 0.5) / (float) baseColorTextureHeight);
+    float alpha = atan(2.0 * tan(renderInfo.cameraFovVertical * 0.5) / (float) baseColorTextureHeight);
     float radius = RayTCurrent() * tan(alpha);
     anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGrad1, texGrad2);
     float4 baseColor = baseColorTexture.SampleGrad(textureSampler, uv, texGrad1, texGrad2);
     float3 emissive = emissiveTexture.SampleGrad(textureSampler, uv, texGrad1, texGrad2);
     if (normalTextureHeight != baseColorTextureHeight) {
-        alpha = atan(2.0f * tan(renderInfo.fovy * 0.5) / (float) normalTextureHeight);
+        alpha = atan(2.0f * tan(renderInfo.cameraFovVertical * 0.5) / (float) normalTextureHeight);
         radius = RayTCurrent() * tan(alpha);
         anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGrad1, texGrad2);
     }
@@ -197,7 +199,7 @@ void rayAnyHitPrimary(inout RayPayloadPrimary payload, in BuiltInTriangleInterse
         uint baseColorTextureWidth, baseColorTextureHeight;
         baseColorTexture.GetDimensions(baseColorTextureWidth, baseColorTextureHeight);
         float2 texGrad1, texGrad2;
-        float alpha = atan(2.0 * tan(renderInfo.fovy * 0.5) / (float) baseColorTextureHeight);
+        float alpha = atan(2.0 * tan(renderInfo.cameraFovVertical * 0.5) / (float) baseColorTextureHeight);
         float radius = RayTCurrent() * tan(alpha);
         anisotropicEllipseAxes(position, normal, WorldRayDirection(), radius, p0, p1, p2, v0.uv, v1.uv, v2.uv, uv, texGrad1, texGrad2);
         color = baseColorTexture.SampleGrad(textureSampler, uv, texGrad1, texGrad2) * blasGeometryInfo.baseColorFactor;

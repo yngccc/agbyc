@@ -36,11 +36,16 @@ struct RayPayload {
 void rayGen() {
     uint2 resolution = DispatchRaysDimensions().xy;
     uint2 pixelIndex = DispatchRaysIndex().xy;
-    uint rngState = initRNG(pixelIndex, resolution, renderInfo.pathTracerAccumulationFrameCount);
-    float2 offset = float2(rand(rngState), rand(rngState));
-    offset = lerp(float2(-0.5, -0.5), float2(0.5, 0.5), offset);
-    float2 pixelCoord = ((float2(pixelIndex) + offset + 0.5) / float2(resolution)) * 2.0 - 1.0;
-    RayDesc ray = cameraRayPinhole(pixelCoord, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjectMat);
+    RngState rngState = initRNG(pixelIndex, resolution, renderInfo.pathTracerAccumulationFrameCount);
+    float2 pixelOffset = lerp(float2(-0.5, -0.5), float2(0.5, 0.5), float2(rand(rngState), rand(rngState)));
+    float2 pixelCoord = float2(pixelIndex) + 0.5 + pixelOffset;
+    RayDesc ray;
+    if (renderInfo.pathTracerDepthOfField) {
+        ray = cameraRayThinLens(pixelCoord, resolution, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjectMat, 20, 0.1, rngState);
+    }
+    else {
+        ray = cameraRayPinhole(pixelCoord, resolution, renderInfo.cameraViewMatInverseTranspose, renderInfo.cameraProjectMat);
+    }
     RayPayload payload = (RayPayload)0;
     float3 radian = float3(0, 0, 0);
     float3 throughput = float3(1, 1, 1);
@@ -68,7 +73,7 @@ void rayGen() {
         float3 viewDir = -ray.Direction;
         if (dot(geometryNormal, viewDir) < 0) geometryNormal = -geometryNormal;
         if (dot(geometryNormal, shadingNormal) < 0) shadingNormal = -shadingNormal;
-       //if (dot(shadingNormal, viewDir) <= 0.0f) break;
+        //if (dot(shadingNormal, viewDir) <= 0.0f) break;
         
         BLASGeometryInfo blasGeometryInfo = blasGeometriesInfos[NonUniformResourceIndex(payload.blasGeometryInfoIndex)];
         Texture2D<float4> baseColorTexture = ResourceDescriptorHeap[NonUniformResourceIndex(blasGeometryInfo.descriptorsHeapOffset + 2)];
@@ -98,7 +103,7 @@ void rayMiss(inout RayPayload payload : SV_RayPayload) {
 }
 
 [shader("closesthit")]
-void rayClosestHit(inout RayPayload payload : SV_RayPayload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
+void rayClosestHit(inout RayPayload payload : SV_RayPayload, BuiltInTriangleIntersectionAttributes trigAttribs) {
     BLASInstanceInfo blasInstanceInfo = blasInstancesInfos[InstanceIndex()];
     BLASGeometryInfo blasGeometryInfo = blasGeometriesInfos[blasInstanceInfo.blasGeometriesOffset + GeometryIndex()];
     
@@ -134,6 +139,6 @@ void rayClosestHit(inout RayPayload payload : SV_RayPayload, in BuiltInTriangleI
 }
 
 [shader("anyhit")]
-void rayAnyHit(inout RayPayload payload : SV_RayPayload, in BuiltInTriangleIntersectionAttributes trigAttribs) {
+void rayAnyHit(inout RayPayload payload : SV_RayPayload, BuiltInTriangleIntersectionAttributes trigAttribs) {
     IgnoreHit();
 }

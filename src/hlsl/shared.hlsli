@@ -14,22 +14,29 @@
 
 #define HDR_SCALE_FACTOR (80.0f / 10000.0f)
 
-uint jenkinsHash(uint x) {
-    x += x << 10;
-    x ^= x >> 6;
-    x += x << 3;
-    x ^= x >> 11;
-    x += x << 15;
-    return x;
-}
+#define USE_PCG 0
+#if USE_PCG
+typedef uint4 RngState;
+#else
+typedef uint RngState;
+#endif
 
-uint initRNG(uint2 pixel, uint2 resolution, uint frame) {
-    uint rngState = dot(pixel, uint2(1, resolution.x)) ^ jenkinsHash(frame);
-    return jenkinsHash(rngState);
-}
+uint4 pcg4d(uint4 v) {
+    v = v * 1664525u + 1013904223u;
 
-float uintToFloat(uint x) {
-    return asfloat(0x3f800000 | (x >> 9)) - 1.0f;
+    v.x += v.y * v.w;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v.w += v.y * v.z;
+
+    v = v ^ (v >> 16u);
+
+    v.x += v.y * v.w;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v.w += v.y * v.z;
+
+    return v;
 }
 
 uint xorshift(inout uint rngState) {
@@ -39,9 +46,38 @@ uint xorshift(inout uint rngState) {
     return rngState;
 }
 
-float rand(inout uint rngState) {
+uint jenkinsHash(uint x) {
+    x += x << 10;
+    x ^= x >> 6;
+    x += x << 3;
+    x ^= x >> 11;
+    x += x << 15;
+    return x;
+}
+
+float uintToFloat(uint x) {
+    return asfloat(0x3f800000 | (x >> 9)) - 1.0f;
+}
+
+#if USE_PCG
+RngStateType initRNG(uint2 pixelCoords, uint2 resolution, uint frameNumber) {
+	return RngStateType(pixelCoords.xy, frameNumber, 0); //< Seed for PCG uses a sequential sample number in 4th channel, which increments on every RNG call and starts from 0
+}
+
+float rand(inout RngStateType rngState) {
+	rngState.w++; //< Increment sample index
+	return uintToFloat(pcg4d(rngState).x);
+}
+#else
+RngState initRNG(uint2 pixelCoords, uint2 resolution, uint frameNumber) {
+    RngState seed = dot(pixelCoords, uint2(1, resolution.x)) ^ jenkinsHash(frameNumber);
+    return jenkinsHash(seed);
+}
+
+float rand(inout RngState rngState) {
     return uintToFloat(xorshift(rngState));
 }
+#endif
 
 float srgbToLinear(float e) {
     if (e <= 0.04045f)
@@ -127,15 +163,15 @@ float3 hashIntToColor(int i) {
     return float3(r, g, b);
 }
 
-float2 barycentricsLerp(in float2 barycentrics, in float2 vertAttrib0, in float2 vertAttrib1, in float2 vertAttrib2) {
+float2 barycentricsLerp(float2 barycentrics, float2 vertAttrib0, float2 vertAttrib1, float2 vertAttrib2) {
     return vertAttrib0 + barycentrics.x * (vertAttrib1 - vertAttrib0) + barycentrics.y * (vertAttrib2 - vertAttrib0);
 }
 
-float3 barycentricsLerp(in float2 barycentrics, in float3 vertAttrib0, in float3 vertAttrib1, in float3 vertAttrib2) {
+float3 barycentricsLerp(float2 barycentrics, float3 vertAttrib0, float3 vertAttrib1, float3 vertAttrib2) {
     return vertAttrib0 + barycentrics.x * (vertAttrib1 - vertAttrib0) + barycentrics.y * (vertAttrib2 - vertAttrib0);
 }
 
-bool barycentricsOnEdge(in float2 barycentrics, in float edgeThickness) {
+bool barycentricsOnEdge(float2 barycentrics, float edgeThickness) {
     return (barycentrics.x < edgeThickness) || (barycentrics.y < edgeThickness) || ((1.0 - barycentrics.x - barycentrics.y) < edgeThickness);
 }
 
@@ -180,7 +216,7 @@ float3 offsetRay(const float3 p, const float3 n) {
 		abs(p.z) < origin ? p.z + float_scale * n.z : p_i.z);
 }
 
-float3 offsetRayShadow(in float3 p, in float3 a, in float3 b, in float3 c, in float3 na, in float3 nb, in float3 nc, in float u, in float v, in float w) {
+float3 offsetRayShadow(float3 p, float3 a, float3 b, float3 c, float3 na, float3 nb, float3 nc, float u, float v, float w) {
     float3 tmpu = p - a;
     float3 tmpv = p - b;
     float3 tmpw = p - c;
@@ -194,20 +230,56 @@ float3 offsetRayShadow(in float3 p, in float3 a, in float3 b, in float3 c, in fl
     return pp;
 }
 
-float3 triangleGeometryNormal(in float3 p0, in float3 p1, in float3 p2) {
+float3 triangleGeometryNormal(float3 p0, float3 p1, float3 p2) {
     float3 edge20 = p2 - p0;
     //float3 edge21 = p2 - p1;
     float3 edge10 = p1 - p0;
     return normalize(cross(edge20, edge10));
 }
 
-RayDesc cameraRayPinhole(in float2 pixelCoord, in float4x4 cameraViewMat, in float4x4 cameraProjMat) {
+//RayDesc cameraRayPinhole(float2 pixelCoord, float2 imageSize, float4x4 cameraRotationMat, float3 cameraPosition, float cameraFovVertical) {
+//    pixelCoord -= imageSize / 2.0;
+//    float tanHalfAngle = tan(cameraFovVertical / 2.0);
+//    float aspectScale = imageSize.y / 2.0;
+//    RayDesc ray;
+//    ray.Origin = cameraPosition;
+//    ray.TMin = CAMERA_Z_MIN;
+//    ray.TMax = CAMERA_Z_MAX;
+//    ray.Direction = normalize(float3(float2(pixelCoord.x, -pixelCoord.y) * tanHalfAngle / aspectScale, 1.0));
+//    ray.Direction = mul(float3x3(cameraRotationMat[0].xyz, cameraRotationMat[1].xyz, cameraRotationMat[2].xyz), ray.Direction);
+//    return ray;
+//}
+
+//RayDesc cameraRayPanini(float2 pixelCoord, float2 imageSize, float4x4 cameraRotationMat, float3 cameraPosition, float cameraFovVertical, float paniniDistance, float verticalCompression) {
+//    pixelCoord -= imageSize / 2.0;
+//    float halfFOV = cameraFovVertical / 2.0;
+//    float halfPaniniFOV = atan2(sin(halfFOV), cos(halfFOV) + paniniDistance);
+//    float2 hvPan = (tan(halfPaniniFOV)).xx * (1.0 + paniniDistance); 
+//    hvPan *= pixelCoord / imageSize.y;
+//    hvPan.x = atan(hvPan.x / (1.0 + paniniDistance));
+//    float n = sin(hvPan.x) * paniniDistance;
+//    float M = sqrt(1.0 - n * n) + paniniDistance * cos(hvPan.x);
+//    float x = sin(hvPan.x) * M;
+//    float z = (cos(hvPan.x) * M) - paniniDistance;
+//    float S = (paniniDistance + 1) / (paniniDistance + z);
+//    float y = lerp(hvPan.y / S, hvPan.y * z, verticalCompression);
+//    RayDesc ray;
+//    ray.Origin = cameraPosition;
+//    ray.TMin = CAMERA_Z_MIN;
+//    ray.TMax = CAMERA_Z_MAX;
+//    ray.Direction = normalize(float3(x, -y, z));
+//    ray.Direction = mul(float3x3(cameraRotationMat[0].xyz, cameraRotationMat[1].xyz, cameraRotationMat[2].xyz), ray.Direction);
+//    return ray;
+//}
+
+RayDesc cameraRayPinhole(float2 pixelCoord, float2 imageResolution, float4x4 cameraViewMat, float4x4 cameraProjMat) {
+    pixelCoord = (pixelCoord / imageResolution) * 2.0 - 1.0;
     RayDesc ray;
     ray.Origin = cameraViewMat[3].xyz;
     ray.TMin = CAMERA_Z_MIN;
     ray.TMax = CAMERA_Z_MAX;
     float aspect = cameraProjMat[1][1] / cameraProjMat[0][0];
-    float tanHalfFovY = 1.0f / cameraProjMat[1][1];
+    float tanHalfFovY = 1.0 / cameraProjMat[1][1];
     ray.Direction = normalize(
         (pixelCoord.x * cameraViewMat[0].xyz * tanHalfFovY * aspect) -
         (pixelCoord.y * cameraViewMat[1].xyz * tanHalfFovY) +
@@ -216,11 +288,9 @@ RayDesc cameraRayPinhole(in float2 pixelCoord, in float4x4 cameraViewMat, in flo
     return ray;
 }
 
-RayDesc cameraRayThinLens(in float2 pixelCoord, in float4x4 cameraViewMat, in float4x4 cameraProjMat, float focusDistance, float apertureSize, inout uint rngState) {
-	// First find the point in distance at which we want perfect focus 
-    RayDesc ray = cameraRayPinhole(pixelCoord, cameraViewMat, cameraProjMat);
+RayDesc cameraRayThinLens(float2 pixelCoord, float2 imageResolution, float4x4 cameraViewMat, float4x4 cameraProjMat, float focusDistance, float apertureSize, inout RngState rngState) {
+    RayDesc ray = cameraRayPinhole(pixelCoord, imageResolution, cameraViewMat, cameraProjMat);
     float3 focalPoint = ray.Origin + ray.Direction * focusDistance;
-	// Sample the aperture shape, cosine weighted hemisphere
     float2 apertureSample;
     {
         float2 u = float2(rand(rngState), rand(rngState));
@@ -228,19 +298,17 @@ RayDesc cameraRayThinLens(in float2 pixelCoord, in float4x4 cameraViewMat, in fl
         float b = TWO_PI * u.y;
         apertureSample = float2(a * cos(b), a * sin(b)) * apertureSize;
     }
-	// Jitter the ray origin within camera plane using aperture sample
     float3 rightVector = cameraViewMat[0].xyz;
     float3 upVector = cameraViewMat[1].xyz;
     ray.Origin = ray.Origin + rightVector * apertureSample.x + upVector * apertureSample.y;
-	// Set ray direction from jittered origin towards the focal point
     ray.Direction = normalize(focalPoint - ray.Origin);
     return ray;
 }
 
-void anisotropicEllipseAxes(in float3 p, in float3 f, in float3 d, in float rayConeRadiusAtIntersection,
-                            in float3 position0, in float3 position1, in float3 position2,
-                            in float2 txcoord0, in float2 txcoord1, in float2 txcoord2,
-                            in float2 interpolatedTexCoordsAtIntersection,
+void anisotropicEllipseAxes(float3 p, float3 f, float3 d, float rayConeRadiusAtIntersection,
+                            float3 position0, float3 position1, float3 position2,
+                            float2 txcoord0, float2 txcoord1, float2 txcoord2,
+                            float2 interpolatedTexCoordsAtIntersection,
                             out float2 texGradient1, out float2 texGradient2) {
     float3 a1 = d - dot(f, d) * f;
     float3 p1 = a1 - dot(d, a1) * d;
@@ -339,8 +407,9 @@ struct RenderInfo {
     XMMatrix cameraViewProjectMat;
     XMMatrix cameraViewProjectMatInverse;
     XMMatrix cameraViewProjectMatPrevFrame;
-    float fovy;
+    float cameraFovVertical;
     uint pathTracerAccumulationFrameCount;
+    uint pathTracerDepthOfField;
 #else
     float4x4 cameraViewMat;
     float4x4 cameraViewMatInverseTranspose;
@@ -348,8 +417,9 @@ struct RenderInfo {
     float4x4 cameraViewProjectMat;
     float4x4 cameraViewProjectMatInverse;
     float4x4 cameraViewProjectMatPrevFrame;
-    float fovy;
+    float cameraFovVertical;
     uint pathTracerAccumulationFrameCount;
+    uint pathTracerDepthOfField;
 #endif
 };
 
