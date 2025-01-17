@@ -648,6 +648,7 @@ struct ModelAnimation {
 struct Model {
     std::filesystem::path filePath;
     cgltf_data* gltfData;
+    ufbx_scene* fbxScene;
     std::vector<ModelNode> nodes;
     std::vector<ModelNode*> rootNodes;
     std::vector<ModelNode*> meshNodes;
@@ -785,6 +786,7 @@ struct EditorUndo {
 
 enum EditorMode {
     EditorModeFreeCam,
+    EditorModeEditModel,
     EditorModeEditObject,
 };
 
@@ -804,6 +806,7 @@ struct Editor {
 
     EditorSelectType selectedType = EditorSelectTypeNone;
     uint selectedModelIndex = UINT_MAX;
+    ModelInstance selectedModelInstance;
     uint selectedObjectIndex = UINT_MAX;
     uint selectedObjectMeshNodeIndex = UINT_MAX;
     bool selectedObjectXRay;
@@ -852,6 +855,9 @@ static std::filesystem::path savePath = [] {
     return documentFolderPath;
 }();
 
+static std::filesystem::path assetsModelsPath = exePath / "assets/models";
+static std::filesystem::path assetsSkyboxesPath = exePath / "assets/skyboxes";
+static std::filesystem::path assetsFontsPath = exePath / "assets/fonts";
 static std::filesystem::path worldFilePath = exePath / "assets/worlds/test.yaml";
 static std::filesystem::path gameSavePath = savePath / "save.yaml";
 static std::filesystem::path settingsPath = savePath / "settings.yaml";
@@ -1304,14 +1310,14 @@ void imguiInit() {
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.FontGlobalScale = (float)screenH / 3000.0f;
     float baseFontSize = 50.0f;
-    imguiFont = io.Fonts->AddFontFromFileTTF((exePath / "assets/fonts/NotoSerif.ttf").string().c_str(), baseFontSize);
+    imguiFont = io.Fonts->AddFontFromFileTTF((assetsFontsPath / "NotoSerif.ttf").string().c_str(), baseFontSize);
     ImWchar iconsRange[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
     float iconFontSize = baseFontSize * 2.0f / 3.0f; // FontAwesome fonts need to have their sizes reduced by 2.0f/3.0f in order to align correctly
     ImFontConfig iconsConfig;
     iconsConfig.MergeMode = true;
     iconsConfig.PixelSnapH = true;
     iconsConfig.GlyphMinAdvanceX = iconFontSize;
-    io.Fonts->AddFontFromFileTTF((exePath / "assets/fonts/fa-solid-900.ttf").string().c_str(), iconFontSize, &iconsConfig, iconsRange);
+    io.Fonts->AddFontFromFileTTF((assetsFontsPath / "fa-solid-900.ttf").string().c_str(), iconFontSize, &iconsConfig, iconsRange);
 }
 
 void imguiDebugLogWindow() {
@@ -1659,7 +1665,7 @@ __declspec(dllexport) extern const char* D3D12SDKPath = ".\\D3D12\\";
 
 void d3dInit() {
     HRESULT hr;
-    bool debug = commandLineContain(L"d3d_debug");
+    bool debug = commandLineContain(L"d3dDebug");
     uint factoryFlags = 0;
     if (debug) {
         factoryFlags = factoryFlags | DXGI_CREATE_FACTORY_DEBUG;
@@ -2255,7 +2261,7 @@ bool projectCameraSpaceTriangleToScreen(float3 p0, float3 p1, float3 p2, float2*
 
 Model* modelInitGLTF(const std::filesystem::path& filePath) {
     assert(filePath.is_relative());
-    std::filesystem::path filePathFull = exePath / filePath;
+    std::filesystem::path filePathFull = assetsModelsPath / filePath;
     cgltf_options gltfOptions = {};
     cgltf_data* gltfData = nullptr;
     cgltf_result gltfParseFileResult = cgltf_parse_file(&gltfOptions, filePathFull.string().c_str(), &gltfData);
@@ -2703,13 +2709,38 @@ Model* modelInitGLTF(const std::filesystem::path& filePath) {
 }
 
 Model* modelInitFBX(const std::filesystem::path& filePath) {
-    assert(false);
+    assert(filePath.is_relative());
+    std::filesystem::path filePathFull = assetsModelsPath / filePath;
+
+    ufbx_load_opts opts = {};
+    ufbx_error error;
+    ufbx_scene* fbxScene = ufbx_load_file(filePathFull.string().c_str(), &opts, &error);
+    assert(fbxScene);
+
+    Model* model = &models.emplace_back();
+    model->filePath = filePath;
+    model->fbxScene = fbxScene;
+
+    model->nodes.resize(fbxScene->nodes.count);
+    model->meshes.resize(fbxScene->meshes.count);
+    model->materials.resize(fbxScene->materials.count);
+    model->textures.resize(fbxScene->textures.count);
+    model->images.resize(fbxScene->texture_files.count);
+
+    for (size_t i = 0; i < fbxScene->nodes.count; i++) {
+        ufbx_node* node = fbxScene->nodes.data[i];
+        if (node->is_root) continue;
+        printf("Object: %s\n", node->name.data);
+        if (node->mesh) {
+            printf("-> mesh with %zu faces\n", node->mesh->faces.count);
+        }
+    }
     return nullptr;
 }
 
 Model* modelInit(const std::filesystem::path& filePath) {
     for (Model& m : models) {
-        if (std::error_code err; std::filesystem::equivalent(m.filePath, filePath, err)) {
+        if (m.filePath == filePath) {
             return &m;
         }
     }
@@ -2935,7 +2966,7 @@ ModelInstance modelInstanceInit(Model* model) {
 ModelInstance modelInstanceInit(const std::filesystem::path& filePath) {
     Model* model = nullptr;
     for (Model& m : models) {
-        if (std::filesystem::equivalent(m.filePath, filePath)) {
+        if (m.filePath == filePath) {
             model = &m;
             break;
         }
@@ -3039,64 +3070,6 @@ void modelInstanceUpdateAnimation(ModelInstance* modelInstance, double time) {
     }
 }
 
-void modelsAppendDescriptorsAndBlasGeometriesInfos() {
-    for (Model& model : models) {
-        for (ModelNode* meshNode : model.meshNodes) {
-            meshNode->mesh->blasGeometriesInfoOffset = (uint)blasGeometriesInfos.size();
-            for (const ModelPrimitive& primitive : meshNode->mesh->primitives) {
-                uint descriptorsHeapOffset = d3d.cbvSrvUavDescriptorHeap.offset;
-                D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.verticesBufferOffset, .NumElements = primitive.verticesCount, .StructureByteStride = sizeof(struct Vertex)}};
-                D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.indicesBufferOffset, .NumElements = primitive.indicesCount, .StructureByteStride = sizeof(uint)}};
-                d3dAppendSRVDescriptor(&vertexBufferDesc, meshNode->mesh->verticesBuffer->GetResource());
-                d3dAppendSRVDescriptor(&indexBufferDesc, meshNode->mesh->indicesBuffer->GetResource());
-                if (primitive.material) {
-                    if (primitive.material->baseColorTexture) {
-                        d3dAppendSRVDescriptor(&primitive.material->baseColorTexture->srvDesc, primitive.material->baseColorTexture->image->gpuData->GetResource());
-                    }
-                    else {
-                        d3dAppendSRVDescriptor(&d3d.defaultBaseColorTextureSRVDesc, d3d.defaultBaseColorTexture->GetResource());
-                    }
-                    if (primitive.material->roughnessMetallicTexture) {
-                        d3dAppendSRVDescriptor(&primitive.material->roughnessMetallicTexture->srvDesc, primitive.material->roughnessMetallicTexture->image->gpuData->GetResource());
-                    }
-                    else {
-                        d3dAppendSRVDescriptor(&d3d.defaultMetallicRoughnessTextureSRVDesc, d3d.defaultMetallicRoughnessTexture->GetResource());
-                    }
-                    if (primitive.material->normalMapTexture) {
-                        d3dAppendSRVDescriptor(&primitive.material->normalMapTexture->srvDesc, primitive.material->normalMapTexture->image->gpuData->GetResource());
-                    }
-                    else {
-                        d3dAppendSRVDescriptor(&d3d.defaultNormalMapTextureSRVDesc, d3d.defaultNormalMapTexture->GetResource());
-                    }
-                    if (primitive.material->emissiveTexture) {
-                        d3dAppendSRVDescriptor(&primitive.material->emissiveTexture->srvDesc, primitive.material->emissiveTexture->image->gpuData->GetResource());
-                    }
-                    else {
-                        d3dAppendSRVDescriptor(&d3d.defaultEmissiveTextureSRVDesc, d3d.defaultEmissiveTexture->GetResource());
-                    }
-                    BLASGeometryInfo blasGeometryInfo = {
-                        .descriptorsHeapOffset = descriptorsHeapOffset,
-                        .baseColorFactor = primitive.material->baseColor,
-                        .alphaMode = primitive.material->alphaMode,
-                        .alphaCutOff = primitive.material->alphaCutOff,
-                        .roughnessFactor = primitive.material->roughness,
-                        .metallicFactor = primitive.material->metallic,
-                        .emissiveFactor = primitive.material->emissive,
-                    };
-                    blasGeometriesInfos.push_back(blasGeometryInfo);
-                }
-                else {
-                    d3dAppendSRVDescriptor(&d3d.defaultBaseColorTextureSRVDesc, d3d.defaultBaseColorTexture->GetResource());
-                    d3dAppendSRVDescriptor(&d3d.defaultMetallicRoughnessTextureSRVDesc, d3d.defaultMetallicRoughnessTexture->GetResource());
-                    d3dAppendSRVDescriptor(&d3d.defaultNormalMapTextureSRVDesc, d3d.defaultNormalMapTexture->GetResource());
-                    d3dAppendSRVDescriptor(&d3d.defaultEmissiveTextureSRVDesc, d3d.defaultEmissiveTexture->GetResource());
-                    blasGeometriesInfos.push_back(BLASGeometryInfo{.descriptorsHeapOffset = descriptorsHeapOffset});
-                }
-            }
-        }
-    }
-}
-
 void modelInstanceAddBLASInstancesToTLAS(ModelInstance& modelInstance, const XMMatrix& objectTransform, const XMMatrix& objectTransformPrevFrame, ObjectType objectType, uint objectIndex) {
     ZoneScopedN("modelInstanceAddBLASInstancesToTLAS");
     for (uint meshNodeIndex = 0; meshNodeIndex < modelInstance.meshNodes.size(); meshNodeIndex++) {
@@ -3191,9 +3164,9 @@ void modelInstanceAddBLASInstancesToTLAS(ModelInstance& modelInstance, const XMM
 }
 
 void loadSimpleAssets() {
-    modelInstanceSphere = modelInstanceInit(".\\assets\\models\\sphere\\gltf\\sphere.gltf");
-    modelInstanceCube = modelInstanceInit(".\\assets\\models\\cube\\gltf\\cube.gltf");
-    modelInstanceCylinder = modelInstanceInit(".\\assets\\models\\cylinder\\gltf\\cylinder.gltf");
+    modelInstanceSphere = modelInstanceInit("sphere\\gltf\\sphere.gltf");
+    modelInstanceCube = modelInstanceInit("cube\\gltf\\cube.gltf");
+    modelInstanceCylinder = modelInstanceInit("cylinder\\gltf\\cylinder.gltf");
 }
 
 void physxInit() {
@@ -3345,7 +3318,7 @@ void worldInit() {
             skyboxYaml >> file;
             Skybox skybox;
             skybox.hdriTextureFilePath = file;
-            skybox.hdriTexture = d3dCreateImageDDS(exePath / skybox.hdriTextureFilePath, L"SkyboxHDRI", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            skybox.hdriTexture = d3dCreateImageDDS(assetsSkyboxesPath / skybox.hdriTextureFilePath, L"SkyboxHDRI", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             skyboxes.push_back(skybox);
         }
         assert(SUCCEEDED(hr = d3d.graphicsCmdList->Close()));
@@ -3353,7 +3326,7 @@ void worldInit() {
         d3dSignalFence(&d3d.transferFence);
         d3dWaitFence(d3d.transferFence);
 
-        const char* simpleModelFiles[] = {".\\assets\\models\\sphere\\gltf\\sphere.gltf", ".\\assets\\models\\cube\\gltf\\cube.gltf", ".\\assets\\models\\cylinder\\gltf\\cylinder.gltf"};
+        const char* simpleModelFiles[] = {"sphere\\gltf\\sphere.gltf", "cube\\gltf\\cube.gltf", "cylinder\\gltf\\cylinder.gltf"};
         for (const char* modelFile : simpleModelFiles) {
             assert(modelInit(modelFile));
         }
@@ -4352,21 +4325,21 @@ void editorPropertiesWindow() {
             case EditorSelectTypeModel: {
                 Model& model = models[editor.selectedModelIndex];
                 ImGui::Text("Model\n%s", models[editor.selectedModelIndex].filePath.string().c_str());
-                 if (ImGui::TreeNode("Hierarchy")) {
-                     for (ModelNode* rootNode : model.rootNodes) {
-                         modelTraverseNodesImGui(rootNode);
-                     }
-                     ImGui::TreePop();
-                 }
-                 if (ImGui::TreeNode("Animations")) {
-                     for (uint animationIndex = 0; animationIndex < model.animations.size(); animationIndex++) {
-                         ModelAnimation& modelAnimation = model.animations[animationIndex];
-                         ImGui::PushID(animationIndex);
-                         ImGui::Text(modelAnimation.name.c_str());
-                         ImGui::PopID();
-                     }
-                     ImGui::TreePop();
-                 }
+                if (ImGui::TreeNode("Hierarchy")) {
+                    for (ModelNode* rootNode : model.rootNodes) {
+                        modelTraverseNodesImGui(rootNode);
+                    }
+                    ImGui::TreePop();
+                }
+                if (ImGui::TreeNode("Animations")) {
+                    for (uint animationIndex = 0; animationIndex < model.animations.size(); animationIndex++) {
+                        ModelAnimation& modelAnimation = model.animations[animationIndex];
+                        ImGui::PushID(animationIndex);
+                        ImGui::Text(modelAnimation.name.c_str());
+                        ImGui::PopID();
+                    }
+                    ImGui::TreePop();
+                }
             } break;
             case EditorSelectTypePlayer: {
                 editorPlayerProperties();
@@ -4507,7 +4480,8 @@ void editorUpdate() {
             mouseSelectX = (uint)mousePos.x;
             mouseSelectY = (uint)mousePos.y;
         }
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && editor.selectedType != EditorSelectTypeNone && !ImGui::GetIO().WantCaptureMouse) {
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !ImGui::GetIO().WantCaptureMouse &&
+            (editor.selectedType == EditorSelectTypePlayer || editor.selectedType == EditorSelectTypeGameObject)) {
             ImGui::OpenPopup("selected object popup");
         }
         if (ImGui::BeginPopup("selected object popup")) {
@@ -5080,7 +5054,10 @@ void d3dRender() {
                 ModelInstanceMeshNode* instanceMeshNode = &modelInstance->meshNodes[meshNodeIndex];
                 if (!meshNode->skin) continue;
                 int skinIndex = (int)(meshNode->skin - &modelInstance->model->skins[0]);
-                verticeBufferBarriers.push_back(D3D12_RESOURCE_BARRIER{.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, .Transition = {.pResource = instanceMeshNode->verticesBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS}});
+                verticeBufferBarriers.push_back(D3D12_RESOURCE_BARRIER{
+                    .Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+                    .Transition = {.pResource = instanceMeshNode->verticesBuffer->GetResource(), .StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, .StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS},
+                });
                 meshSkinningInfos.push_back(MeshSkinningInfo{.meshNode = meshNode, .instanceMeshNode = instanceMeshNode, .matsBuffer = modelInstance->skins[skinIndex].bonesTransformMatsBuffer->GetResource()->GetGPUVirtualAddress()});
             }
         }
@@ -5134,41 +5111,100 @@ void d3dRender() {
     {
         ZoneScopedN("TLAS build");
         PIXSetMarker(d3d.graphicsCmdList, 0, "TLAS build");
-        modelsAppendDescriptorsAndBlasGeometriesInfos();
+        for (Model& model : models) {
+            for (ModelNode* meshNode : model.meshNodes) {
+                meshNode->mesh->blasGeometriesInfoOffset = (uint)blasGeometriesInfos.size();
+                for (const ModelPrimitive& primitive : meshNode->mesh->primitives) {
+                    uint descriptorsHeapOffset = d3d.cbvSrvUavDescriptorHeap.offset;
+                    D3D12_SHADER_RESOURCE_VIEW_DESC vertexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.verticesBufferOffset, .NumElements = primitive.verticesCount, .StructureByteStride = sizeof(struct Vertex)}};
+                    D3D12_SHADER_RESOURCE_VIEW_DESC indexBufferDesc = {.ViewDimension = D3D12_SRV_DIMENSION_BUFFER, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .Buffer = {.FirstElement = primitive.indicesBufferOffset, .NumElements = primitive.indicesCount, .StructureByteStride = sizeof(uint)}};
+                    d3dAppendSRVDescriptor(&vertexBufferDesc, meshNode->mesh->verticesBuffer->GetResource());
+                    d3dAppendSRVDescriptor(&indexBufferDesc, meshNode->mesh->indicesBuffer->GetResource());
+                    if (primitive.material) {
+                        if (primitive.material->baseColorTexture) {
+                            d3dAppendSRVDescriptor(&primitive.material->baseColorTexture->srvDesc, primitive.material->baseColorTexture->image->gpuData->GetResource());
+                        }
+                        else {
+                            d3dAppendSRVDescriptor(&d3d.defaultBaseColorTextureSRVDesc, d3d.defaultBaseColorTexture->GetResource());
+                        }
+                        if (primitive.material->roughnessMetallicTexture) {
+                            d3dAppendSRVDescriptor(&primitive.material->roughnessMetallicTexture->srvDesc, primitive.material->roughnessMetallicTexture->image->gpuData->GetResource());
+                        }
+                        else {
+                            d3dAppendSRVDescriptor(&d3d.defaultMetallicRoughnessTextureSRVDesc, d3d.defaultMetallicRoughnessTexture->GetResource());
+                        }
+                        if (primitive.material->normalMapTexture) {
+                            d3dAppendSRVDescriptor(&primitive.material->normalMapTexture->srvDesc, primitive.material->normalMapTexture->image->gpuData->GetResource());
+                        }
+                        else {
+                            d3dAppendSRVDescriptor(&d3d.defaultNormalMapTextureSRVDesc, d3d.defaultNormalMapTexture->GetResource());
+                        }
+                        if (primitive.material->emissiveTexture) {
+                            d3dAppendSRVDescriptor(&primitive.material->emissiveTexture->srvDesc, primitive.material->emissiveTexture->image->gpuData->GetResource());
+                        }
+                        else {
+                            d3dAppendSRVDescriptor(&d3d.defaultEmissiveTextureSRVDesc, d3d.defaultEmissiveTexture->GetResource());
+                        }
+                        BLASGeometryInfo blasGeometryInfo = {
+                            .descriptorsHeapOffset = descriptorsHeapOffset,
+                            .baseColorFactor = primitive.material->baseColor,
+                            .alphaMode = primitive.material->alphaMode,
+                            .alphaCutOff = primitive.material->alphaCutOff,
+                            .roughnessFactor = primitive.material->roughness,
+                            .metallicFactor = primitive.material->metallic,
+                            .emissiveFactor = primitive.material->emissive,
+                        };
+                        blasGeometriesInfos.push_back(blasGeometryInfo);
+                    }
+                    else {
+                        d3dAppendSRVDescriptor(&d3d.defaultBaseColorTextureSRVDesc, d3d.defaultBaseColorTexture->GetResource());
+                        d3dAppendSRVDescriptor(&d3d.defaultMetallicRoughnessTextureSRVDesc, d3d.defaultMetallicRoughnessTexture->GetResource());
+                        d3dAppendSRVDescriptor(&d3d.defaultNormalMapTextureSRVDesc, d3d.defaultNormalMapTexture->GetResource());
+                        d3dAppendSRVDescriptor(&d3d.defaultEmissiveTextureSRVDesc, d3d.defaultEmissiveTexture->GetResource());
+                        blasGeometriesInfos.push_back(BLASGeometryInfo{.descriptorsHeapOffset = descriptorsHeapOffset});
+                    }
+                }
+            }
+        }
 #ifdef EDITOR
-        if (editor.mode == EditorModeFreeCam) {
-            modelInstanceAddBLASInstancesToTLAS(player.modelInstance, player.transform.toMat(), player.transformPrevFrame.toMat(), ObjectTypePlayer, 0);
-            gameObjects.forEachWithIndex(nullptr, [](void*, GameObject* obj, uint objIndex) {
-                modelInstanceAddBLASInstancesToTLAS(obj->modelInstance, obj->transform.toMat(), obj->transformPrevFrame.toMat(), ObjectTypeGameObject, objIndex);
-            });
-            if (editor.beginDragDropGameObject) {
-                editor.dragDropGameObject.transformPrevFrame = editor.dragDropGameObject.transform;
-                modelInstanceAddBLASInstancesToTLAS(editor.dragDropGameObject.modelInstance, editor.dragDropGameObject.transform.toMat(), editor.dragDropGameObject.transformPrevFrame.toMat(), ObjectTypeGameObject, UINT_MAX);
-            }
-        }
-        else if (editor.mode == EditorModeEditObject) {
-            if (editor.selectedType == EditorSelectTypePlayer) {
+        switch (editor.mode) {
+            case EditorModeFreeCam: {
                 modelInstanceAddBLASInstancesToTLAS(player.modelInstance, player.transform.toMat(), player.transformPrevFrame.toMat(), ObjectTypePlayer, 0);
-            }
-            else if (editor.selectedType == EditorSelectTypeGameObject) {
-                GameObject* obj = gameObjects.get(editor.selectedObjectIndex);
-                assert(obj);
-                modelInstanceAddBLASInstancesToTLAS(obj->modelInstance, obj->transform.toMat(), obj->transformPrevFrame.toMat(), ObjectTypeGameObject, editor.selectedObjectIndex);
-            }
+                gameObjects.forEachWithIndex(nullptr, [](void*, GameObject* obj, uint objIndex) {
+                    modelInstanceAddBLASInstancesToTLAS(obj->modelInstance, obj->transform.toMat(), obj->transformPrevFrame.toMat(), ObjectTypeGameObject, objIndex);
+                });
+                if (editor.beginDragDropGameObject) {
+                    editor.dragDropGameObject.transformPrevFrame = editor.dragDropGameObject.transform;
+                    modelInstanceAddBLASInstancesToTLAS(editor.dragDropGameObject.modelInstance, editor.dragDropGameObject.transform.toMat(), editor.dragDropGameObject.transformPrevFrame.toMat(), ObjectTypeGameObject, UINT_MAX);
+                }
+            } break;
+            case EditorModeEditModel: {
+                modelInstanceAddBLASInstancesToTLAS(editor.selectedModelInstance, XMMatrixIdentity(), XMMatrixIdentity(), ObjectTypeNone, 0);
+            } break;
+            case EditorModeEditObject: {
+                if (editor.selectedType == EditorSelectTypePlayer) {
+                    modelInstanceAddBLASInstancesToTLAS(player.modelInstance, player.transform.toMat(), player.transformPrevFrame.toMat(), ObjectTypePlayer, 0);
+                }
+                else if (editor.selectedType == EditorSelectTypeGameObject) {
+                    GameObject* obj = gameObjects.get(editor.selectedObjectIndex);
+                    assert(obj);
+                    modelInstanceAddBLASInstancesToTLAS(obj->modelInstance, obj->transform.toMat(), obj->transformPrevFrame.toMat(), ObjectTypeGameObject, editor.selectedObjectIndex);
+                }
+            } break;
         }
-        // for (Sphere& sphere : debugSpheres) {
-        //     float s = sphere.radius;
-        //     XMMatrix transformMat = XMMatrixAffineTransformation(XMVectorSet(s, s, s, 0), xmVectorZero, xmQuatIdentity, sphere.center.toXMVector());
-        //     modelInstanceAddBLASInstancesToTLAS(modelInstanceSphere, transformMat, transformMat, ObjectTypeNone, 0, BLASInstanceFlagForcedColor, 0xff000000);
-        // }
-        // for (Line& line : debugLines) {
-        //     float3 dir = line.p1 - line.p0;
-        //     float s = line.radius;
-        //     float sY = dir.length();
-        //     float4 r = quaternionBetween(float3(0, 0.01f, 0), dir);
-        //     XMMatrix transformMat = XMMatrixAffineTransformation(XMVectorSet(s, sY, s, 0), xmVectorZero, r.toXMVector(), line.p0.toXMVector());
-        //     modelInstanceAddBLASInstancesToTLAS(modelInstanceCube, transformMat, transformMat, ObjectTypeNone, 0, BLASInstanceFlagForcedColor, 0xff000000);
-        // }
+        for (Sphere& sphere : debugSpheres) {
+            float s = sphere.radius;
+            XMMatrix transformMat = XMMatrixAffineTransformation(XMVectorSet(s, s, s, 0), xmVectorZero, xmQuatIdentity, sphere.center.toXMVector());
+            modelInstanceAddBLASInstancesToTLAS(modelInstanceSphere, transformMat, transformMat, ObjectTypeNone, 0);
+        }
+        for (Line& line : debugLines) { 
+            float3 dir = line.p1 - line.p0;
+            float s = line.radius;
+            float sY = dir.length();
+            float4 r = quaternionBetween(float3(0, 0.01f, 0), dir);
+            XMMatrix transformMat = XMMatrixAffineTransformation(XMVectorSet(s, sY, s, 0), xmVectorZero, r.toXMVector(), line.p0.toXMVector());
+            modelInstanceAddBLASInstancesToTLAS(modelInstanceCube, transformMat, transformMat, ObjectTypeNone, 0);
+        }
 #else
         modelInstanceAddBLASInstancesToTLAS(player.modelInstance, player.transform.toMat(), ObjectTypePlayer, 0, 0, 0);
         for (uint objIndex = 0; objIndex < gameObjects.size(); objIndex++) {
@@ -5666,6 +5702,11 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
 
 int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) {
     assert(SetCurrentDirectoryW(exePath.c_str()));
+    if (commandLineContain(L"showConsole")) showConsole();
+
+    modelInitFBX(L"bistro/fbx/bistroExterior.fbx");
+
+
     settingsInit();
     windowInit();
     windowShow();
