@@ -18,13 +18,13 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <None Include="packages.config" />
     <None Include="..\src\hlsl\shared.hlsli">
       <Filter>Source Files\hlsl</Filter>
     </None>
     <None Include="..\.clang-format">
       <Filter>Source Files</Filter>
     </None>
+    <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\src\agbyc.cpp">
