@@ -1,6 +1,6 @@
 #include "pch.h"
 
-#include <rapidyaml/rapidyaml-0.5.0.hpp>
+#include <rapidyaml/rapidyaml-0.8.0.hpp>
 
 #include <cgltf/cgltf.h>
 
@@ -3275,11 +3275,11 @@ void operator>>(ryml::ConstNodeRef n, float4& v) { n[0] >> v.x, n[1] >> v.y, n[2
 void operator>>(ryml::ConstNodeRef n, Transform& t) { n[0] >> t.s.x, n[1] >> t.s.y, n[2] >> t.s.z, n[3] >> t.r.x, n[4] >> t.r.y, n[5] >> t.r.z, n[6] >> t.r.w, n[7] >> t.t.x, n[8] >> t.t.y, n[9] >> t.t.z; }
 void operator>>(ryml::ConstNodeRef n, PxTransform& t) { n[0] >> t.q.x, n[1] >> t.q.y, n[2] >> t.q.z, n[3] >> t.q.w, n[4] >> t.p.x, n[5] >> t.p.y, n[6] >> t.p.z; }
 
-void operator<<(ryml::NodeRef n, float2 v) { n |= ryml::SEQ, n |= ryml::_WIP_STYLE_FLOW_SL, n.append_child() << v.x, n.append_child() << v.y; }
-void operator<<(ryml::NodeRef n, float3 v) { n |= ryml::SEQ, n |= ryml::_WIP_STYLE_FLOW_SL, n.append_child() << v.x, n.append_child() << v.y, n.append_child() << v.z; }
-void operator<<(ryml::NodeRef n, float4 v) { n |= ryml::SEQ, n |= ryml::_WIP_STYLE_FLOW_SL, n.append_child() << v.x, n.append_child() << v.y, n.append_child() << v.z, n.append_child() << v.w; }
-void operator<<(ryml::NodeRef n, Transform t) { n |= ryml::SEQ, n |= ryml::_WIP_STYLE_FLOW_SL, n.append_child() << t.s.x, n.append_child() << t.s.y, n.append_child() << t.s.z, n.append_child() << t.r.x, n.append_child() << t.r.y, n.append_child() << t.r.z, n.append_child() << t.r.w, n.append_child() << t.t.x, n.append_child() << t.t.y, n.append_child() << t.t.z; }
-void operator<<(ryml::NodeRef n, PxTransform t) { n |= ryml::SEQ, n |= ryml::_WIP_STYLE_FLOW_SL, n.append_child() << t.q.x, n.append_child() << t.q.y, n.append_child() << t.q.z, n.append_child() << t.q.w, n.append_child() << t.p.x, n.append_child() << t.p.y, n.append_child() << t.p.z; }
+void operator<<(ryml::NodeRef n, float2 v) { n |= ryml::SEQ, n |= ryml::FLOW_SL, n.append_child() << v.x, n.append_child() << v.y; }
+void operator<<(ryml::NodeRef n, float3 v) { n |= ryml::SEQ, n |= ryml::FLOW_SL, n.append_child() << v.x, n.append_child() << v.y, n.append_child() << v.z; }
+void operator<<(ryml::NodeRef n, float4 v) { n |= ryml::SEQ, n |= ryml::FLOW_SL, n.append_child() << v.x, n.append_child() << v.y, n.append_child() << v.z, n.append_child() << v.w; }
+void operator<<(ryml::NodeRef n, Transform t) { n |= ryml::SEQ, n |= ryml::FLOW_SL, n.append_child() << t.s.x, n.append_child() << t.s.y, n.append_child() << t.s.z, n.append_child() << t.r.x, n.append_child() << t.r.y, n.append_child() << t.r.z, n.append_child() << t.r.w, n.append_child() << t.t.x, n.append_child() << t.t.y, n.append_child() << t.t.z; }
+void operator<<(ryml::NodeRef n, PxTransform t) { n |= ryml::SEQ, n |= ryml::FLOW_SL, n.append_child() << t.q.x, n.append_child() << t.q.y, n.append_child() << t.q.z, n.append_child() << t.q.w, n.append_child() << t.p.x, n.append_child() << t.p.y, n.append_child() << t.p.z; }
 
 void worldInit() {
     HRESULT hr;
@@ -3288,8 +3288,8 @@ void worldInit() {
     ryml::Tree yamlTree = ryml::parse_in_arena(ryml::to_csubstr(yamlStr));
     ryml::ConstNodeRef yamlRoot = yamlTree.rootref();
 #ifdef EDITOR
-    if (ryml::ConstNodeRef editorYaml = yamlRoot.find_child("editor"); editorYaml.valid()) {
-        if (ryml::ConstNodeRef editorCameraYaml = editorYaml.find_child("camera"); editorCameraYaml.valid()) {
+    if (ryml::ConstNodeRef editorYaml = yamlRoot.find_child("editor"); !editorYaml.invalid()) {
+        if (ryml::ConstNodeRef editorCameraYaml = editorYaml.find_child("camera"); !editorCameraYaml.invalid()) {
             editorCameraYaml["position"] >> editor.camera.position;
             editorCameraYaml["pitchYaw"] >> editor.camera.pitchYaw;
             editorCameraYaml["fovVerticle"] >> editor.camera.fovVertical;
@@ -3297,7 +3297,7 @@ void worldInit() {
             editorCameraYaml["moveSpeed"] >> editor.camera.moveSpeed;
             editor.camera.moveSpeed = std::clamp(editor.camera.moveSpeed, 0.0f, editor.camera.moveSpeedMax);
         }
-        if (ryml::ConstNodeRef editorEditCameraYaml = editorYaml.find_child("editCamera"); editorEditCameraYaml.valid()) {
+        if (ryml::ConstNodeRef editorEditCameraYaml = editorYaml.find_child("editCamera"); !editorEditCameraYaml.invalid()) {
             editorEditCameraYaml["position"] >> editor.editCamera.position;
             editorEditCameraYaml["pitchYaw"] >> editor.editCamera.pitchYaw;
             editorEditCameraYaml["fovVerticle"] >> editor.editCamera.fovVertical;
@@ -3390,12 +3390,12 @@ void worldInit() {
         objYaml["transform"] >> obj->transformDefault;
         obj->transform = obj->transformDefault;
         obj->transformPrevFrame = obj->transform;
-        if (ryml::ConstNodeRef rigidActorYaml = objYaml.find_child("rigidActor"); rigidActorYaml.valid()) {
-            if (rigidActorYaml["type"] == "static") {
+        if (ryml::ConstNodeRef rigidActorYaml = objYaml.find_child("rigidActor"); !rigidActorYaml.invalid()) {
+            if (rigidActorYaml["type"].val() == "static") {
                 obj->rigidActor = pxPhysics->createRigidStatic(obj->transform.toPxTransform());
                 pxScene->addActor(*obj->rigidActor);
             }
-            else if (rigidActorYaml["type"] == "dynamic") {
+            else if (rigidActorYaml["type"].val() == "dynamic") {
                 obj->rigidActor = pxPhysics->createRigidDynamic(obj->transform.toPxTransform());
                 float mass;
                 rigidActorYaml["mass"] >> mass;
@@ -3405,29 +3405,29 @@ void worldInit() {
             else {
                 assert(false);
             }
-            if (ryml::ConstNodeRef shapesYaml = rigidActorYaml.find_child("shapes"); shapesYaml.valid()) {
+            if (ryml::ConstNodeRef shapesYaml = rigidActorYaml.find_child("shapes"); !shapesYaml.invalid()) {
                 for (ryml::ConstNodeRef shapeYaml : shapesYaml) {
                     PxTransform transform(PxIdentity);
-                    if (shapeYaml["type"] == "plane") {
+                    if (shapeYaml["type"].val() == "plane") {
                         PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxPlaneGeometry(), *pxDefaultMaterial);
                         shapeYaml["transform"] >> transform;
                         shape->setLocalPose(transform);
                     }
-                    else if (shapeYaml["type"] == "box") {
+                    else if (shapeYaml["type"].val() == "box") {
                         float3 halfExtents;
                         shapeYaml["halfExtents"] >> halfExtents;
                         PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxBoxGeometry(halfExtents.x, halfExtents.y, halfExtents.z), *pxDefaultMaterial);
                         shapeYaml["transform"] >> transform;
                         shape->setLocalPose(transform);
                     }
-                    else if (shapeYaml["type"] == "sphere") {
+                    else if (shapeYaml["type"].val() == "sphere") {
                         float radius;
                         shapeYaml["radius"] >> radius;
                         PxShape* shape = PxRigidActorExt::createExclusiveShape(*obj->rigidActor, PxSphereGeometry(radius), *pxDefaultMaterial);
                         shapeYaml["transform"] >> transform;
                         shape->setLocalPose(transform);
                     }
-                    else if (shapeYaml["type"] == "capsule") {
+                    else if (shapeYaml["type"].val() == "capsule") {
                         float radius, halfHeight;
                         shapeYaml["radius"] >> radius;
                         shapeYaml["halfHeight"] >> halfHeight;
@@ -3435,7 +3435,7 @@ void worldInit() {
                         shapeYaml["transform"] >> transform;
                         shape->setLocalPose(transform);
                     }
-                    else if (shapeYaml["type"] == "cylinder") {
+                    else if (shapeYaml["type"].val() == "cylinder") {
                         float radius, height;
                         shapeYaml["radius"] >> radius;
                         shapeYaml["height"] >> height;
@@ -3444,7 +3444,7 @@ void worldInit() {
                         shapeYaml["transform"] >> transform;
                         shape->setLocalPose(transform);
                     }
-                    else if (shapeYaml["type"] == "cone") {
+                    else if (shapeYaml["type"].val() == "cone") {
                         float radius, height;
                         shapeYaml["radius"] >> radius;
                         shapeYaml["height"] >> height;
@@ -3453,7 +3453,7 @@ void worldInit() {
                         shapeYaml["transform"] >> transform;
                         shape->setLocalPose(transform);
                     }
-                    else if (shapeYaml["type"] == "convexMesh") {
+                    else if (shapeYaml["type"].val() == "convexMesh") {
                         if (!obj->modelInstance.model->convexMesh) {
                             assert(modelGenerateConvexMesh(obj->modelInstance.model));
                         }
@@ -3461,7 +3461,7 @@ void worldInit() {
                         shapeYaml["transform"] >> transform;
                         shape->setLocalPose(transform);
                     }
-                    else if (shapeYaml["type"] == "triangleMesh") {
+                    else if (shapeYaml["type"].val() == "triangleMesh") {
                         if (!obj->modelInstance.model->triangleMesh) {
                             assert(modelGenerateTriangleMesh(obj->modelInstance.model));
                         }
@@ -3568,7 +3568,7 @@ void editorSave() {
                 shapes.resize(shapeCount);
                 obj->rigidActor->getShapes(shapes.data(), shapeCount);
                 ryml::NodeRef shapesYaml = rigidActorYaml["shapes"];
-                shapesYaml |= ryml::SEQ, shapesYaml |= ryml::_WIP_STYLE_FLOW_SL;
+                shapesYaml |= ryml::SEQ, shapesYaml |= ryml::FLOW_SL;
                 for (PxShape* shape : shapes) {
                     ryml::NodeRef shapeYaml = shapesYaml.append_child();
                     shapeYaml |= ryml::MAP;
@@ -5705,7 +5705,6 @@ int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int n
     if (commandLineContain(L"showConsole")) showConsole();
 
     modelInitFBX(L"bistro/fbx/bistroExterior.fbx");
-
 
     settingsInit();
     windowInit();

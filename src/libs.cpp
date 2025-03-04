@@ -16,7 +16,8 @@
 
 #include <d3d12ma/d3d12memalloc.cpp>
 
-#include <rapidyaml/rapidyaml-0.5.0.cpp>
+#define RYML_SINGLE_HDR_DEFINE_NOW
+#include <rapidyaml/rapidyaml-0.8.0.hpp>
 
 #define TRACY_ENABLE
 #include <tracy/tracyclient.cpp>
