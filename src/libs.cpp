@@ -1,9 +1,11 @@
 #include "pch.h"
 
-#include <cgltf/cgltf.cpp>
+#define CGLTF_IMPLEMENTATION
+#include <cgltf/cgltf.h>
 
 #include <ufbx/ufbx.c>
 
+#include <stb/stb_ds.cpp>
 #include <stb/stb_image.cpp>
 #include <stb/stb_image_write.cpp>
 
@@ -21,3 +23,11 @@
 
 #define TRACY_ENABLE
 #include <tracy/tracyclient.cpp>
+
+#include <ozz/src_fused/ozz_base.cc>
+#include <ozz/src_fused/ozz_options.cc>
+#include <ozz/src_fused/ozz_animation.cc>
+//#include <ozz/src_fused/ozz_animation_fbx.cc>
+//#include <ozz/src_fused/ozz_animation_offline.cc>
+//#include <ozz/src_fused/ozz_animation_tools.cc>
+#include <ozz/src_fused/ozz_geometry.cc>
