@@ -1,10 +1,5 @@
 #include "pch.h"
 
-#define CGLTF_IMPLEMENTATION
-#include <cgltf/cgltf.h>
-
-#include <ufbx/ufbx.c>
-
 #include <stb/stb_ds.cpp>
 #include <stb/stb_image.cpp>
 #include <stb/stb_image_write.cpp>
@@ -23,6 +18,12 @@
 
 #define TRACY_ENABLE
 #include <tracy/tracyclient.cpp>
+
+#define CGLTF_IMPLEMENTATION
+#include <cgltf/cgltf.h>
+
+#define UFBX_REAL_IS_FLOAT
+#include <ufbx/ufbx.c>
 
 #include <ozz/src_fused/ozz_base.cc>
 #include <ozz/src_fused/ozz_options.cc>

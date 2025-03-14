@@ -4,6 +4,7 @@
 
 #include <cgltf/cgltf.h>
 
+#define UFBX_REAL_IS_FLOAT
 #include <ufbx/ufbx.h>
 
 #include <d3d12MA/d3d12Memalloc.h>
@@ -581,12 +582,13 @@ struct ModelMesh {
     std::string name;
     std::vector<ModelPrimitive> primitives;
     std::vector<Vertex> vertices;
-    std::vector<uint> indices;
-    uint blasGeometriesInfoOffset;
+    std::vector<uint32> indices;
     D3D12MA::Allocation* verticesBuffer;
     D3D12MA::Allocation* indicesBuffer;
     D3D12MA::Allocation* blas;
     uint64 blasScratchBufferSize;
+
+    uint blasGeometriesInfoOffset;
 };
 
 struct ModelNode;
@@ -2414,6 +2416,7 @@ Model* modelInitGLTF(const std::filesystem::path& filePath) {
             uint meshIndex = (uint)(gltfNode.mesh - gltfData->meshes);
             assert(meshIndex >= 0 && meshIndex < gltfData->meshes_count);
             node.mesh = &model->meshes[meshIndex];
+            model->meshNodes.push_back(&node);
         }
         else {
             node.mesh = nullptr;
@@ -2429,9 +2432,6 @@ Model* modelInitGLTF(const std::filesystem::path& filePath) {
     }
     for (cgltf_node* gltfNode : std::span(gltfData->scenes[0].nodes, gltfData->scenes[0].nodes_count)) {
         model->rootNodes.push_back(&model->nodes[gltfNode - gltfData->nodes]);
-    }
-    for (ModelNode& node : model->nodes) {
-        if (node.mesh) model->meshNodes.push_back(&node);
     }
     for (uint meshIndex = 0; meshIndex < gltfData->meshes_count; meshIndex++) {
         cgltf_mesh& gltfMesh = gltfData->meshes[meshIndex];
@@ -2712,7 +2712,11 @@ Model* modelInitFBX(const std::filesystem::path& filePath) {
     assert(filePath.is_relative());
     std::filesystem::path filePathFull = assetsModelsPath / filePath;
 
-    ufbx_load_opts opts = {};
+    ufbx_load_opts opts = {
+        .ignore_animation = true,
+        .target_axes = ufbx_axes_right_handed_y_up,
+        .target_unit_meters = 1.0f,
+    };
     ufbx_error error;
     ufbx_scene* fbxScene = ufbx_load_file(filePathFull.string().c_str(), &opts, &error);
     assert(fbxScene);
@@ -2723,36 +2727,92 @@ Model* modelInitFBX(const std::filesystem::path& filePath) {
 
     model->nodes.resize(fbxScene->nodes.count);
     model->meshes.resize(fbxScene->meshes.count);
-    model->materials.resize(fbxScene->materials.count);
-    model->textures.resize(fbxScene->textures.count);
-    model->images.resize(fbxScene->texture_files.count);
+    //model->materials.resize(fbxScene->materials.count);
+    //model->textures.resize(fbxScene->textures.count);
+    //model->images.resize(fbxScene->texture_files.count);
 
-    for (size_t i = 0; i < fbxScene->nodes.count; i++) {
-        ufbx_node* node = fbxScene->nodes.data[i];
-        if (node->is_root) continue;
-        printf("Object: %s\n", node->name.data);
-        if (node->mesh) {
-            printf("-> mesh with %zu faces\n", node->mesh->faces.count);
+    for (size_t nodeIndex = 0; nodeIndex < fbxScene->nodes.count; nodeIndex++) {
+        ufbx_node* fbxNode = fbxScene->nodes.data[nodeIndex];
+        ModelNode& node = model->nodes[nodeIndex];
+        node.name = fbxNode->name.data;
+        XMFloat4x3 globalTransform = XMFloat4x3(fbxNode->node_to_world.v);
+        XMFloat4x3 localTransform = XMFloat4x3(fbxNode->node_to_parent.v);
+        node.globalTransform = XMLoadFloat4x3(&globalTransform);
+        node.localTransform = XMLoadFloat4x3(&localTransform);
+        if (fbxNode->is_root) model->rootNodes.push_back(&node);
+        if (fbxNode->parent) {
+            for (uint nodeIndex = 0; nodeIndex < fbxScene->nodes.count; nodeIndex++) {
+                if (fbxScene->nodes.data[nodeIndex] == fbxNode->parent) {
+                    node.parent = &model->nodes[nodeIndex];
+                    break;
+                }
+            }
+            assert(node.parent);
+        }
+        for (uint childIndex = 0; childIndex < fbxNode->children.count; childIndex++) {
+            ufbx_node* ufbxChildNode = fbxNode->children.data[childIndex];
+            bool found = false;
+            for (uint nodeIndex = 0; nodeIndex < fbxScene->nodes.count; nodeIndex++) {
+                if (fbxScene->nodes.data[nodeIndex] == ufbxChildNode) {
+                    node.children.push_back(&model->nodes[nodeIndex]);
+                    found = true;
+                    break;
+                }
+            }
+            assert(found);
+        }
+        if (fbxNode->mesh) {
+            model->meshNodes.push_back(&node);
+            for (uint meshIndex = 0; meshIndex < fbxScene->meshes.count; meshIndex++) {
+                if (fbxScene->meshes[meshIndex] == fbxNode->mesh) {
+                    node.mesh = &model->meshes[meshIndex];
+                    break;
+                }
+            }
+            assert(node.mesh);
+        }
+    }
+    for (size_t meshIndex = 0; meshIndex < fbxScene->meshes.count; meshIndex++) {
+        ufbx_mesh* ufbxMesh = fbxScene->meshes[meshIndex];
+        ModelMesh& mesh = model->meshes[meshIndex];
+        mesh.name = ufbxMesh->name.data;
+        mesh.primitives.push_back(ModelPrimitive{.verticesCount = (uint)ufbxMesh->num_indices, .indicesCount = (uint)ufbxMesh->num_faces * 3});
+        assert(ufbxMesh->max_face_triangles == 1);
+        assert(ufbxMesh->vertex_normal.indices.data);
+        assert(ufbxMesh->vertex_uv.indices.data);
+        //assert(ufbxMesh->vertex_tangent.indices.data);
+        //assert(ufbxMesh->vertex_bitangent.indices.data);
+        mesh.vertices.resize(ufbxMesh->num_indices);
+        mesh.indices.reserve(ufbxMesh->num_faces * 3);
+        for (ufbx_face face : ufbxMesh->faces) {
+            for (uint32 index = face.index_begin; index < face.index_begin + 3; index++) {
+                ufbx_vec3 position = ufbxMesh->vertex_position[index];
+                ufbx_vec3 normal = ufbxMesh->vertex_normal[index];
+                ufbx_vec2 uv = ufbxMesh->vertex_uv[index];
+                mesh.vertices[index].position = float3{position.x, position.y, position.z};
+                mesh.vertices[index].normal = float3{normal.x, normal.y, normal.z};
+                mesh.vertices[index].uv = float2{uv.x, uv.y};
+                mesh.indices.push_back(index);
+            }
         }
     }
     return nullptr;
 }
 
-Model* modelInit(const std::filesystem::path& filePath) {
+void modelInit(const std::filesystem::path& filePath) {
     for (Model& m : models) {
         if (m.filePath == filePath) {
-            return &m;
+            return;
         }
     }
     if (filePath.extension() == ".gltf") {
-        return modelInitGLTF(filePath);
+        modelInitGLTF(filePath);
     }
     else if (filePath.extension() == ".fbx") {
-        return modelInitFBX(filePath);
+        modelInitFBX(filePath);
     }
     else {
         assert(false);
-        return nullptr;
     }
 }
 
@@ -3328,12 +3388,12 @@ void worldInit() {
 
         const char* simpleModelFiles[] = {"sphere\\gltf\\sphere.gltf", "cube\\gltf\\cube.gltf", "cylinder\\gltf\\cylinder.gltf"};
         for (const char* modelFile : simpleModelFiles) {
-            assert(modelInit(modelFile));
+            modelInit(modelFile);
         }
         for (ryml::ConstNodeRef modelsYaml = assetsYaml["models"]; ryml::ConstNodeRef modelYaml : modelsYaml) {
             std::string modelFile;
             modelYaml["file"] >> modelFile;
-            assert(modelInit(modelFile));
+            modelInit(modelFile);
         }
     }
     {
@@ -5703,9 +5763,6 @@ LRESULT windowEventHandler(HWND hwnd, UINT eventType, WPARAM wParam, LPARAM lPar
 int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) {
     assert(SetCurrentDirectoryW(exePath.c_str()));
     if (commandLineContain(L"showConsole")) showConsole();
-
-    modelInitFBX(L"bistro/fbx/bistroExterior.fbx");
-
     settingsInit();
     windowInit();
     windowShow();

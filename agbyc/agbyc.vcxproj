@@ -53,6 +53,7 @@
     <TargetName>agbyc_editor_release</TargetName>
     <IncludePath>$(SolutionDir)external\include;$(SolutionDir)external\include\physx;$(SolutionDir)external\include\jsoncpp;$(IncludePath)</IncludePath>
     <LibraryPath>$(SolutionDir)external\lib_release;$(SolutionDir)external\lib_release\physx;$(LibraryPath)</LibraryPath>
+    <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
